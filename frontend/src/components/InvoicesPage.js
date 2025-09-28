@@ -52,6 +52,8 @@ const InvoicesPage = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
+  const [showActionsDialog, setShowActionsDialog] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   // Form data now handled by VisualInvoiceForm component
