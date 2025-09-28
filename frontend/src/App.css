@@ -263,20 +263,16 @@ body {
   }
 }
 
-/* Hide Made with Emergent watermark - ultra comprehensive */
+/* Hide Made with Emergent watermark - ultra comprehensive and aggressive */
 div[style*="position: fixed"],
 div[style*="position: absolute"],
-div[style*="bottom"],
-div[style*="right"],
 *[class*="emergent" i],
 *[id*="emergent" i],
 *[data-emergent],
 iframe[src*="emergent"],
 .watermark,
 [class*="watermark"],
-[id*="watermark"],
-*:has-text("Made with"),
-*:has-text("Emergent") {
+[id*="watermark"] {
   display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
@@ -287,13 +283,34 @@ iframe[src*="emergent"],
   height: 0 !important;
   overflow: hidden !important;
   z-index: -999999 !important;
+  pointer-events: none !important;
 }
 
 /* Target specific positioning that might contain watermark */
-body > div[style*="position: fixed"][style*="bottom: 10px"][style*="right: 10px"],
-body > div[style*="position: fixed"][style*="bottom: 20px"][style*="right: 20px"],
+body > div[style*="position: fixed"][style*="bottom"],
+body > div[style*="position: fixed"][style*="right"],
 div[style*="z-index: 999"],
-div[style*="z-index: 9999"] {
+div[style*="z-index: 9999"],
+div[style*="z-index: 99999"] {
+  display: none !important;
+}
+
+/* Hide any element containing "Made with Emergent" text */
+[class*="made" i],
+[id*="made" i],
+*[title*="made" i],
+*[alt*="emergent" i],
+*[title*="emergent" i] {
+  display: none !important;
+}
+
+/* Aggressive watermark removal by content */
+div:contains("Made with"),
+span:contains("Made with"),
+a:contains("Made with"),
+div:contains("Emergent"),
+span:contains("Emergent"),
+a:contains("Emergent") {
   display: none !important;
 }
 
