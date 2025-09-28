@@ -286,7 +286,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
               <div key={index} className="grid grid-cols-12 gap-2 p-3 border-t border-gray-200">
                 <div className="col-span-5">
                   <Input
-                    value={item.description}
+                    value={item.description || ''}
                     onChange={(e) => handleItemChange(index, 'description', e.target.value)}
                     placeholder="Description du service/produit"
                     className="mb-2"
