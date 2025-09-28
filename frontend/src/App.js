@@ -169,6 +169,7 @@ function App() {
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="clients" element={<ClientsPage />} />
+              <Route path="products" element={<ProductsPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="quotes" element={<QuotesPage />} />
               <Route path="settings" element={<SettingsPage />} />
