@@ -166,9 +166,18 @@ class Quote(BaseModel):
     valid_until: datetime
     items: List[InvoiceItem] = []
     subtotal: float = 0.0
-    tax_rate: float = 0.0
-    tax_amount: float = 0.0
+    gst_rate: float = 5.0
+    pst_rate: float = 0.0
+    hst_rate: float = 0.0
+    gst_amount: float = 0.0
+    pst_amount: float = 0.0
+    hst_amount: float = 0.0
+    total_tax: float = 0.0
     total: float = 0.0
+    apply_gst: bool = True
+    apply_pst: bool = False
+    apply_hst: bool = False
+    province: str = "QC"
     status: str = "pending"  # pending, accepted, rejected, expired
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
