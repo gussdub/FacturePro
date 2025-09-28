@@ -23,6 +23,7 @@ const Layout = () => {
   const navigation = [
     { name: 'Tableau de bord', href: '/dashboard', icon: Receipt, current: location.pathname === '/dashboard' },
     { name: 'Clients', href: '/clients', icon: Users, current: location.pathname === '/clients' },
+    { name: 'Produits', href: '/products', icon: ScrollText, current: location.pathname === '/products' },
     { name: 'Factures', href: '/invoices', icon: FileText, current: location.pathname === '/invoices' },
     { name: 'Devis', href: '/quotes', icon: ScrollText, current: location.pathname === '/quotes' },
     { name: 'Paramètres', href: '/settings', icon: Settings, current: location.pathname === '/settings' },
