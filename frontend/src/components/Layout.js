@@ -51,10 +51,20 @@ const Layout = () => {
       `}>
         <div className="flex flex-col h-full">
           {/* Header */}
-          <div className="flex items-center justify-between h-16 px-6 bg-indigo-600">
+          <div className="flex items-center justify-between h-16 px-6 bg-gradient-to-r from-teal-600 to-teal-700">
             <div className="flex items-center">
-              <Receipt className="w-8 h-8 text-white mr-3" />
-              <span className="text-xl font-bold text-white">FacturePro</span>
+              <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center mr-3 backdrop-blur-sm">
+                <div className="relative">
+                  <div className="w-6 h-6 bg-white rounded-md flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" className="w-4 h-4 text-teal-600" fill="currentColor">
+                      <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
+                      <path d="M8,12H16V14H8V12M8,16H16V18H8V16Z" />
+                    </svg>
+                  </div>
+                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full"></div>
+                </div>
+              </div>
+              <span className="text-xl font-bold text-white tracking-tight">FacturePro</span>
             </div>
             <button
               className="lg:hidden text-white hover:text-gray-200 transition-colors"
