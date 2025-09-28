@@ -287,8 +287,8 @@ const QuotesPage = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Devis</h1>
-          <p className="text-gray-600">Créez et gérez vos devis clients</p>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Soumissions</h1>
+          <p className="text-gray-600">Créez et gérez vos soumissions clients</p>
         </div>
         
         <Dialog open={showQuoteDialog} onOpenChange={(open) => {
