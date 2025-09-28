@@ -101,3 +101,75 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "L'utilisateur a signalé plusieurs problèmes: 1) Le logo 'Made with Emergent' doit disparaître, 2) les boutons supprimer dans les factures et soumissions ne fonctionnent pas, 3) il y a un bug graphique en mode web (ordinateur) où le menu est à gauche et la page commence beaucoup plus bas, 4) il souhaite inclure le nom du logiciel et le logo sur la page de connexion."
+
+backend:
+  - task: "Delete buttons for invoices and quotes"
+    implemented: true
+    working: "needs_testing"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "DELETE routes were missing and have been added in previous session according to documentation"
+
+frontend:
+  - task: "Fix layout issue - content starting too low"  
+    implemented: false
+    working: false
+    file: "/app/frontend/src/components/Layout.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "main"
+        comment: "Major layout issue identified - content starts very low with large white space between header and main content"
+        
+  - task: "Remove Made with Emergent watermark"
+    implemented: true
+    working: false
+    file: "/app/frontend/src/App.css"
+    stuck_count: 2
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "main"
+        comment: "Previous CSS attempts in App.css (lines 266-298) have not successfully removed the watermark"
+        
+  - task: "Add FacturePro logo and name to login page"
+    implemented: false
+    working: false
+    file: "/app/frontend/src/components/LoginPage.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "main"
+        comment: "Logo is present in sidebar but missing from login page as requested by user"
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "Fix layout issue - content starting too low"
+    - "Remove Made with Emergent watermark"
+    - "Add FacturePro logo and name to login page"
+  stuck_tasks:
+    - "Remove Made with Emergent watermark"
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: "Identified critical layout issue where main content starts way too low creating large white space. Watermark removal attempts unsuccessful. Starting with layout fix as highest priority."
