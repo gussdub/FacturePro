@@ -245,12 +245,24 @@ const InvoicesPage = () => {
     return formData.items.reduce((sum, item) => sum + calculateItemTotal(item), 0);
   };
 
-  const calculateTax = () => {
-    return calculateSubtotal() * (formData.tax_rate / 100);
+  const calculateGST = () => {
+    return formData.apply_gst ? calculateSubtotal() * (formData.gst_rate / 100) : 0;
+  };
+
+  const calculatePST = () => {
+    return formData.apply_pst ? calculateSubtotal() * (formData.pst_rate / 100) : 0;
+  };
+
+  const calculateHST = () => {
+    return formData.apply_hst ? calculateSubtotal() * (formData.hst_rate / 100) : 0;
+  };
+
+  const calculateTotalTax = () => {
+    return calculateGST() + calculatePST() + calculateHST();
   };
 
   const calculateTotal = () => {
-    return calculateSubtotal() + calculateTax();
+    return calculateSubtotal() + calculateTotalTax();
   };
 
   if (loading) {
