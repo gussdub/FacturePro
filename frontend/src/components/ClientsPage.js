@@ -206,7 +206,7 @@ const ClientsPage = () => {
                     name="email"
                     value={formData.email}
                     onChange={handleChange}
-                    placeholder="client@email.com"
+                    placeholder="client@exemple.ca"
                     required
                     data-testid="client-email-input"
                   />
