@@ -189,11 +189,8 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Fix layout issue - content starting too low"
-    - "Remove Made with Emergent watermark"
-    - "Add FacturePro logo and name to login page"
-  stuck_tasks:
-    - "Remove Made with Emergent watermark"
+    - "Test frontend delete buttons functionality"
+  stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
