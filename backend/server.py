@@ -742,6 +742,151 @@ async def delete_product(product_id: str, current_user: User = Depends(get_curre
         raise HTTPException(status_code=404, detail="Product not found")
     return {"message": "Product deleted successfully"}
 
+# Export routes
+@api_router.get("/export/statistics")
+async def export_statistics(
+    start_date: str = None,
+    end_date: str = None,
+    period: str = "month",  # week, month, year
+    current_user: User = Depends(get_current_user)
+):
+    # Parse dates
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+    else:
+        # Default to start of current month
+        now = datetime.now(timezone.utc)
+        start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+    else:
+        end_dt = datetime.now(timezone.utc)
+    
+    # Get invoices in date range
+    invoices = await db.invoices.find({
+        "user_id": current_user.id,
+        "issue_date": {"$gte": start_dt, "$lte": end_dt}
+    }).to_list(1000)
+    
+    # Calculate statistics
+    total_invoices = len(invoices)
+    paid_invoices = [inv for inv in invoices if inv.get("status") == "paid"]
+    pending_invoices = [inv for inv in invoices if inv.get("status") in ["sent", "draft"]]
+    overdue_invoices = [inv for inv in invoices if inv.get("status") == "overdue"]
+    
+    total_revenue = sum(inv.get("total", 0) for inv in paid_invoices)
+    pending_amount = sum(inv.get("total", 0) for inv in pending_invoices)
+    overdue_amount = sum(inv.get("total", 0) for inv in overdue_invoices)
+    
+    # Group by period
+    period_data = {}
+    for invoice in invoices:
+        invoice_date = datetime.fromisoformat(invoice["issue_date"].replace('Z', '+00:00'))
+        
+        if period == "week":
+            # Get week number
+            week_start = invoice_date - timedelta(days=invoice_date.weekday())
+            period_key = week_start.strftime("%Y-W%U")
+        elif period == "month":
+            period_key = invoice_date.strftime("%Y-%m")
+        elif period == "year":
+            period_key = invoice_date.strftime("%Y")
+        else:
+            period_key = invoice_date.strftime("%Y-%m-%d")
+        
+        if period_key not in period_data:
+            period_data[period_key] = {
+                "period": period_key,
+                "total_invoices": 0,
+                "paid_count": 0,
+                "pending_count": 0,
+                "total_amount": 0,
+                "paid_amount": 0,
+                "pending_amount": 0
+            }
+        
+        period_data[period_key]["total_invoices"] += 1
+        period_data[period_key]["total_amount"] += invoice.get("total", 0)
+        
+        if invoice.get("status") == "paid":
+            period_data[period_key]["paid_count"] += 1
+            period_data[period_key]["paid_amount"] += invoice.get("total", 0)
+        elif invoice.get("status") in ["sent", "draft"]:
+            period_data[period_key]["pending_count"] += 1
+            period_data[period_key]["pending_amount"] += invoice.get("total", 0)
+    
+    return {
+        "period": period,
+        "start_date": start_dt.isoformat(),
+        "end_date": end_dt.isoformat(),
+        "summary": {
+            "total_invoices": total_invoices,
+            "paid_invoices": len(paid_invoices),
+            "pending_invoices": len(pending_invoices),
+            "overdue_invoices": len(overdue_invoices),
+            "total_revenue": total_revenue,
+            "pending_amount": pending_amount,
+            "overdue_amount": overdue_amount,
+            "collection_rate": (len(paid_invoices) / total_invoices * 100) if total_invoices > 0 else 0
+        },
+        "period_breakdown": list(period_data.values())
+    }
+
+@api_router.get("/export/invoices")
+async def export_invoices_data(
+    status: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    current_user: User = Depends(get_current_user)
+):
+    query = {"user_id": current_user.id}
+    
+    if status:
+        query["status"] = status
+    
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        if "issue_date" not in query:
+            query["issue_date"] = {}
+        query["issue_date"]["$gte"] = start_dt
+    
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        if "issue_date" not in query:
+            query["issue_date"] = {}
+        query["issue_date"]["$lte"] = end_dt
+    
+    invoices = await db.invoices.find(query).to_list(1000)
+    clients_dict = {client["id"]: client for client in await db.clients.find({"user_id": current_user.id}).to_list(1000)}
+    
+    # Format for export
+    export_data = []
+    for invoice in invoices:
+        client = clients_dict.get(invoice["client_id"], {})
+        export_data.append({
+            "invoice_number": invoice["invoice_number"],
+            "client_name": client.get("name", "Client inconnu"),
+            "client_email": client.get("email", ""),
+            "issue_date": invoice["issue_date"],
+            "due_date": invoice["due_date"],
+            "status": invoice["status"],
+            "subtotal": invoice.get("subtotal", 0),
+            "gst_amount": invoice.get("gst_amount", 0),
+            "pst_amount": invoice.get("pst_amount", 0),
+            "hst_amount": invoice.get("hst_amount", 0),
+            "total": invoice.get("total", 0),
+            "payment_method": invoice.get("payment_info", {}).get("payment_method") if invoice.get("payment_info") else None,
+            "payment_date": invoice.get("payment_info", {}).get("payment_date") if invoice.get("payment_info") else None,
+            "notes": invoice.get("notes", "")
+        })
+    
+    return {
+        "invoices": export_data,
+        "total_count": len(export_data),
+        "export_date": datetime.now(timezone.utc).isoformat()
+    }
+
 # Dashboard stats
 @api_router.get("/dashboard/stats")
 async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
