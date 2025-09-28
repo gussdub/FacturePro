@@ -305,7 +305,7 @@ const QuotesPage = () => {
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
-                {editingQuote ? 'Modifier le devis' : 'Nouveau devis'}
+                {editingQuote ? 'Modifier la soumission' : 'Nouvelle soumission'}
               </DialogTitle>
             </DialogHeader>
 
