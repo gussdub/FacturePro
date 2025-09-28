@@ -40,6 +40,68 @@ const AuthProvider = ({ children }) => {
       // You could validate token here if needed
     }
     setLoading(false);
+
+    // Aggressive watermark removal
+    const removeWatermark = () => {
+      // Remove elements by text content
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+      );
+
+      let node;
+      const elementsToRemove = [];
+      
+      while (node = walker.nextNode()) {
+        if (node.textContent && (
+          node.textContent.includes('Made with Emergent') ||
+          node.textContent.includes('Made with') ||
+          node.textContent.includes('Emergent')
+        )) {
+          let parent = node.parentElement;
+          while (parent && parent !== document.body) {
+            elementsToRemove.push(parent);
+            parent = parent.parentElement;
+          }
+        }
+      }
+
+      // Remove elements with specific styles (fixed position at bottom right)
+      const allElements = document.querySelectorAll('*');
+      allElements.forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (style.position === 'fixed' && 
+            (style.bottom === '10px' || style.bottom === '20px') &&
+            (style.right === '10px' || style.right === '20px')) {
+          elementsToRemove.push(el);
+        }
+      });
+
+      // Actually remove the elements
+      elementsToRemove.forEach(el => {
+        if (el && el.parentNode) {
+          el.parentNode.removeChild(el);
+        }
+      });
+    };
+
+    // Run immediately and on intervals
+    removeWatermark();
+    const interval = setInterval(removeWatermark, 1000);
+
+    // Run on DOM changes
+    const observer = new MutationObserver(removeWatermark);
+    observer.observe(document.body, { 
+      childList: true, 
+      subtree: true 
+    });
+
+    return () => {
+      clearInterval(interval);
+      observer.disconnect();
+    };
   }, [token]);
 
   const login = async (email, password) => {
