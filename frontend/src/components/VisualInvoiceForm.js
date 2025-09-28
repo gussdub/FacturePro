@@ -309,7 +309,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                   <Input
                     type="number"
                     step="0.01"
-                    value={item.quantity}
+                    value={item.quantity || 0}
                     onChange={(e) => handleItemChange(index, 'quantity', parseFloat(e.target.value) || 0)}
                     className="text-center"
                   />
