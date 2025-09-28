@@ -134,7 +134,14 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
   return (
     <div className="max-w-6xl mx-auto bg-white shadow-2xl rounded-lg overflow-hidden">
       {/* Header */}
-      <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-8 py-6 text-white">
+      <div 
+        className="px-8 py-6 text-white"
+        style={{
+          background: settings?.primary_color 
+            ? `linear-gradient(to right, ${settings.primary_color}, ${settings.secondary_color || settings.primary_color})` 
+            : 'linear-gradient(to right, #0f766e, #134e4a)'
+        }}
+      >
         <div className="flex justify-between items-center">
           <div>
             <div className="flex items-center space-x-2 mb-1">
