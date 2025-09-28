@@ -101,7 +101,7 @@ const QuotesPage = () => {
         setSuccess('Soumission modifiée avec succès');
       } else {
         await axios.post(`${API}/quotes`, quoteData);
-        setSuccess('Devis créé avec succès');
+        setSuccess('Soumission créée avec succès');
       }
       
       await fetchData();
