@@ -1,34 +1,264 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+  line-height: 1.6;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+.App {
+  min-height: 100vh;
 }
 
-.App-link {
-    color: #61dafb;
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Loading animations */
+@keyframes shimmer {
+  0% {
+    background-position: -468px 0;
+  }
+  100% {
+    background-position: 468px 0;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s ease-in-out infinite;
+  background: linear-gradient(to right, #f1f5f9 8%, #e2e8f0 18%, #f1f5f9 33%);
+  background-size: 800px 104px;
+}
+
+/* Button hover effects */
+.btn-hover {
+  position: relative;
+  overflow: hidden;
+  transform: translateZ(0);
+  transition: all 0.3s ease;
+}
+
+.btn-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.btn-hover::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    transparent
+  );
+  transition: left 0.5s;
+}
+
+.btn-hover:hover::before {
+  left: 100%;
+}
+
+/* Card animations */
+.card-hover {
+  transition: all 0.3s ease;
+  transform: translateZ(0);
+}
+
+.card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+}
+
+/* Glass morphism effect */
+.glass {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Status badges */
+.status-draft {
+  @apply bg-gray-100 text-gray-800;
+}
+
+.status-sent {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.status-paid {
+  @apply bg-green-100 text-green-800;
+}
+
+.status-overdue {
+  @apply bg-red-100 text-red-800;
+}
+
+.status-cancelled {
+  @apply bg-gray-100 text-gray-600;
+}
+
+.status-pending {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.status-accepted {
+  @apply bg-green-100 text-green-800;
+}
+
+.status-rejected {
+  @apply bg-red-100 text-red-800;
+}
+
+.status-expired {
+  @apply bg-gray-100 text-gray-600;
+}
+
+/* Form focus effects */
+.form-input {
+  transition: all 0.3s ease;
+}
+
+.form-input:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+/* Sidebar animations */
+.sidebar-item {
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.sidebar-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 3px;
+  background: #3b82f6;
+  transform: scaleY(0);
+  transition: transform 0.3s ease;
+}
+
+.sidebar-item.active::before,
+.sidebar-item:hover::before {
+  transform: scaleY(1);
+}
+
+/* Table animations */
+.table-row {
+  transition: all 0.2s ease;
+}
+
+.table-row:hover {
+  background-color: #f8fafc;
+  transform: translateX(4px);
+}
+
+/* Modal backdrop */
+.modal-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+/* Custom shadows */
+.shadow-soft {
+  box-shadow: 0 2px 15px -3px rgba(0, 0, 0, 0.07), 0 10px 20px -2px rgba(0, 0, 0, 0.04);
+}
+
+.shadow-glow {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1), 0 4px 16px rgba(59, 130, 246, 0.12);
+}
+
+/* Success/Error animations */
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideOutRight {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.toast-enter {
+  animation: slideInRight 0.3s ease;
+}
+
+.toast-exit {
+  animation: slideOutRight 0.3s ease;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .btn-hover:hover {
+    transform: none;
+    box-shadow: none;
+  }
+  
+  .card-hover:hover {
+    transform: none;
+  }
+  
+  .table-row:hover {
+    transform: none;
+  }
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  
+  .print-block {
+    display: block !important;
+  }
 }
