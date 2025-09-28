@@ -466,14 +466,21 @@ async def create_invoice(invoice: InvoiceCreate, current_user: User = Depends(ge
         invoice.apply_gst, invoice.apply_pst, invoice.apply_hst
     )
     
-    # Generate invoice number
-    invoice_number = await generate_invoice_number(current_user.id)
+    # Generate invoice number (custom or auto)
+    invoice_number = await generate_invoice_number(current_user.id, invoice.invoice_number)
+    
+    # Handle due date - use provided or default from settings
+    due_date = invoice.due_date
+    if not due_date:
+        settings = await db.company_settings.find_one({"user_id": current_user.id})
+        default_days = settings.get("default_due_days", 30) if settings else 30
+        due_date = datetime.now(timezone.utc) + timedelta(days=default_days)
     
     new_invoice = Invoice(
         user_id=current_user.id,
         client_id=invoice.client_id,
         invoice_number=invoice_number,
-        due_date=invoice.due_date,
+        due_date=due_date,
         items=items,
         subtotal=subtotal,
         gst_rate=invoice.gst_rate,
