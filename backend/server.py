@@ -229,6 +229,9 @@ class CompanySettings(BaseModel):
     logo_url: Optional[str] = None
     primary_color: str = "#3B82F6"
     secondary_color: str = "#1F2937"
+    default_due_days: int = 30  # Jours d'échéance par défaut
+    next_invoice_number: int = 1
+    next_quote_number: int = 1
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class CompanySettingsUpdate(BaseModel):
