@@ -156,7 +156,7 @@ const QuotesPage = () => {
       await fetchData();
       setSuccess('Soumission supprimée avec succès');
     } catch (error) {
-      setError('Erreur lors de la suppression du devis');
+      setError('Erreur lors de la suppression de la soumission');
     }
   };
 
