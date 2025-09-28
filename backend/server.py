@@ -164,7 +164,8 @@ class Invoice(BaseModel):
 
 class InvoiceCreate(BaseModel):
     client_id: str
-    due_date: datetime
+    due_date: Optional[datetime] = None  # Optionnel, utilise default_due_days si non fourni
+    invoice_number: Optional[str] = None  # Optionnel, auto-généré si non fourni
     items: List[InvoiceItemCreate]
     gst_rate: float = 5.0
     pst_rate: float = 9.975  # TVQ Québec par défaut
