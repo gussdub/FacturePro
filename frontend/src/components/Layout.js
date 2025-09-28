@@ -89,7 +89,7 @@ const Layout = () => {
                   className={`
                     sidebar-item group flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200
                     ${item.current
-                      ? 'bg-indigo-50 text-indigo-700 active'
+                      ? 'bg-indigo-50 text-indigo-700'
                       : 'text-gray-700 hover:bg-gray-50 hover:text-indigo-600'
                     }
                   `}
