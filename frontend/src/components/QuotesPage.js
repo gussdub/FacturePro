@@ -154,7 +154,7 @@ const QuotesPage = () => {
     try {
       await axios.delete(`${API}/quotes/${quoteId}`);
       await fetchData();
-      setSuccess('Devis supprimé avec succès');
+      setSuccess('Soumission supprimée avec succès');
     } catch (error) {
       setError('Erreur lors de la suppression du devis');
     }
