@@ -494,7 +494,7 @@ const QuotesPage = () => {
           </DialogHeader>
 
           <p className="text-gray-600 mb-4">
-            Convertir le devis <strong>{convertingQuote?.quote_number}</strong> en facture.
+            Convertir la soumission <strong>{convertingQuote?.quote_number}</strong> en facture.
           </p>
 
           {error && (
