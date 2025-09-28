@@ -1,14 +1,110 @@
 {
   "summary": {
-    "total_tests": 1,
-    "passed_tests": 0,
-    "success_rate": 0.0
+    "total_tests": 17,
+    "passed_tests": 15,
+    "success_rate": 88.23529411764706
   },
   "test_results": [
     {
       "name": "User Registration",
+      "success": true,
+      "details": "User created with ID: ce8cb6f7-be79-4b3b-91f1-4680c41eba43",
+      "response_data": null
+    },
+    {
+      "name": "User Login",
+      "success": true,
+      "details": "Login successful for user: login_test_20250928_185904@example.com",
+      "response_data": null
+    },
+    {
+      "name": "Dashboard Stats",
+      "success": true,
+      "details": "All stats fields present: {'total_clients': 0, 'total_invoices': 0, 'total_quotes': 0, 'pending_invoices': 0, 'total_revenue': 0}",
+      "response_data": null
+    },
+    {
+      "name": "Create Client",
+      "success": true,
+      "details": "Client created with ID: 0778b1a4-a348-4c71-bfaf-a275f438e065",
+      "response_data": null
+    },
+    {
+      "name": "Get Clients List",
+      "success": true,
+      "details": "Retrieved 1 clients",
+      "response_data": null
+    },
+    {
+      "name": "Get Specific Client",
+      "success": true,
+      "details": "Retrieved client: Test Client",
+      "response_data": null
+    },
+    {
+      "name": "Update Client",
+      "success": true,
+      "details": "Client updated successfully",
+      "response_data": null
+    },
+    {
+      "name": "Create Invoice",
+      "success": true,
+      "details": "Invoice created with correct calculations: INV-00001",
+      "response_data": null
+    },
+    {
+      "name": "Get Invoices List",
+      "success": true,
+      "details": "Retrieved 1 invoices",
+      "response_data": null
+    },
+    {
+      "name": "Update Invoice Status",
+      "success": true,
+      "details": "Invoice status updated to sent",
+      "response_data": null
+    },
+    {
+      "name": "Create Quote",
+      "success": true,
+      "details": "Quote created: QTE-00001",
+      "response_data": null
+    },
+    {
+      "name": "Get Quotes List",
+      "success": true,
+      "details": "Retrieved 1 quotes",
+      "response_data": null
+    },
+    {
+      "name": "Convert Quote to Invoice",
+      "success": true,
+      "details": "Quote converted to invoice: INV-00002",
+      "response_data": null
+    },
+    {
+      "name": "Get Company Settings",
+      "success": true,
+      "details": "Settings retrieved for: Login Test Company",
+      "response_data": null
+    },
+    {
+      "name": "Update Company Settings",
+      "success": true,
+      "details": "Company settings updated successfully",
+      "response_data": null
+    },
+    {
+      "name": "Unauthorized Access",
       "success": false,
-      "details": "Registration failed: {'error': \"HTTPSConnectionPool(host='invoicehub-16.preview.emergentagent.com', port=443): Read timed out. (read timeout=10)\"}",
+      "details": "Should have returned 401: {'detail': 'Not authenticated'}",
+      "response_data": null
+    },
+    {
+      "name": "Invalid Client ID",
+      "success": false,
+      "details": "Should have returned 404: {'detail': 'Client not found'}",
       "response_data": null
     }
   ]
