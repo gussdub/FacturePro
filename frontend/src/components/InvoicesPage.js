@@ -299,16 +299,14 @@ const InvoicesPage = () => {
           <p className="text-gray-600">Gérez vos factures et leur suivi</p>
         </div>
         
-        <Dialog open={showInvoiceDialog} onOpenChange={(open) => {
-          setShowInvoiceDialog(open);
-          if (!open) resetForm();
-        }}>
-          <DialogTrigger asChild>
-            <Button className="mt-4 sm:mt-0 btn-hover" data-testid="add-invoice-btn">
-              <Plus className="w-4 h-4 mr-2" />
-              Nouvelle facture
-            </Button>
-          </DialogTrigger>
+        <Button 
+          className="mt-4 sm:mt-0 btn-hover" 
+          data-testid="add-invoice-btn"
+          onClick={() => setShowInvoiceForm(true)}
+        >
+          <Plus className="w-4 h-4 mr-2" />
+          Nouvelle facture
+        </Button>
           
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
