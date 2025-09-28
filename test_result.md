@@ -152,8 +152,8 @@ frontend:
         comment: "FIXED - Combined enhanced CSS rules with aggressive JavaScript watermark removal in App.js useEffect. Watermark no longer visible."
         
   - task: "Add FacturePro logo and name to login page"
-    implemented: false
-    working: false
+    implemented: true
+    working: true
     file: "/app/frontend/src/components/LoginPage.js"
     stuck_count: 0
     priority: "medium"
@@ -162,6 +162,21 @@ frontend:
       - working: false
         agent: "main"
         comment: "Logo is present in sidebar but missing from login page as requested by user"
+      - working: true
+        agent: "main"
+        comment: "FIXED - Added FacturePro logo and name to login page header, matching the design from sidebar with teal color scheme."
+        
+  - task: "Test frontend delete buttons functionality"
+    implemented: "unknown"
+    working: "needs_testing"
+    file: "/app/frontend/src/components/InvoicesPage.js and QuotesPage.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "needs_testing"
+        agent: "main"
+        comment: "Backend DELETE APIs confirmed working. Need to test if frontend delete buttons properly call backend and handle responses."
 
 metadata:
   created_by: "main_agent"
