@@ -175,11 +175,58 @@ const Layout = () => {
                   <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
                 </button>
 
-                {/* User avatar */}
-                <div className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center">
-                  <span className="text-xs font-bold text-white">
-                    {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
-                  </span>
+                {/* User avatar with dropdown */}
+                <div className="relative">
+                  <button
+                    className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center hover:bg-indigo-700 transition-colors"
+                    onClick={() => setUserMenuOpen(!userMenuOpen)}
+                    title="Menu utilisateur"
+                  >
+                    <span className="text-xs font-bold text-white">
+                      {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                    </span>
+                  </button>
+
+                  {/* Dropdown menu */}
+                  {userMenuOpen && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border">
+                      <div className="px-4 py-2 border-b border-gray-200">
+                        <p className="text-sm font-medium text-gray-900">
+                          {user?.company_name || 'Entreprise'}
+                        </p>
+                        <p className="text-xs text-gray-500">{user?.email}</p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          alert('Profil - Fonctionnalité à implémenter');
+                        }}
+                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        Mon profil
+                      </button>
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          // Navigate to settings
+                          window.location.href = '/settings';
+                        }}
+                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        Paramètres
+                      </button>
+                      <div className="border-t border-gray-200"></div>
+                      <button
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          logout();
+                        }}
+                        className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                      >
+                        Se déconnecter
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
