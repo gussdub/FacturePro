@@ -397,32 +397,15 @@ const InvoicesPage = () => {
                   </div>
 
                   <div className="flex items-center space-x-2 ml-4">
-                    {invoice.status === 'draft' && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => updateInvoiceStatus(invoice.id, 'sent')}
-                          data-testid={`send-invoice-${invoice.id}`}
-                          className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                        >
-                          <Send className="w-4 h-4 mr-1" />
-                          Envoyer
-                        </Button>
-                      </>
-                    )}
-
-                    {invoice.status === 'sent' && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => updateInvoiceStatus(invoice.id, 'paid')}
-                        data-testid={`mark-paid-${invoice.id}`}
-                        className="text-green-600 border-green-300 hover:bg-green-50"
-                      >
-                        Marquer payée
-                      </Button>
-                    )}
+                    <Button
+                      size="sm"
+                      onClick={() => handleActions(invoice)}
+                      data-testid={`actions-invoice-${invoice.id}`}
+                      className="bg-teal-600 hover:bg-teal-700 text-white"
+                    >
+                      <Settings className="w-4 h-4 mr-1" />
+                      Actions
+                    </Button>
 
                     <Button
                       size="sm"
