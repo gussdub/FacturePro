@@ -173,6 +173,7 @@ function App() {
               <Route path="products" element={<ProductsPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="quotes" element={<QuotesPage />} />
+              <Route path="export" element={<ExportPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>
