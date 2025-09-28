@@ -204,6 +204,7 @@ class Quote(BaseModel):
 class QuoteCreate(BaseModel):
     client_id: str
     valid_until: datetime
+    quote_number: Optional[str] = None  # Optionnel, auto-généré si non fourni
     items: List[InvoiceItemCreate]
     gst_rate: float = 5.0
     pst_rate: float = 9.975  # TVQ Québec par défaut
