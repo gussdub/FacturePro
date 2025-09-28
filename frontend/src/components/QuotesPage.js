@@ -298,7 +298,7 @@ const QuotesPage = () => {
           <DialogTrigger asChild>
             <Button className="mt-4 sm:mt-0 btn-hover" data-testid="add-quote-btn">
               <Plus className="w-4 h-4 mr-2" />
-              Nouveau devis
+              Nouvelle soumission
             </Button>
           </DialogTrigger>
           
