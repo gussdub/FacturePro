@@ -31,6 +31,7 @@ const QuotesPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [showQuoteDialog, setShowQuoteDialog] = useState(false);
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [showConvertDialog, setShowConvertDialog] = useState(false);
   const [editingQuote, setEditingQuote] = useState(null);
   const [convertingQuote, setConvertingQuote] = useState(null);
