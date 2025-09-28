@@ -137,6 +137,12 @@ class ProductCreate(BaseModel):
     unit: str = "unité"
     category: Optional[str] = None
 
+class PaymentInfo(BaseModel):
+    payment_date: datetime
+    payment_method: str  # virement, cheque, argent, interac, carte
+    amount_paid: float
+    notes: Optional[str] = None
+
 class Invoice(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
@@ -158,6 +164,7 @@ class Invoice(BaseModel):
     apply_pst: bool = False
     apply_hst: bool = False
     status: InvoiceStatus = InvoiceStatus.DRAFT
+    payment_info: Optional[PaymentInfo] = None
     notes: Optional[str] = None
     province: str = "QC"  # Province par défaut Québec
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
