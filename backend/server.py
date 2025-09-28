@@ -550,9 +550,18 @@ async def convert_quote_to_invoice(quote_id: str, due_date: datetime, current_us
         due_date=due_date,
         items=quote_obj.items,
         subtotal=quote_obj.subtotal,
-        tax_rate=quote_obj.tax_rate,
-        tax_amount=quote_obj.tax_amount,
+        gst_rate=quote_obj.gst_rate,
+        pst_rate=quote_obj.pst_rate,
+        hst_rate=quote_obj.hst_rate,
+        gst_amount=quote_obj.gst_amount,
+        pst_amount=quote_obj.pst_amount,
+        hst_amount=quote_obj.hst_amount,
+        total_tax=quote_obj.total_tax,
         total=quote_obj.total,
+        apply_gst=quote_obj.apply_gst,
+        apply_pst=quote_obj.apply_pst,
+        apply_hst=quote_obj.apply_hst,
+        province=quote_obj.province,
         notes=quote_obj.notes
     )
     
