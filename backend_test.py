@@ -89,7 +89,7 @@ class BillingAPITester:
         test_email = f"login_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}@example.com"
         register_data = {
             "email": test_email,
-            "password": "TestPassword123!",
+            "password": "Test123",
             "company_name": "Login Test Company"
         }
         
