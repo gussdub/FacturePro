@@ -539,6 +539,11 @@ class BillingAPITester:
         self.test_client_management()
         self.test_invoice_management()
         self.test_quote_management()
+        
+        # Delete functionality tests (specific to the review request)
+        self.test_delete_invoice()
+        self.test_delete_quote()
+        
         self.test_company_settings()
         self.test_error_handling()
 
