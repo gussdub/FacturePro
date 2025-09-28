@@ -13,7 +13,8 @@ import {
   X,
   Bell,
   Search,
-  Package
+  Package,
+  BarChart3
 } from 'lucide-react';
 
 const Layout = () => {
