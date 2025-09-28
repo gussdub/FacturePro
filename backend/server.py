@@ -649,7 +649,10 @@ async def get_company_settings(current_user: User = Depends(get_current_user)):
         settings = CompanySettings(
             user_id=current_user.id,
             company_name=current_user.company_name,
-            email=current_user.email
+            email=current_user.email,
+            default_due_days=30,
+            next_invoice_number=1,
+            next_quote_number=1
         )
         await db.company_settings.insert_one(settings.dict())
     return CompanySettings(**settings)
