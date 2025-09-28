@@ -554,12 +554,36 @@ async def update_invoice(invoice_id: str, invoice_update: InvoiceCreate, current
     updated_invoice = await db.invoices.find_one({"id": invoice_id})
     return Invoice(**updated_invoice)
 
+class PaymentUpdate(BaseModel):
+    status: InvoiceStatus
+    payment_date: Optional[datetime] = None
+    payment_method: Optional[str] = None
+    amount_paid: Optional[float] = None
+    payment_notes: Optional[str] = None
+
 @api_router.put("/invoices/{invoice_id}/status")
-async def update_invoice_status(invoice_id: str, status: InvoiceStatus, current_user: User = Depends(get_current_user)):
+async def update_invoice_status(invoice_id: str, payment_data: PaymentUpdate, current_user: User = Depends(get_current_user)):
+    invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    update_data = {"status": payment_data.status.value}
+    
+    # If marking as paid, add payment info
+    if payment_data.status == InvoiceStatus.PAID and payment_data.payment_date:
+        payment_info = PaymentInfo(
+            payment_date=payment_data.payment_date,
+            payment_method=payment_data.payment_method or "non_specifie",
+            amount_paid=payment_data.amount_paid or invoice["total"],
+            notes=payment_data.payment_notes
+        )
+        update_data["payment_info"] = payment_info.dict()
+    
     result = await db.invoices.update_one(
         {"id": invoice_id, "user_id": current_user.id},
-        {"$set": {"status": status.value}}
+        {"$set": update_data}
     )
+    
     if result.modified_count == 0:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return {"message": "Invoice status updated successfully"}
