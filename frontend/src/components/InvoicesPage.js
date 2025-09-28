@@ -278,7 +278,14 @@ const InvoicesPage = () => {
         <Button 
           className="mt-4 sm:mt-0 btn-hover" 
           data-testid="add-invoice-btn"
-          onClick={() => setShowInvoiceForm(true)}
+          onClick={() => {
+            try {
+              setShowInvoiceForm(true);
+            } catch (error) {
+              console.error('Error opening invoice form:', error);
+              setError('Erreur lors de l\'ouverture du formulaire');
+            }
+          }}
         >
           <Plus className="w-4 h-4 mr-2" />
           Nouvelle facture
