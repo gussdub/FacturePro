@@ -130,6 +130,11 @@ const InvoicesPage = () => {
     setShowInvoiceForm(true);
   };
 
+  const handleActions = (invoice) => {
+    setSelectedInvoice(invoice);
+    setShowActionsDialog(true);
+  };
+
   const handleDelete = async (invoiceId) => {
     if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette facture ?')) {
       return;
