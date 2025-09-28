@@ -115,7 +115,13 @@ const InvoicesPage = () => {
     setFormData({
       client_id: invoice.client_id,
       due_date: invoice.due_date.split('T')[0],
-      tax_rate: invoice.tax_rate,
+      gst_rate: invoice.gst_rate || 5.0,
+      pst_rate: invoice.pst_rate || 0.0,
+      hst_rate: invoice.hst_rate || 0.0,
+      apply_gst: invoice.apply_gst !== undefined ? invoice.apply_gst : true,
+      apply_pst: invoice.apply_pst !== undefined ? invoice.apply_pst : false,
+      apply_hst: invoice.apply_hst !== undefined ? invoice.apply_hst : false,
+      province: invoice.province || 'QC',
       notes: invoice.notes || '',
       items: invoice.items
     });
