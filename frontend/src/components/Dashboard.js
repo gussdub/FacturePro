@@ -282,7 +282,7 @@ const Dashboard = () => {
                 <Link to="/quotes">
                   <Button className="mt-4" data-testid="create-first-quote-btn">
                     <Plus className="w-4 h-4 mr-2" />
-                    Créer votre premier devis
+                    Créer votre première soumission
                   </Button>
                 </Link>
               </div>
