@@ -423,6 +423,128 @@ const InvoicesPage = () => {
                 </div>
               </div>
 
+              {/* Province selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Province/Territoire
+                </label>
+                <Select 
+                  value={formData.province} 
+                  onValueChange={(value) => {
+                    const provinceSettings = getProvinceSettings(value);
+                    setFormData(prev => ({ 
+                      ...prev, 
+                      province: value,
+                      pst_rate: provinceSettings.pst_rate,
+                      hst_rate: provinceSettings.hst_rate,
+                      apply_pst: provinceSettings.apply_pst,
+                      apply_hst: provinceSettings.apply_hst
+                    }));
+                  }}
+                >
+                  <SelectTrigger data-testid="province-select">
+                    <SelectValue placeholder="Sélectionner une province" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="QC">Québec</SelectItem>
+                    <SelectItem value="ON">Ontario</SelectItem>
+                    <SelectItem value="BC">Colombie-Britannique</SelectItem>
+                    <SelectItem value="AB">Alberta</SelectItem>
+                    <SelectItem value="MB">Manitoba</SelectItem>
+                    <SelectItem value="SK">Saskatchewan</SelectItem>
+                    <SelectItem value="NS">Nouvelle-Écosse</SelectItem>
+                    <SelectItem value="NB">Nouveau-Brunswick</SelectItem>
+                    <SelectItem value="NL">Terre-Neuve-et-Labrador</SelectItem>
+                    <SelectItem value="PE">Île-du-Prince-Édouard</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Tax Configuration */}
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <h4 className="font-medium text-gray-900 mb-3">Configuration des taxes</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  
+                  {/* GST */}
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={formData.apply_gst}
+                      onChange={(e) => setFormData(prev => ({ ...prev, apply_gst: e.target.checked }))}
+                      className="rounded border-gray-300"
+                      data-testid="apply-gst-checkbox"
+                    />
+                    <div className="flex-1">
+                      <label className="text-sm font-medium text-gray-700">TPS/GST</label>
+                      <div className="flex items-center space-x-1">
+                        <Input
+                          type="number"
+                          step="0.001"
+                          value={formData.gst_rate}
+                          onChange={(e) => setFormData(prev => ({ ...prev, gst_rate: parseFloat(e.target.value) || 0 }))}
+                          className="w-16 h-8 text-xs"
+                          disabled={!formData.apply_gst}
+                          data-testid="gst-rate-input"
+                        />
+                        <span className="text-xs">%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PST/TVQ */}
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={formData.apply_pst}
+                      onChange={(e) => setFormData(prev => ({ ...prev, apply_pst: e.target.checked }))}
+                      className="rounded border-gray-300"
+                      data-testid="apply-pst-checkbox"
+                    />
+                    <div className="flex-1">
+                      <label className="text-sm font-medium text-gray-700">TVQ/PST</label>
+                      <div className="flex items-center space-x-1">
+                        <Input
+                          type="number"
+                          step="0.001"
+                          value={formData.pst_rate}
+                          onChange={(e) => setFormData(prev => ({ ...prev, pst_rate: parseFloat(e.target.value) || 0 }))}
+                          className="w-16 h-8 text-xs"
+                          disabled={!formData.apply_pst}
+                          data-testid="pst-rate-input"
+                        />
+                        <span className="text-xs">%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* HST */}
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={formData.apply_hst}
+                      onChange={(e) => setFormData(prev => ({ ...prev, apply_hst: e.target.checked }))}
+                      className="rounded border-gray-300"
+                      data-testid="apply-hst-checkbox"
+                    />
+                    <div className="flex-1">
+                      <label className="text-sm font-medium text-gray-700">HST</label>
+                      <div className="flex items-center space-x-1">
+                        <Input
+                          type="number"
+                          step="0.001"
+                          value={formData.hst_rate}
+                          onChange={(e) => setFormData(prev => ({ ...prev, hst_rate: parseFloat(e.target.value) || 0 }))}
+                          className="w-16 h-8 text-xs"
+                          disabled={!formData.apply_hst}
+                          data-testid="hst-rate-input"
+                        />
+                        <span className="text-xs">%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Totals */}
               <div className="bg-gray-50 p-4 rounded-lg">
                 <div className="space-y-2 text-right">
@@ -430,21 +552,28 @@ const InvoicesPage = () => {
                     <span className="font-medium">Sous-total:</span>
                     <span>{formatCurrency(calculateSubtotal())}</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center space-x-2">
-                      <span className="font-medium">TVA:</span>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={formData.tax_rate}
-                        onChange={(e) => setFormData(prev => ({ ...prev, tax_rate: parseFloat(e.target.value) || 0 }))}
-                        className="w-20 h-8"
-                        data-testid="tax-rate-input"
-                      />
-                      <span>%</span>
+                  
+                  {formData.apply_gst && (
+                    <div className="flex justify-between">
+                      <span className="text-sm">TPS/GST ({formData.gst_rate}%):</span>
+                      <span>{formatCurrency(calculateGST())}</span>
                     </div>
-                    <span>{formatCurrency(calculateTax())}</span>
-                  </div>
+                  )}
+                  
+                  {formData.apply_pst && (
+                    <div className="flex justify-between">
+                      <span className="text-sm">TVQ/PST ({formData.pst_rate}%):</span>
+                      <span>{formatCurrency(calculatePST())}</span>
+                    </div>
+                  )}
+                  
+                  {formData.apply_hst && (
+                    <div className="flex justify-between">
+                      <span className="text-sm">HST ({formData.hst_rate}%):</span>
+                      <span>{formatCurrency(calculateHST())}</span>
+                    </div>
+                  )}
+                  
                   <div className="flex justify-between text-lg font-bold border-t pt-2">
                     <span>Total:</span>
                     <span>{formatCurrency(calculateTotal())}</span>
