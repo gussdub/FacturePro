@@ -568,8 +568,8 @@ async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_curr
         quote.apply_gst, quote.apply_pst, quote.apply_hst
     )
     
-    # Generate quote number
-    quote_number = await generate_quote_number(current_user.id)
+    # Generate quote number (custom or auto)
+    quote_number = await generate_quote_number(current_user.id, quote.quote_number)
     
     new_quote = Quote(
         user_id=current_user.id,
