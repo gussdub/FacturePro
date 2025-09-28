@@ -206,14 +206,17 @@ class CompanySettingsUpdate(BaseModel):
 
 # Utility functions
 def get_password_hash(password):
-    # Truncate password to 72 bytes for bcrypt compatibility
-    password_bytes = password.encode('utf-8')[:72]
-    return pwd_context.hash(password_bytes)
+    # Generate salt and hash with PBKDF2
+    salt = secrets.token_hex(32)
+    password_hash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), 100000)
+    return salt + password_hash.hex()
 
 def verify_password(plain_password, hashed_password):
-    # Truncate password to 72 bytes for bcrypt compatibility
-    password_bytes = plain_password.encode('utf-8')[:72]
-    return pwd_context.verify(password_bytes, hashed_password)
+    # Extract salt and verify password
+    salt = hashed_password[:64]
+    stored_hash = hashed_password[64:]
+    password_hash = hashlib.pbkdf2_hmac('sha256', plain_password.encode('utf-8'), salt.encode('utf-8'), 100000)
+    return password_hash.hex() == stored_hash
 
 def create_access_token(data: dict):
     to_encode = data.copy()
