@@ -207,12 +207,10 @@ class CompanySettingsUpdate(BaseModel):
 
 # Utility functions
 def get_password_hash(password):
-    # Use SHA256 for testing to avoid bcrypt issues
-    return hashlib.sha256(password.encode()).hexdigest()
+    return pwd_context.hash(password)
 
 def verify_password(plain_password, hashed_password):
-    # Use SHA256 for testing to avoid bcrypt issues
-    return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
+    return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
