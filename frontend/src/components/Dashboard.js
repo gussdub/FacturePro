@@ -278,7 +278,7 @@ const Dashboard = () => {
             {recentQuotes.length === 0 ? (
               <div className="text-center py-8" data-testid="no-quotes">
                 <ScrollText className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-500">Aucun devis créé</p>
+                <p className="text-gray-500">Aucune soumission créée</p>
                 <Link to="/quotes">
                   <Button className="mt-4" data-testid="create-first-quote-btn">
                     <Plus className="w-4 h-4 mr-2" />
