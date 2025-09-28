@@ -98,7 +98,7 @@ const QuotesPage = () => {
 
       if (editingQuote) {
         await axios.put(`${API}/quotes/${editingQuote.id}`, quoteData);
-        setSuccess('Devis modifié avec succès');
+        setSuccess('Soumission modifiée avec succès');
       } else {
         await axios.post(`${API}/quotes`, quoteData);
         setSuccess('Devis créé avec succès');
