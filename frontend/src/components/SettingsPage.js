@@ -237,6 +237,29 @@ const SettingsPage = () => {
                 />
               </div>
             </div>
+            
+            {/* Default Due Days */}
+            <div className="pt-4 border-t border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Paramètres de facturation</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Échéance par défaut (jours)
+                </label>
+                <Input
+                  type="number"
+                  value={settings.default_due_days}
+                  onChange={(e) => handleChange('default_due_days', parseInt(e.target.value) || 30)}
+                  placeholder="30"
+                  data-testid="default-due-days-input"
+                  className="form-input w-32"
+                  min="1"
+                  max="365"
+                />
+                <p className="text-sm text-gray-500 mt-1">
+                  Nombre de jours par défaut pour l'échéance des factures (modifiable individuellement)
+                </p>
+              </div>
+            </div>
           </div>
         </Card>
 
