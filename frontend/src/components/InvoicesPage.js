@@ -24,6 +24,23 @@ import {
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Helper function for province tax settings
+const getProvinceSettings = (province) => {
+  const settings = {
+    QC: { pst_rate: 9.975, apply_pst: true, apply_hst: false, hst_rate: 0 }, // Québec - TVQ
+    ON: { pst_rate: 0, apply_pst: false, apply_hst: true, hst_rate: 13 }, // Ontario - HST
+    BC: { pst_rate: 7, apply_pst: true, apply_hst: false, hst_rate: 0 }, // Colombie-Britannique - PST
+    AB: { pst_rate: 0, apply_pst: false, apply_hst: false, hst_rate: 0 }, // Alberta - Pas de taxe provinciale
+    MB: { pst_rate: 7, apply_pst: true, apply_hst: false, hst_rate: 0 }, // Manitoba - PST
+    SK: { pst_rate: 6, apply_pst: true, apply_hst: false, hst_rate: 0 }, // Saskatchewan - PST
+    NS: { pst_rate: 0, apply_pst: false, apply_hst: true, hst_rate: 15 }, // Nouvelle-Écosse - HST
+    NB: { pst_rate: 0, apply_pst: false, apply_hst: true, hst_rate: 15 }, // Nouveau-Brunswick - HST
+    NL: { pst_rate: 0, apply_pst: false, apply_hst: true, hst_rate: 15 }, // Terre-Neuve-et-Labrador - HST
+    PE: { pst_rate: 0, apply_pst: false, apply_hst: true, hst_rate: 15 }, // Île-du-Prince-Édouard - HST
+  };
+  return settings[province] || settings.QC;
+};
+
 const InvoicesPage = () => {
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
