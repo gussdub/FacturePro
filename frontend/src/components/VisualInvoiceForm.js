@@ -228,7 +228,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
             </label>
             <Input
               type="date"
-              value={formData.issue_date}
+              value={formData.issue_date || ''}
               onChange={(e) => setFormData(prev => ({ ...prev, issue_date: e.target.value }))}
               className="bg-gray-50"
             />
