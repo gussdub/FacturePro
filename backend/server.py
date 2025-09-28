@@ -326,15 +326,49 @@ def calculate_invoice_totals(items: List[InvoiceItemCreate], gst_rate: float = 5
     
     return invoice_items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total
 
-async def generate_invoice_number(user_id: str):
-    # Get the count of existing invoices for this user
-    count = await db.invoices.count_documents({"user_id": user_id})
-    return f"INV-{count + 1:05d}"
+async def generate_invoice_number(user_id: str, custom_number: Optional[str] = None):
+    if custom_number:
+        return custom_number
+    
+    # Get company settings for next number
+    settings = await db.company_settings.find_one({"user_id": user_id})
+    if settings and "next_invoice_number" in settings:
+        next_num = settings["next_invoice_number"]
+    else:
+        # Fallback: count existing invoices
+        count = await db.invoices.count_documents({"user_id": user_id})
+        next_num = count + 1
+    
+    # Update next number in settings
+    await db.company_settings.update_one(
+        {"user_id": user_id},
+        {"$inc": {"next_invoice_number": 1}},
+        upsert=True
+    )
+    
+    return f"INV-{next_num:05d}"
 
-async def generate_quote_number(user_id: str):
-    # Get the count of existing quotes for this user
-    count = await db.quotes.count_documents({"user_id": user_id})
-    return f"QTE-{count + 1:05d}"
+async def generate_quote_number(user_id: str, custom_number: Optional[str] = None):
+    if custom_number:
+        return custom_number
+    
+    # Get company settings for next number
+    settings = await db.company_settings.find_one({"user_id": user_id})
+    if settings and "next_quote_number" in settings:
+        next_num = settings["next_quote_number"]
+    else:
+        # Fallback: count existing quotes
+        count = await db.quotes.count_documents({"user_id": user_id})
+        next_num = count + 1
+    
+    # Update next number in settings
+    await db.company_settings.update_one(
+        {"user_id": user_id},
+        {"$inc": {"next_quote_number": 1}},
+        upsert=True
+    )
+    
+    return f"QTE-{next_num:05d}"
 
 # Authentication routes
 @api_router.post("/auth/register", response_model=Token)
