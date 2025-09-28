@@ -497,8 +497,11 @@ async def get_quotes(current_user: User = Depends(get_current_user)):
 
 @api_router.post("/quotes", response_model=Quote)
 async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_current_user)):
-    # Calculate totals
-    items, subtotal, tax_amount, total = calculate_invoice_totals(quote.items, quote.tax_rate)
+    # Calculate totals with Canadian taxes
+    items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
+        quote.items, quote.gst_rate, quote.pst_rate, quote.hst_rate,
+        quote.apply_gst, quote.apply_pst, quote.apply_hst
+    )
     
     # Generate quote number
     quote_number = await generate_quote_number(current_user.id)
@@ -510,9 +513,18 @@ async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_curr
         valid_until=quote.valid_until,
         items=items,
         subtotal=subtotal,
-        tax_rate=quote.tax_rate,
-        tax_amount=tax_amount,
+        gst_rate=quote.gst_rate,
+        pst_rate=quote.pst_rate,
+        hst_rate=quote.hst_rate,
+        gst_amount=gst_amount,
+        pst_amount=pst_amount,
+        hst_amount=hst_amount,
+        total_tax=total_tax,
         total=total,
+        apply_gst=quote.apply_gst,
+        apply_pst=quote.apply_pst,
+        apply_hst=quote.apply_hst,
+        province=quote.province,
         notes=quote.notes
     )
     
