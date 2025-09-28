@@ -167,6 +167,8 @@ const Layout = () => {
                 <button 
                   className="relative text-gray-500 hover:text-gray-700 transition-colors p-2 rounded-lg hover:bg-gray-100"
                   data-testid="notifications-btn"
+                  onClick={() => alert('Notifications - Fonctionnalité à implémenter')}
+                  title="Notifications"
                 >
                   <Bell className="w-5 h-5" />
                   <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
