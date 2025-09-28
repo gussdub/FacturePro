@@ -148,7 +148,13 @@ class InvoiceCreate(BaseModel):
     client_id: str
     due_date: datetime
     items: List[InvoiceItemCreate]
-    tax_rate: float = 0.0
+    gst_rate: float = 5.0
+    pst_rate: float = 9.975  # TVQ Québec par défaut
+    hst_rate: float = 0.0
+    apply_gst: bool = True
+    apply_pst: bool = True
+    apply_hst: bool = False
+    province: str = "QC"
     notes: Optional[str] = None
 
 class Quote(BaseModel):
