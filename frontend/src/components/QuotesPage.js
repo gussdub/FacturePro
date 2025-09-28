@@ -579,8 +579,8 @@ const QuotesPage = () => {
           </h3>
           <p className="text-gray-500 mb-6">
             {quotes.length === 0 
-              ? 'Créez votre premier devis pour commencer'
-              : 'Aucun devis ne correspond à vos critères'
+              ? 'Créez votre première soumission pour commencer'
+              : 'Aucune soumission ne correspond à vos critères'
             }
           </p>
           {quotes.length === 0 && (
