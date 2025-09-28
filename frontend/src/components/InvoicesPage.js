@@ -434,6 +434,17 @@ const InvoicesPage = () => {
         </div>
       )}
 
+      {/* Invoice Actions Dialog */}
+      <InvoiceActionsDialog
+        invoice={selectedInvoice}
+        isOpen={showActionsDialog}
+        onClose={() => {
+          setShowActionsDialog(false);
+          setSelectedInvoice(null);
+        }}
+        onUpdate={fetchData}
+      />
+
       {/* Stats */}
       <Card className="p-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-center">
