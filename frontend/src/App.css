@@ -263,28 +263,38 @@ body {
   }
 }
 
-/* Hide Made with Emergent watermark - comprehensive approach */
-div[style*="position: fixed"][style*="bottom"],
-div[style*="position: absolute"][style*="bottom"],
-*:contains("Made with Emergent"),
-*:contains("made with emergent"),  
-*:contains("MADE WITH EMERGENT"),
-*[class*="emergent"],
-*[id*="emergent"],
+/* Hide Made with Emergent watermark - ultra comprehensive */
+div[style*="position: fixed"],
+div[style*="position: absolute"],
+div[style*="bottom"],
+div[style*="right"],
+*[class*="emergent" i],
+*[id*="emergent" i],
 *[data-emergent],
 iframe[src*="emergent"],
 .watermark,
 [class*="watermark"],
-[id*="watermark"] {
+[id*="watermark"],
+*:has-text("Made with"),
+*:has-text("Emergent") {
   display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
   position: absolute !important;
-  left: -9999px !important;
-  top: -9999px !important;
+  left: -99999px !important;
+  top: -99999px !important;
   width: 0 !important;
   height: 0 !important;
   overflow: hidden !important;
+  z-index: -999999 !important;
+}
+
+/* Target specific positioning that might contain watermark */
+body > div[style*="position: fixed"][style*="bottom: 10px"][style*="right: 10px"],
+body > div[style*="position: fixed"][style*="bottom: 20px"][style*="right: 20px"],
+div[style*="z-index: 999"],
+div[style*="z-index: 9999"] {
+  display: none !important;
 }
 
 /* FacturePro modern design system */
