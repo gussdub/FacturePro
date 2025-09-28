@@ -89,7 +89,9 @@ const InvoicesPage = () => {
       const invoiceData = {
         ...formData,
         due_date: new Date(formData.due_date).toISOString(),
-        tax_rate: parseFloat(formData.tax_rate) || 0
+        gst_rate: parseFloat(formData.gst_rate) || 0,
+        pst_rate: parseFloat(formData.pst_rate) || 0,
+        hst_rate: parseFloat(formData.hst_rate) || 0
       };
 
       if (editingInvoice) {
