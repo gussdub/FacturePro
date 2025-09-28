@@ -244,6 +244,7 @@ class CompanySettingsUpdate(BaseModel):
     country: Optional[str] = None
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
+    default_due_days: Optional[int] = None
 
 # Utility functions
 def get_password_hash(password):
