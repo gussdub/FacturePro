@@ -569,24 +569,6 @@ const InvoicesPage = () => {
                 />
               </div>
 
-              <div className="flex justify-end space-x-3 pt-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowInvoiceDialog(false)}
-                  data-testid="cancel-invoice-btn"
-                >
-                  Annuler
-                </Button>
-                <Button type="submit" data-testid="save-invoice-btn">
-                  {editingInvoice ? 'Modifier' : 'Créer'}
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </div>
-
       {/* Visual Invoice Form */}
       {showInvoiceForm && (
         <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
