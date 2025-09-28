@@ -10,6 +10,7 @@ import ClientsPage from './components/ClientsPage';
 import ProductsPage from './components/ProductsPage';
 import InvoicesPage from './components/InvoicesPage';
 import QuotesPage from './components/QuotesPage';
+import ExportPage from './components/ExportPage';
 import SettingsPage from './components/SettingsPage';
 import Layout from './components/Layout';
 
