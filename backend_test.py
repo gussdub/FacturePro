@@ -102,7 +102,7 @@ class BillingAPITester:
         # Now test login
         login_data = {
             "email": test_email,
-            "password": "TestPassword123!"
+            "password": "Test123"
         }
         
         success, response = self.make_request('POST', 'auth/login', login_data, 200)
