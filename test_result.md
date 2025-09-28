@@ -107,15 +107,18 @@ user_problem_statement: "L'utilisateur a signalé plusieurs problèmes: 1) Le lo
 backend:
   - task: "Delete buttons for invoices and quotes"
     implemented: true
-    working: "needs_testing"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: true
         agent: "main"
         comment: "DELETE routes were missing and have been added in previous session according to documentation"
+      - working: true
+        agent: "testing"
+        comment: "TESTED: DELETE /api/invoices/{id} and DELETE /api/quotes/{id} routes are working correctly. Successfully created test invoices and quotes, deleted them, and verified deletion. Authentication is properly enforced. Error handling for non-existent resources returns appropriate 404 responses. Backend delete functionality is fully operational."
 
 frontend:
   - task: "Fix layout issue - content starting too low"  
