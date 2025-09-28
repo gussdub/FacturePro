@@ -664,6 +664,47 @@ async def update_company_settings(settings_update: CompanySettingsUpdate, curren
     updated_settings = await db.company_settings.find_one({"user_id": current_user.id})
     return CompanySettings(**updated_settings)
 
+# Product routes
+@api_router.get("/products", response_model=List[Product])
+async def get_products(current_user: User = Depends(get_current_user)):
+    products = await db.products.find({"user_id": current_user.id, "is_active": True}).to_list(1000)
+    return [Product(**product) for product in products]
+
+@api_router.post("/products", response_model=Product)
+async def create_product(product: ProductCreate, current_user: User = Depends(get_current_user)):
+    new_product = Product(**product.dict(), user_id=current_user.id)
+    await db.products.insert_one(new_product.dict())
+    return new_product
+
+@api_router.get("/products/{product_id}", response_model=Product)
+async def get_product(product_id: str, current_user: User = Depends(get_current_user)):
+    product = await db.products.find_one({"id": product_id, "user_id": current_user.id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return Product(**product)
+
+@api_router.put("/products/{product_id}", response_model=Product)
+async def update_product(product_id: str, product_update: ProductCreate, current_user: User = Depends(get_current_user)):
+    product = await db.products.find_one({"id": product_id, "user_id": current_user.id})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    update_data = product_update.dict()
+    await db.products.update_one({"id": product_id}, {"$set": update_data})
+    
+    updated_product = await db.products.find_one({"id": product_id})
+    return Product(**updated_product)
+
+@api_router.delete("/products/{product_id}")
+async def delete_product(product_id: str, current_user: User = Depends(get_current_user)):
+    result = await db.products.update_one(
+        {"id": product_id, "user_id": current_user.id}, 
+        {"$set": {"is_active": False}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {"message": "Product deleted successfully"}
+
 # Dashboard stats
 @api_router.get("/dashboard/stats")
 async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
