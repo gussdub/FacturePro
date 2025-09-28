@@ -343,41 +343,92 @@ const SettingsPage = () => {
             </div>
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  URL du logo
-                </label>
-                <Input
-                  value={settings.logo_url}
-                  onChange={(e) => handleChange('logo_url', e.target.value)}
-                  placeholder="https://monentreprise.fr/logo.png"
-                  data-testid="logo-url-input"
-                  className="form-input"
+              {/* Drag & Drop Zone */}
+              <div
+                className={`relative border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                  dragActive 
+                    ? 'border-indigo-500 bg-indigo-50' 
+                    : 'border-gray-300 hover:border-gray-400'
+                }`}
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+              >
+                <input
+                  type="file"
+                  id="logo-upload"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleFileChange}
                 />
-                <p className="text-sm text-gray-500 mt-1">
-                  Entrez l'URL de votre logo ou laissez vide pour utiliser le nom de l'entreprise
-                </p>
-              </div>
-
-              {settings.logo_url && (
-                <div className="mt-4">
-                  <p className="text-sm font-medium text-gray-700 mb-2">Aperçu du logo:</p>
-                  <div className="w-32 h-32 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50">
-                    <img
-                      src={settings.logo_url}
-                      alt="Logo de l'entreprise"
-                      className="max-w-full max-h-full object-contain"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.nextSibling.style.display = 'block';
-                      }}
-                    />
-                    <span className="text-gray-400 text-sm" style={{display: 'none'}}>
-                      Erreur de chargement
-                    </span>
+                
+                {settings.logo_url ? (
+                  <div className="space-y-4">
+                    <div className="w-32 h-32 mx-auto border-2 border-gray-200 rounded-lg overflow-hidden bg-white">
+                      <img
+                        src={settings.logo_url}
+                        alt="Logo de l'entreprise"
+                        className="w-full h-full object-contain"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'block';
+                        }}
+                      />
+                      <div className="w-full h-full flex items-center justify-center text-gray-400" style={{display: 'none'}}>
+                        <Upload className="w-8 h-8" />
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 mb-2">Logo actuel</p>
+                      <label
+                        htmlFor="logo-upload"
+                        className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                      >
+                        <Upload className="w-4 h-4 mr-2" />
+                        Changer le logo
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setSettings(prev => ({ ...prev, logo_url: '' }))}
+                        className="ml-2 text-sm text-red-600 hover:text-red-800"
+                      >
+                        Supprimer
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="space-y-4">
+                    <Upload className="w-12 h-12 text-gray-400 mx-auto" />
+                    <div>
+                      <p className="text-lg font-medium text-gray-700">
+                        Glissez-déposez votre logo ici
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        ou{' '}
+                        <label
+                          htmlFor="logo-upload"
+                          className="text-indigo-600 hover:text-indigo-800 cursor-pointer font-medium"
+                        >
+                          cliquez pour parcourir
+                        </label>
+                      </p>
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      PNG, JPG, GIF jusqu'à 5MB
+                    </div>
+                  </div>
+                )}
+
+                {uploadingLogo && (
+                  <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center rounded-lg">
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+                      <span className="text-sm text-gray-600">Upload en cours...</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </Card>
