@@ -114,6 +114,34 @@ const QuotesPage = () => {
     }
   };
 
+  const handleSaveQuote = async (quoteData) => {
+    try {
+      setError('');
+      setSuccess('');
+
+      const processedData = {
+        ...quoteData,
+        valid_until: new Date(quoteData.due_date).toISOString(), // Use due_date as valid_until for quotes
+        // Remove due_date since quotes use valid_until
+        due_date: undefined
+      };
+
+      if (editingQuote) {
+        await axios.put(`${API}/quotes/${editingQuote.id}`, processedData);
+        setSuccess('Soumission modifiée avec succès');
+      } else {
+        await axios.post(`${API}/quotes`, processedData);
+        setSuccess('Soumission créée avec succès');
+      }
+
+      await fetchData();
+      setShowQuoteForm(false);
+      setEditingQuote(null);
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la sauvegarde');
+    }
+  };
+
   const handleConvert = async (e) => {
     e.preventDefault();
     setError('');
