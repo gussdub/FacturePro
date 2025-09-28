@@ -133,7 +133,7 @@ const Dashboard = () => {
           <Link to="/quotes">
             <Button data-testid="create-quote-btn" className="btn-hover bg-indigo-600 hover:bg-indigo-700">
               <Plus className="w-4 h-4 mr-2" />
-              Nouveau devis
+              Nouvelle soumission
             </Button>
           </Link>
           <Link to="/invoices">
