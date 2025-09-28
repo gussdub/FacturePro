@@ -188,7 +188,7 @@ const Layout = () => {
         </header>
 
         {/* Page content */}
-        <main className="p-4 sm:p-6 lg:p-8">
+        <main className="p-4 sm:p-6 lg:p-4">
           <div className="max-w-7xl mx-auto">
             <Outlet />
           </div>
