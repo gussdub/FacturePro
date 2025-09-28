@@ -7,6 +7,7 @@ import './App.css';
 import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
 import ClientsPage from './components/ClientsPage';
+import ProductsPage from './components/ProductsPage';
 import InvoicesPage from './components/InvoicesPage';
 import QuotesPage from './components/QuotesPage';
 import SettingsPage from './components/SettingsPage';
