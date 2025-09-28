@@ -143,15 +143,27 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
         }}
       >
         <div className="flex justify-between items-center">
-          <div>
-            <div className="flex items-center space-x-2 mb-1">
-              <div className="px-3 py-2 bg-white/20 rounded-lg">
-                <span className="text-xl font-bold">
-                  {isQuote ? 'SOUMISSION' : 'FACTURE'}
-                </span>
+          <div className="flex items-center space-x-4">
+            {/* Company Logo */}
+            {settings?.logo_url && (
+              <div className="w-16 h-16 bg-white/10 rounded-lg p-2 flex items-center justify-center">
+                <img 
+                  src={settings.logo_url} 
+                  alt="Logo entreprise" 
+                  className="max-w-full max-h-full object-contain"
+                />
               </div>
+            )}
+            <div>
+              <div className="flex items-center space-x-2 mb-1">
+                <div className="px-3 py-2 bg-white/20 rounded-lg">
+                  <span className="text-xl font-bold">
+                    {isQuote ? 'SOUMISSION' : 'FACTURE'}
+                  </span>
+                </div>
+              </div>
+              <p className="font-medium text-lg opacity-90">{settings?.company_name || 'Mon Entreprise'}</p>
             </div>
-            <p className="text-teal-100 font-medium text-lg">{settings?.company_name || 'Mon Entreprise'}</p>
           </div>
           
           <div className="text-right">
