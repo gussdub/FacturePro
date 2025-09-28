@@ -328,6 +328,164 @@ class BillingAPITester:
 
         return True
 
+    def test_delete_invoice(self):
+        """Test invoice deletion functionality"""
+        if not self.test_client_id:
+            self.log_test("Delete Invoice Setup", False, "No test client available")
+            return False
+
+        # First create an invoice to delete
+        invoice_data = {
+            "client_id": self.test_client_id,
+            "due_date": (datetime.now() + timedelta(days=30)).isoformat(),
+            "items": [
+                {
+                    "description": "Service à supprimer",
+                    "quantity": 1.0,
+                    "unit_price": 150.0
+                }
+            ],
+            "gst_rate": 5.0,
+            "pst_rate": 9.975,
+            "apply_gst": True,
+            "apply_pst": True,
+            "notes": "Facture de test pour suppression"
+        }
+        
+        success, response = self.make_request('POST', 'invoices', invoice_data, 200)
+        if not success or 'id' not in response:
+            self.log_test("Delete Invoice - Create Test Invoice", False, f"Failed to create test invoice: {response}")
+            return False
+        
+        test_invoice_id = response['id']
+        self.log_test("Delete Invoice - Create Test Invoice", True, f"Test invoice created: {test_invoice_id}")
+
+        # Test successful deletion
+        success, response = self.make_request('DELETE', f'invoices/{test_invoice_id}', expected_status=200)
+        if success and response.get('message') == 'Invoice deleted successfully':
+            self.log_test("Delete Invoice - Successful Deletion", True, f"Invoice {test_invoice_id} deleted successfully")
+        else:
+            self.log_test("Delete Invoice - Successful Deletion", False, f"Failed to delete invoice: {response}")
+            return False
+
+        # Verify invoice is actually deleted by trying to get it
+        success, response = self.make_request('GET', f'invoices/{test_invoice_id}', expected_status=404)
+        if not success and response.get('status_code') == 404:
+            self.log_test("Delete Invoice - Verify Deletion", True, "Invoice correctly not found after deletion")
+        else:
+            self.log_test("Delete Invoice - Verify Deletion", False, f"Invoice still exists after deletion: {response}")
+
+        # Test deletion of non-existent invoice
+        fake_invoice_id = "non-existent-invoice-id"
+        success, response = self.make_request('DELETE', f'invoices/{fake_invoice_id}', expected_status=404)
+        if not success and response.get('status_code') == 404:
+            self.log_test("Delete Invoice - Non-existent ID", True, "Correctly returned 404 for non-existent invoice")
+        else:
+            self.log_test("Delete Invoice - Non-existent ID", False, f"Should have returned 404: {response}")
+
+        # Test unauthorized deletion (without token)
+        # First create another invoice
+        success, response = self.make_request('POST', 'invoices', invoice_data, 200)
+        if success and 'id' in response:
+            unauthorized_invoice_id = response['id']
+            
+            # Remove token temporarily
+            old_token = self.token
+            self.token = None
+            
+            success, response = self.make_request('DELETE', f'invoices/{unauthorized_invoice_id}', expected_status=401)
+            if not success and response.get('status_code') == 401:
+                self.log_test("Delete Invoice - Unauthorized", True, "Correctly rejected unauthorized deletion")
+            else:
+                self.log_test("Delete Invoice - Unauthorized", False, f"Should have returned 401: {response}")
+            
+            # Restore token and cleanup
+            self.token = old_token
+            self.make_request('DELETE', f'invoices/{unauthorized_invoice_id}', expected_status=200)
+
+        return True
+
+    def test_delete_quote(self):
+        """Test quote deletion functionality"""
+        if not self.test_client_id:
+            self.log_test("Delete Quote Setup", False, "No test client available")
+            return False
+
+        # First create a quote to delete
+        quote_data = {
+            "client_id": self.test_client_id,
+            "valid_until": (datetime.now() + timedelta(days=15)).isoformat(),
+            "items": [
+                {
+                    "description": "Devis à supprimer",
+                    "quantity": 1.0,
+                    "unit_price": 200.0
+                }
+            ],
+            "gst_rate": 5.0,
+            "pst_rate": 9.975,
+            "apply_gst": True,
+            "apply_pst": True,
+            "notes": "Devis de test pour suppression"
+        }
+        
+        success, response = self.make_request('POST', 'quotes', quote_data, 200)
+        if not success or 'id' not in response:
+            self.log_test("Delete Quote - Create Test Quote", False, f"Failed to create test quote: {response}")
+            return False
+        
+        test_quote_id = response['id']
+        self.log_test("Delete Quote - Create Test Quote", True, f"Test quote created: {test_quote_id}")
+
+        # Test successful deletion
+        success, response = self.make_request('DELETE', f'quotes/{test_quote_id}', expected_status=200)
+        if success and response.get('message') == 'Quote deleted successfully':
+            self.log_test("Delete Quote - Successful Deletion", True, f"Quote {test_quote_id} deleted successfully")
+        else:
+            self.log_test("Delete Quote - Successful Deletion", False, f"Failed to delete quote: {response}")
+            return False
+
+        # Verify quote is actually deleted by trying to get it (note: there's no GET single quote endpoint, so we check the list)
+        success, response = self.make_request('GET', 'quotes', expected_status=200)
+        if success and isinstance(response, list):
+            deleted_quote_exists = any(quote.get('id') == test_quote_id for quote in response)
+            if not deleted_quote_exists:
+                self.log_test("Delete Quote - Verify Deletion", True, "Quote correctly not found in list after deletion")
+            else:
+                self.log_test("Delete Quote - Verify Deletion", False, "Quote still exists in list after deletion")
+        else:
+            self.log_test("Delete Quote - Verify Deletion", False, f"Failed to get quotes list: {response}")
+
+        # Test deletion of non-existent quote
+        fake_quote_id = "non-existent-quote-id"
+        success, response = self.make_request('DELETE', f'quotes/{fake_quote_id}', expected_status=404)
+        if not success and response.get('status_code') == 404:
+            self.log_test("Delete Quote - Non-existent ID", True, "Correctly returned 404 for non-existent quote")
+        else:
+            self.log_test("Delete Quote - Non-existent ID", False, f"Should have returned 404: {response}")
+
+        # Test unauthorized deletion (without token)
+        # First create another quote
+        success, response = self.make_request('POST', 'quotes', quote_data, 200)
+        if success and 'id' in response:
+            unauthorized_quote_id = response['id']
+            
+            # Remove token temporarily
+            old_token = self.token
+            self.token = None
+            
+            success, response = self.make_request('DELETE', f'quotes/{unauthorized_quote_id}', expected_status=401)
+            if not success and response.get('status_code') == 401:
+                self.log_test("Delete Quote - Unauthorized", True, "Correctly rejected unauthorized deletion")
+            else:
+                self.log_test("Delete Quote - Unauthorized", False, f"Should have returned 401: {response}")
+            
+            # Restore token and cleanup
+            self.token = old_token
+            self.make_request('DELETE', f'quotes/{unauthorized_quote_id}', expected_status=200)
+
+        return True
+
     def test_error_handling(self):
         """Test API error handling"""
         # Test unauthorized access (without token)
