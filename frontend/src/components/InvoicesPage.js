@@ -86,42 +86,47 @@ const InvoicesPage = () => {
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSaveInvoice = async (invoiceData, status = 'draft') => {
     setError('');
     setSuccess('');
 
     try {
       // Validation
-      if (!formData.client_id) {
+      if (!invoiceData.client_id) {
         setError('Veuillez sélectionner un client');
         return;
       }
 
-      if (formData.items.some(item => !item.description || item.unit_price <= 0)) {
+      if (invoiceData.items.some(item => !item.description || item.unit_price <= 0)) {
         setError('Veuillez remplir tous les articles avec des prix valides');
         return;
       }
 
-      const invoiceData = {
-        ...formData,
-        due_date: new Date(formData.due_date).toISOString(),
-        gst_rate: parseFloat(formData.gst_rate) || 0,
-        pst_rate: parseFloat(formData.pst_rate) || 0,
-        hst_rate: parseFloat(formData.hst_rate) || 0
+      const finalData = {
+        ...invoiceData,
+        due_date: invoiceData.due_date ? new Date(invoiceData.due_date).toISOString() : undefined,
+        gst_rate: parseFloat(invoiceData.gst_rate) || 0,
+        pst_rate: parseFloat(invoiceData.pst_rate) || 0,
+        hst_rate: parseFloat(invoiceData.hst_rate) || 0
       };
 
+      let response;
       if (editingInvoice) {
-        await axios.put(`${API}/invoices/${editingInvoice.id}`, invoiceData);
+        response = await axios.put(`${API}/invoices/${editingInvoice.id}`, finalData);
         setSuccess('Facture modifiée avec succès');
       } else {
-        await axios.post(`${API}/invoices`, invoiceData);
+        response = await axios.post(`${API}/invoices`, finalData);
         setSuccess('Facture créée avec succès');
+        
+        // Update status if needed
+        if (status !== 'draft') {
+          await axios.put(`${API}/invoices/${response.data.id}/status?status=${status}`);
+        }
       }
       
       await fetchData();
-      setShowInvoiceDialog(false);
-      resetForm();
+      setShowInvoiceForm(false);
+      setEditingInvoice(null);
     } catch (error) {
       setError(error.response?.data?.detail || 'Erreur lors de la sauvegarde');
     }
