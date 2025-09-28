@@ -98,6 +98,75 @@ const SettingsPage = () => {
     }));
   };
 
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    const files = e.dataTransfer.files;
+    if (files && files[0]) {
+      handleFileUpload(files[0]);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const files = e.target.files;
+    if (files && files[0]) {
+      handleFileUpload(files[0]);
+    }
+  };
+
+  const handleFileUpload = async (file) => {
+    // Vérifier le type de fichier
+    if (!file.type.startsWith('image/')) {
+      setError('Veuillez sélectionner un fichier image');
+      return;
+    }
+
+    // Vérifier la taille (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setError('La taille du fichier ne doit pas dépasser 5MB');
+      return;
+    }
+
+    setUploadingLogo(true);
+    setError('');
+
+    try {
+      // Convertir le fichier en base64 pour l'aperçu immédiat
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setSettings(prev => ({
+          ...prev,
+          logo_url: e.target.result
+        }));
+      };
+      reader.readAsDataURL(file);
+
+      // Note: Dans un vrai projet, vous uploaderiez le fichier vers un serveur
+      // const formData = new FormData();
+      // formData.append('logo', file);
+      // const response = await axios.post(`${API}/upload/logo`, formData);
+      // setSettings(prev => ({ ...prev, logo_url: response.data.url }));
+
+      setSuccess('Logo uploadé avec succès');
+    } catch (error) {
+      setError('Erreur lors de l\'upload du logo');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
