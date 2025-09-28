@@ -621,10 +621,33 @@ const InvoicesPage = () => {
         </Dialog>
       </div>
 
-      {/* Success message */}
+      {/* Visual Invoice Form */}
+      {showInvoiceForm && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-7xl w-full max-h-[95vh] overflow-y-auto">
+            <VisualInvoiceForm
+              invoiceData={editingInvoice}
+              onSave={handleSaveInvoice}
+              onCancel={() => {
+                setShowInvoiceForm(false);
+                setEditingInvoice(null);
+              }}
+              isQuote={false}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Success/Error messages */}
       {success && (
         <Alert className="border-green-200 bg-green-50">
           <AlertDescription className="text-green-800">{success}</AlertDescription>
+        </Alert>
+      )}
+
+      {error && (
+        <Alert className="border-red-200 bg-red-50">
+          <AlertDescription className="text-red-800">{error}</AlertDescription>
         </Alert>
       )}
 
