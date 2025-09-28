@@ -297,12 +297,14 @@ const QuotesPage = () => {
           setShowQuoteDialog(open);
           if (!open) resetForm();
         }}>
-          <DialogTrigger asChild>
-            <Button className="mt-4 sm:mt-0 btn-hover" data-testid="add-quote-btn">
-              <Plus className="w-4 h-4 mr-2" />
-              Nouvelle soumission
-            </Button>
-          </DialogTrigger>
+          <Button 
+            className="mt-4 sm:mt-0 btn-hover" 
+            data-testid="add-quote-btn"
+            onClick={() => setShowQuoteForm(true)}
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Nouvelle soumission
+          </Button>
           
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
