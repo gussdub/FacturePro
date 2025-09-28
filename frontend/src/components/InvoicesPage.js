@@ -47,7 +47,7 @@ const InvoicesPage = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
+  const [showInvoiceForm, setShowInvoiceForm] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
