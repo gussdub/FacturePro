@@ -575,7 +575,7 @@ const QuotesPage = () => {
         <Card className="p-12 text-center" data-testid="no-quotes">
           <ScrollText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h3 className="text-lg font-semibold text-gray-900 mb-2">
-            {quotes.length === 0 ? 'Aucun devis' : 'Aucun résultat'}
+            {quotes.length === 0 ? 'Aucune soumission' : 'Aucun résultat'}
           </h3>
           <p className="text-gray-500 mb-6">
             {quotes.length === 0 
