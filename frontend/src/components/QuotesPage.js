@@ -124,7 +124,7 @@ const QuotesPage = () => {
       }
 
       await axios.post(`${API}/quotes/${convertingQuote.id}/convert?due_date=${new Date(convertData.due_date).toISOString()}`);
-      setSuccess('Devis converti en facture avec succès');
+      setSuccess('Soumission convertie en facture avec succès');
       await fetchData();
       setShowConvertDialog(false);
       setConvertingQuote(null);
