@@ -136,30 +136,15 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
       {/* Header */}
       <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-8 py-6 text-white">
         <div className="flex justify-between items-center">
-          <div className="flex items-center space-x-4">
-            {/* FacturePro Logo */}
-            <div className="w-16 h-16 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
-              <div className="relative">
-                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center shadow-sm">
-                  <svg viewBox="0 0 24 24" className="w-5 h-5 text-teal-600" fill="currentColor">
-                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
-                    <path d="M8,12H16V14H8V12M8,16H16V18H8V16Z" />
-                  </svg>
-                </div>
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full shadow-sm"></div>
+          <div>
+            <div className="flex items-center space-x-2 mb-1">
+              <div className="px-3 py-2 bg-white/20 rounded-lg">
+                <span className="text-xl font-bold">
+                  {isQuote ? 'SOUMISSION' : 'FACTURE'}
+                </span>
               </div>
             </div>
-            <div>
-              <div className="flex items-center space-x-2 mb-1">
-                <h1 className="text-3xl font-bold tracking-tight">FacturePro</h1>
-                <div className="px-2 py-1 bg-white/20 rounded-md">
-                  <span className="text-sm font-medium">
-                    {isQuote ? 'DEVIS' : 'FACTURE'}
-                  </span>
-                </div>
-              </div>
-              <p className="text-teal-100 font-medium">{settings?.company_name || 'Mon Entreprise'}</p>
-            </div>
+            <p className="text-teal-100 font-medium text-lg">{settings?.company_name || 'Mon Entreprise'}</p>
           </div>
           
           <div className="text-right">
