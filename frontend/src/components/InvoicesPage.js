@@ -365,7 +365,7 @@ const InvoicesPage = () => {
             }
           </p>
           {invoices.length === 0 && (
-            <Button onClick={() => setShowInvoiceDialog(true)} data-testid="create-first-invoice-btn">
+            <Button onClick={() => setShowInvoiceForm(true)} data-testid="create-first-invoice-btn">
               <Plus className="w-4 h-4 mr-2" />
               Créer une facture
             </Button>
