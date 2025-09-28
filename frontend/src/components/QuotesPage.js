@@ -38,7 +38,13 @@ const QuotesPage = () => {
   const [formData, setFormData] = useState({
     client_id: '',
     valid_until: '',
-    tax_rate: 20,
+    gst_rate: 5.0,
+    pst_rate: 9.975, // TVQ Québec
+    hst_rate: 0.0,
+    apply_gst: true,
+    apply_pst: true,
+    apply_hst: false,
+    province: 'QC',
     notes: '',
     items: [{ description: '', quantity: 1, unit_price: 0 }]
   });
