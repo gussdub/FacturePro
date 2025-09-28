@@ -266,7 +266,7 @@ const Dashboard = () => {
         <Card className="card-hover">
           <div className="p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">Derniers devis</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Dernières soumissions</h3>
               <Link to="/quotes">
                 <Button variant="ghost" size="sm" data-testid="view-all-quotes-btn">
                   Voir tout
