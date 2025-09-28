@@ -151,7 +151,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
             <div className="flex items-center space-x-2 mb-2">
               <span className="text-teal-100">N°:</span>
               <Input
-                value={formData.invoice_number}
+                value={formData.invoice_number || ''}
                 onChange={(e) => setFormData(prev => ({ ...prev, invoice_number: e.target.value }))}
                 className="w-32 bg-white/20 border-white/30 text-white placeholder-white/70"
                 placeholder="Auto"
