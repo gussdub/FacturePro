@@ -28,6 +28,7 @@ const Layout = () => {
     { name: 'Produits', href: '/products', icon: Package, current: location.pathname === '/products' },
     { name: 'Factures', href: '/invoices', icon: FileText, current: location.pathname === '/invoices' },
     { name: 'Devis', href: '/quotes', icon: ScrollText, current: location.pathname === '/quotes' },
+    { name: 'Exports', href: '/export', icon: BarChart3, current: location.pathname === '/export' },
     { name: 'Paramètres', href: '/settings', icon: Settings, current: location.pathname === '/settings' },
   ];
 
