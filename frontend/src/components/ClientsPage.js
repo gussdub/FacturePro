@@ -220,20 +220,20 @@ const ClientsPage = () => {
                     name="phone"
                     value={formData.phone}
                     onChange={handleChange}
-                    placeholder="+33 1 23 45 67 89"
+                    placeholder="514-123-4567"
                     data-testid="client-phone-input"
                   />
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Pays
+                    Province
                   </label>
                   <Input
                     name="country"
                     value={formData.country}
                     onChange={handleChange}
-                    placeholder="France"
+                    placeholder="Québec"
                     data-testid="client-country-input"
                   />
                 </div>
@@ -246,7 +246,7 @@ const ClientsPage = () => {
                     name="address"
                     value={formData.address}
                     onChange={handleChange}
-                    placeholder="123 Rue de la Paix"
+                    placeholder="123 Rue Sainte-Catherine Est"
                     data-testid="client-address-input"
                   />
                 </div>
@@ -259,7 +259,7 @@ const ClientsPage = () => {
                     name="city"
                     value={formData.city}
                     onChange={handleChange}
-                    placeholder="Paris"
+                    placeholder="Montréal"
                     data-testid="client-city-input"
                   />
                 </div>
@@ -272,7 +272,7 @@ const ClientsPage = () => {
                     name="postal_code"
                     value={formData.postal_code}
                     onChange={handleChange}
-                    placeholder="75001"
+                    placeholder="H1A 0A1"
                     data-testid="client-postal-input"
                   />
                 </div>
