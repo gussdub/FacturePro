@@ -262,3 +262,14 @@ body {
     display: block !important;
   }
 }
+
+/* Hide Made with Emergent watermark */
+div[style*="position: fixed"][style*="bottom: 10px"][style*="right: 10px"],
+div[style*="position: fixed"][style*="bottom"][style*="right"],
+*:contains("Made with Emergent"),
+*[class*="emergent-watermark"],
+*[id*="emergent-watermark"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
