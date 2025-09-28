@@ -449,17 +449,29 @@ async def update_invoice(invoice_id: str, invoice_update: InvoiceCreate, current
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     
-    # Calculate totals
-    items, subtotal, tax_amount, total = calculate_invoice_totals(invoice_update.items, invoice_update.tax_rate)
+    # Calculate totals with Canadian taxes
+    items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
+        invoice_update.items, invoice_update.gst_rate, invoice_update.pst_rate, invoice_update.hst_rate,
+        invoice_update.apply_gst, invoice_update.apply_pst, invoice_update.apply_hst
+    )
     
     update_data = {
         "client_id": invoice_update.client_id,
         "due_date": invoice_update.due_date,
         "items": [item.dict() for item in items],
         "subtotal": subtotal,
-        "tax_rate": invoice_update.tax_rate,
-        "tax_amount": tax_amount,
+        "gst_rate": invoice_update.gst_rate,
+        "pst_rate": invoice_update.pst_rate,
+        "hst_rate": invoice_update.hst_rate,
+        "gst_amount": gst_amount,
+        "pst_amount": pst_amount,
+        "hst_amount": hst_amount,
+        "total_tax": total_tax,
         "total": total,
+        "apply_gst": invoice_update.apply_gst,
+        "apply_pst": invoice_update.apply_pst,
+        "apply_hst": invoice_update.apply_hst,
+        "province": invoice_update.province,
         "notes": invoice_update.notes
     }
     
