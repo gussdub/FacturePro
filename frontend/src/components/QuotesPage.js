@@ -673,7 +673,7 @@ const QuotesPage = () => {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 text-center">
           <div>
             <p className="text-2xl font-bold text-blue-600">{quotes.length}</p>
-            <p className="text-sm text-gray-600">Total devis</p>
+            <p className="text-sm text-gray-600">Total soumissions</p>
           </div>
           <div>
             <p className="text-2xl font-bold text-yellow-600">
