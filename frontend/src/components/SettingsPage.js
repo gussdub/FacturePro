@@ -162,7 +162,7 @@ const SettingsPage = () => {
                   type="email"
                   value={settings.email}
                   onChange={(e) => handleChange('email', e.target.value)}
-                  placeholder="contact@monentreprise.fr"
+                  placeholder="contact@monentreprise.ca"
                   required
                   data-testid="company-email-input"
                   className="form-input"
