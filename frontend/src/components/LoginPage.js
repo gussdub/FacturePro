@@ -109,8 +109,22 @@ const LoginPage = () => {
       <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
-            <div className="lg:hidden mb-6">
-              <Receipt className="w-12 h-12 text-indigo-600 mx-auto mb-4" />
+            <div className="mb-6">
+              {/* FacturePro Logo */}
+              <div className="flex items-center justify-center mb-4">
+                <div className="w-12 h-12 bg-teal-600 rounded-lg flex items-center justify-center mr-3">
+                  <div className="relative">
+                    <div className="w-8 h-8 bg-white rounded-md flex items-center justify-center">
+                      <svg viewBox="0 0 24 24" className="w-5 h-5 text-teal-600" fill="currentColor">
+                        <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
+                        <path d="M8,12H16V14H8V12M8,16H16V18H8V16Z" />
+                      </svg>
+                    </div>
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full"></div>
+                  </div>
+                </div>
+                <span className="text-2xl font-bold text-gray-900 tracking-tight">FacturePro</span>
+              </div>
             </div>
             <h2 className="text-3xl font-bold text-gray-900 mb-2">
               {isLogin ? 'Connexion' : 'Créer un compte'}
