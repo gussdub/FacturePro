@@ -402,8 +402,11 @@ async def get_invoices(current_user: User = Depends(get_current_user)):
 
 @api_router.post("/invoices", response_model=Invoice)
 async def create_invoice(invoice: InvoiceCreate, current_user: User = Depends(get_current_user)):
-    # Calculate totals
-    items, subtotal, tax_amount, total = calculate_invoice_totals(invoice.items, invoice.tax_rate)
+    # Calculate totals with Canadian taxes
+    items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
+        invoice.items, invoice.gst_rate, invoice.pst_rate, invoice.hst_rate,
+        invoice.apply_gst, invoice.apply_pst, invoice.apply_hst
+    )
     
     # Generate invoice number
     invoice_number = await generate_invoice_number(current_user.id)
@@ -415,9 +418,18 @@ async def create_invoice(invoice: InvoiceCreate, current_user: User = Depends(ge
         due_date=invoice.due_date,
         items=items,
         subtotal=subtotal,
-        tax_rate=invoice.tax_rate,
-        tax_amount=tax_amount,
+        gst_rate=invoice.gst_rate,
+        pst_rate=invoice.pst_rate,
+        hst_rate=invoice.hst_rate,
+        gst_amount=gst_amount,
+        pst_amount=pst_amount,
+        hst_amount=hst_amount,
+        total_tax=total_tax,
         total=total,
+        apply_gst=invoice.apply_gst,
+        apply_pst=invoice.apply_pst,
+        apply_hst=invoice.apply_hst,
+        province=invoice.province,
         notes=invoice.notes
     )
     
