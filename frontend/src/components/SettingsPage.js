@@ -177,7 +177,7 @@ const SettingsPage = () => {
                 <Input
                   value={settings.phone}
                   onChange={(e) => handleChange('phone', e.target.value)}
-                  placeholder="+33 1 23 45 67 89"
+                  placeholder="514-123-4567"
                   data-testid="company-phone-input"
                   className="form-input"
                 />
@@ -186,12 +186,12 @@ const SettingsPage = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   <MapPin className="w-4 h-4 inline mr-2" />
-                  Pays
+                  Province
                 </label>
                 <Input
                   value={settings.country}
                   onChange={(e) => handleChange('country', e.target.value)}
-                  placeholder="France"
+                  placeholder="Québec"
                   data-testid="company-country-input"
                   className="form-input"
                 />
@@ -204,7 +204,7 @@ const SettingsPage = () => {
                 <Input
                   value={settings.address}
                   onChange={(e) => handleChange('address', e.target.value)}
-                  placeholder="123 Rue de la République"
+                  placeholder="123 Rue Sainte-Catherine Est"
                   data-testid="company-address-input"
                   className="form-input"
                 />
@@ -217,7 +217,7 @@ const SettingsPage = () => {
                 <Input
                   value={settings.city}
                   onChange={(e) => handleChange('city', e.target.value)}
-                  placeholder="Paris"
+                  placeholder="Montréal"
                   data-testid="company-city-input"
                   className="form-input"
                 />
@@ -230,7 +230,7 @@ const SettingsPage = () => {
                 <Input
                   value={settings.postal_code}
                   onChange={(e) => handleChange('postal_code', e.target.value)}
-                  placeholder="75001"
+                  placeholder="H1A 0A1"
                   data-testid="company-postal-input"
                   className="form-input"
                 />
