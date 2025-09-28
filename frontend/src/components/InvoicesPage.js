@@ -6,6 +6,7 @@ import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
 import VisualInvoiceForm from './VisualInvoiceForm';
+import InvoiceActionsDialog from './InvoiceActionsDialog';
 import { 
   Plus, 
   Search, 
@@ -18,7 +19,9 @@ import {
   Calendar,
   Euro,
   Filter,
-  X
+  X,
+  MoreVertical,
+  Settings
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
