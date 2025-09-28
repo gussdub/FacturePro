@@ -588,6 +588,13 @@ async def update_invoice_status(invoice_id: str, payment_data: PaymentUpdate, cu
         raise HTTPException(status_code=404, detail="Invoice not found")
     return {"message": "Invoice status updated successfully"}
 
+@api_router.delete("/invoices/{invoice_id}")
+async def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user)):
+    result = await db.invoices.delete_one({"id": invoice_id, "user_id": current_user.id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return {"message": "Invoice deleted successfully"}
+
 # Quote routes
 @api_router.get("/quotes", response_model=List[Quote])
 async def get_quotes(current_user: User = Depends(get_current_user)):
