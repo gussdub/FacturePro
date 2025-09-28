@@ -19,6 +19,7 @@ import {
 
 const Layout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
 
