@@ -1,20 +1,20 @@
 {
   "summary": {
-    "total_tests": 17,
-    "passed_tests": 15,
-    "success_rate": 88.23529411764706
+    "total_tests": 27,
+    "passed_tests": 17,
+    "success_rate": 62.96296296296296
   },
   "test_results": [
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: ce8cb6f7-be79-4b3b-91f1-4680c41eba43",
+      "details": "User created with ID: eef3bd7a-cab7-47ef-9558-a6501535d7e9",
       "response_data": null
     },
     {
       "name": "User Login",
       "success": true,
-      "details": "Login successful for user: login_test_20250928_185904@example.com",
+      "details": "Login successful for user: login_test_20250928_215345@example.com",
       "response_data": null
     },
     {
@@ -26,7 +26,7 @@
     {
       "name": "Create Client",
       "success": true,
-      "details": "Client created with ID: 0778b1a4-a348-4c71-bfaf-a275f438e065",
+      "details": "Client created with ID: 01bd801f-592d-49a3-9021-38115643825f",
       "response_data": null
     },
     {
@@ -49,8 +49,8 @@
     },
     {
       "name": "Create Invoice",
-      "success": true,
-      "details": "Invoice created with correct calculations: INV-00001",
+      "success": false,
+      "details": "Invoice calculations incorrect: {'id': 'ee82d226-476f-47e5-a191-c9994ee713a4', 'user_id': '27cafbb1-6b4d-4775-a1e9-085804dcbee9', 'client_id': '01bd801f-592d-49a3-9021-38115643825f', 'invoice_number': 'INV-00001', 'issue_date': '2025-09-28T21:53:45.446021Z', 'due_date': '2025-10-28T21:53:45.413294', 'items': [{'description': 'Service de consultation', 'quantity': 2.0, 'unit_price': 100.0, 'total': 200.0}, {'description': 'D\u00e9veloppement web', 'quantity': 10.0, 'unit_price': 75.0, 'total': 750.0}], 'subtotal': 950.0, 'gst_rate': 5.0, 'pst_rate': 9.975, 'hst_rate': 0.0, 'gst_amount': 47.5, 'pst_amount': 94.76249999999999, 'hst_amount': 0.0, 'total_tax': 142.2625, 'total': 1092.2625, 'apply_gst': True, 'apply_pst': True, 'apply_hst': False, 'status': 'draft', 'payment_info': None, 'notes': 'Facture de test', 'province': 'QC', 'created_at': '2025-09-28T21:53:45.446028Z'}",
       "response_data": null
     },
     {
@@ -61,14 +61,14 @@
     },
     {
       "name": "Update Invoice Status",
-      "success": true,
-      "details": "Invoice status updated to sent",
+      "success": false,
+      "details": "Failed to update status: {'detail': [{'type': 'missing', 'loc': ['body'], 'msg': 'Field required', 'input': None, 'url': 'https://errors.pydantic.dev/2.11/v/missing'}]}",
       "response_data": null
     },
     {
       "name": "Create Quote",
-      "success": true,
-      "details": "Quote created: QTE-00001",
+      "success": false,
+      "details": "Quote calculations incorrect: {'id': 'e57fc8e1-c572-48a3-aab6-11727df83738', 'user_id': '27cafbb1-6b4d-4775-a1e9-085804dcbee9', 'client_id': '01bd801f-592d-49a3-9021-38115643825f', 'quote_number': 'QTE-00001', 'issue_date': '2025-09-28T21:53:45.559859Z', 'valid_until': '2025-10-13T21:53:45.522654', 'items': [{'description': 'Audit SEO', 'quantity': 1.0, 'unit_price': 500.0, 'total': 500.0}], 'subtotal': 500.0, 'gst_rate': 5.0, 'pst_rate': 9.975, 'hst_rate': 0.0, 'gst_amount': 25.0, 'pst_amount': 49.87499999999999, 'hst_amount': 0.0, 'total_tax': 74.875, 'total': 574.875, 'apply_gst': True, 'apply_pst': True, 'apply_hst': False, 'province': 'QC', 'status': 'pending', 'notes': 'Devis pour audit SEO', 'created_at': '2025-09-28T21:53:45.559870Z'}",
       "response_data": null
     },
     {
@@ -81,6 +81,66 @@
       "name": "Convert Quote to Invoice",
       "success": true,
       "details": "Quote converted to invoice: INV-00002",
+      "response_data": null
+    },
+    {
+      "name": "Delete Invoice - Create Test Invoice",
+      "success": true,
+      "details": "Test invoice created: 863aefc6-7a1e-4daa-8dbb-131a60ef1683",
+      "response_data": null
+    },
+    {
+      "name": "Delete Invoice - Successful Deletion",
+      "success": true,
+      "details": "Invoice 863aefc6-7a1e-4daa-8dbb-131a60ef1683 deleted successfully",
+      "response_data": null
+    },
+    {
+      "name": "Delete Invoice - Verify Deletion",
+      "success": false,
+      "details": "Invoice still exists after deletion: {'detail': 'Invoice not found'}",
+      "response_data": null
+    },
+    {
+      "name": "Delete Invoice - Non-existent ID",
+      "success": false,
+      "details": "Should have returned 404: {'detail': 'Invoice not found'}",
+      "response_data": null
+    },
+    {
+      "name": "Delete Invoice - Unauthorized",
+      "success": false,
+      "details": "Should have returned 401: {'detail': 'Not authenticated'}",
+      "response_data": null
+    },
+    {
+      "name": "Delete Quote - Create Test Quote",
+      "success": true,
+      "details": "Test quote created: cf40da61-4217-45b7-9844-dceb879cafc3",
+      "response_data": null
+    },
+    {
+      "name": "Delete Quote - Successful Deletion",
+      "success": true,
+      "details": "Quote cf40da61-4217-45b7-9844-dceb879cafc3 deleted successfully",
+      "response_data": null
+    },
+    {
+      "name": "Delete Quote - Verify Deletion",
+      "success": true,
+      "details": "Quote correctly not found in list after deletion",
+      "response_data": null
+    },
+    {
+      "name": "Delete Quote - Non-existent ID",
+      "success": false,
+      "details": "Should have returned 404: {'detail': 'Quote not found'}",
+      "response_data": null
+    },
+    {
+      "name": "Delete Quote - Unauthorized",
+      "success": false,
+      "details": "Should have returned 401: {'detail': 'Not authenticated'}",
       "response_data": null
     },
     {
