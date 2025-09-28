@@ -128,11 +128,20 @@ class Invoice(BaseModel):
     due_date: datetime
     items: List[InvoiceItem] = []
     subtotal: float = 0.0
-    tax_rate: float = 0.0
-    tax_amount: float = 0.0
+    gst_rate: float = 5.0
+    pst_rate: float = 0.0
+    hst_rate: float = 0.0
+    gst_amount: float = 0.0
+    pst_amount: float = 0.0
+    hst_amount: float = 0.0
+    total_tax: float = 0.0
     total: float = 0.0
+    apply_gst: bool = True
+    apply_pst: bool = False
+    apply_hst: bool = False
     status: InvoiceStatus = InvoiceStatus.DRAFT
     notes: Optional[str] = None
+    province: str = "QC"  # Province par défaut Québec
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class InvoiceCreate(BaseModel):
