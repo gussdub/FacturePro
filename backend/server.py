@@ -111,6 +111,14 @@ class InvoiceItemCreate(BaseModel):
     quantity: float = 1.0
     unit_price: float
 
+class TaxConfig(BaseModel):
+    gst_rate: float = 5.0  # GST fédérale 5%
+    pst_rate: float = 0.0  # PST provinciale (varie selon province)
+    hst_rate: float = 0.0  # HST (certaines provinces)
+    apply_gst: bool = True
+    apply_pst: bool = False
+    apply_hst: bool = False
+
 class Invoice(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
