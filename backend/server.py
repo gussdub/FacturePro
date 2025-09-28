@@ -678,6 +678,13 @@ async def convert_quote_to_invoice(quote_id: str, due_date: datetime, current_us
     
     return new_invoice
 
+@api_router.delete("/quotes/{quote_id}")
+async def delete_quote(quote_id: str, current_user: User = Depends(get_current_user)):
+    result = await db.quotes.delete_one({"id": quote_id, "user_id": current_user.id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return {"message": "Quote deleted successfully"}
+
 # Company settings routes
 @api_router.get("/settings/company", response_model=CompanySettings)
 async def get_company_settings(current_user: User = Depends(get_current_user)):
