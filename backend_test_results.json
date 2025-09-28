@@ -8,7 +8,7 @@
     {
       "name": "User Registration",
       "success": false,
-      "details": "Registration failed: {'status_code': 500, 'text': 'Internal Server Error'}",
+      "details": "Registration failed: {'error': \"HTTPSConnectionPool(host='invoicehub-16.preview.emergentagent.com', port=443): Read timed out. (read timeout=10)\"}",
       "response_data": null
     }
   ]
