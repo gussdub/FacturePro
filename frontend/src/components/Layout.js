@@ -12,7 +12,8 @@ import {
   Menu,
   X,
   Bell,
-  Search
+  Search,
+  Package
 } from 'lucide-react';
 
 const Layout = () => {
