@@ -147,7 +147,7 @@ const QuotesPage = () => {
   };
 
   const handleDelete = async (quoteId) => {
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer ce devis ?')) {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette soumission ?')) {
       return;
     }
 
