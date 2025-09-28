@@ -699,6 +699,23 @@ const QuotesPage = () => {
           </div>
         </div>
       </Card>
+
+      {/* Visual Quote Form */}
+      {showQuoteForm && (
+        <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-7xl w-full max-h-[95vh] overflow-y-auto">
+            <VisualInvoiceForm
+              invoiceData={editingQuote}
+              onSave={handleSaveQuote}
+              onCancel={() => {
+                setShowQuoteForm(false);
+                setEditingQuote(null);
+              }}
+              isQuote={true}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
