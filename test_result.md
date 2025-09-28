@@ -167,16 +167,19 @@ frontend:
         comment: "FIXED - Added FacturePro logo and name to login page header, matching the design from sidebar with teal color scheme."
         
   - task: "Test frontend delete buttons functionality"
-    implemented: "unknown"
-    working: "needs_testing"
+    implemented: true
+    working: true
     file: "/app/frontend/src/components/InvoicesPage.js and QuotesPage.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "needs_testing"
         agent: "main"
         comment: "Backend DELETE APIs confirmed working. Need to test if frontend delete buttons properly call backend and handle responses."
+      - working: true
+        agent: "testing"
+        comment: "TESTED: Frontend delete functionality is working correctly. Successfully authenticated, navigated to invoices and quotes pages, found delete buttons with proper data-testid attributes. Tested actual deletion with real data - confirmation dialog appeared correctly ('Êtes-vous sûr de vouloir supprimer cette facture ?') and was handled properly. Delete buttons are properly implemented in both InvoicesPage.js (lines 138-150, 420-428) and QuotesPage.js (lines 149-161, 654-662). The handleDelete functions correctly call axios.delete() with proper API endpoints and show confirmation dialogs. Frontend delete functionality is fully operational."
 
 metadata:
   created_by: "main_agent"
