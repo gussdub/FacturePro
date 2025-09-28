@@ -277,7 +277,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="User not found")
     return User(**user)
 
-def calculate_invoice_totals(items: List[InvoiceItemCreate], tax_rate: float = 0.0):
+def calculate_invoice_totals(items: List[InvoiceItemCreate], gst_rate: float = 5.0, pst_rate: float = 0.0, 
+                          hst_rate: float = 0.0, apply_gst: bool = True, apply_pst: bool = False, apply_hst: bool = False):
     invoice_items = []
     subtotal = 0.0
     
@@ -291,10 +292,15 @@ def calculate_invoice_totals(items: List[InvoiceItemCreate], tax_rate: float = 0
             total=total
         ))
     
-    tax_amount = subtotal * (tax_rate / 100)
-    total = subtotal + tax_amount
+    # Calculate Canadian taxes
+    gst_amount = subtotal * (gst_rate / 100) if apply_gst else 0.0
+    pst_amount = subtotal * (pst_rate / 100) if apply_pst else 0.0
+    hst_amount = subtotal * (hst_rate / 100) if apply_hst else 0.0
     
-    return invoice_items, subtotal, tax_amount, total
+    total_tax = gst_amount + pst_amount + hst_amount
+    total = subtotal + total_tax
+    
+    return invoice_items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total
 
 async def generate_invoice_number(user_id: str):
     # Get the count of existing invoices for this user
