@@ -131,6 +131,24 @@ class BillingAPITester:
             self.log_test("Health Endpoint", False, f"Health check failed: {response}")
             return False
 
+    def test_dashboard_stats(self):
+        """Test dashboard statistics endpoint"""
+        success, response = self.make_request('GET', 'dashboard/stats', expected_status=200)
+        
+        if success:
+            required_fields = ['total_clients', 'total_invoices', 'total_quotes', 'pending_invoices', 'total_revenue']
+            missing_fields = [field for field in required_fields if field not in response]
+            
+            if not missing_fields:
+                self.log_test("Dashboard Stats", True, f"All stats fields present: {response}")
+                return True
+            else:
+                self.log_test("Dashboard Stats", False, f"Missing fields: {missing_fields}")
+                return False
+        else:
+            self.log_test("Dashboard Stats", False, f"Request failed: {response}")
+            return False
+
     def test_products_management(self):
         """Test products CRUD operations"""
         # Test create product
