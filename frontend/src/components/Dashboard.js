@@ -7,7 +7,6 @@ import {
   FileText, 
   ScrollText, 
   TrendingUp, 
-  Euro,
   Clock,
   AlertCircle,
   Plus,
