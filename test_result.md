@@ -150,6 +150,21 @@ backend:
         agent: "testing"
         comment: "CLIENTS API FULLY FUNCTIONAL: ✅ Database verification: gussdub@gmail.com account exists with 1 client ('test' - test@gmail.com) ✅ Fixed account subscription_status from None to 'trial' with extended trial period ✅ GET /api/clients returns proper array with required fields (id, name, email) for frontend selection ✅ POST /api/clients creates clients successfully with all required fields ✅ POST /api/invoices and POST /api/quotes accept client_id and create associations correctly ✅ User isolation working - users only see their own clients ✅ No 403 subscription middleware errors detected ✅ Exemption logic ensures gussdub@gmail.com never gets blocked ✅ Comprehensive testing with 18/18 tests passed. CLIENT SELECTION IN INVOICES/QUOTES IS WORKING CORRECTLY - the reported issue may have been resolved or was temporary."
 
+  - task: "Frontend client selection dropdown in invoice/quote forms"
+    implemented: true
+    working: false
+    file: "/app/frontend/src/components/VisualInvoiceForm.js"
+    stuck_count: 1
+    priority: "critical"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: "SPECIFIC TEST REQUEST: Test client selection dropdown functionality in invoice and quote creation forms. User gussdub@gmail.com reported that dropdown doesn't open when clicked."
+      - working: false
+        agent: "testing"
+        comment: "DROPDOWN ISSUE CONFIRMED: ❌ Code analysis reveals z-index conflict issue ❌ VisualInvoiceForm renders in modal with z-50 backdrop ❌ Radix UI Select dropdown content also uses z-50 but gets blocked by modal overlay ❌ Modal backdrop (.bg-black.bg-opacity-50) prevents dropdown interaction ❌ SelectContent portal rendering conflicts with modal container ❌ Issue affects both invoice and quote creation forms ❌ Root cause: Nested modal/dropdown z-index hierarchy problem ❌ SOLUTION NEEDED: Increase SelectContent z-index to z-[60] or higher, or restructure modal/dropdown interaction. The backend API works correctly, but frontend dropdown UI is broken due to CSS z-index conflicts."
+
 frontend:
   - task: "Registration and trial redirect workflow"
     implemented: true
