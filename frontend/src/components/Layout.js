@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../App';
 import { Button } from './ui/button';
-import NotificationsModal from './NotificationsModal';
+import NotificationsDropdown from './NotificationsDropdown';
 import UserProfileModal from './UserProfileModal';
 import {
   Receipt,
