@@ -183,7 +183,7 @@ const Layout = () => {
                 <button 
                   className="relative text-gray-500 hover:text-gray-700 transition-colors p-2 rounded-lg hover:bg-gray-100"
                   data-testid="notifications-btn"
-                  onClick={() => alert('Notifications - Fonctionnalité à implémenter')}
+                  onClick={() => setNotificationsOpen(true)}
                   title="Notifications"
                 >
                   <Bell className="w-5 h-5" />
