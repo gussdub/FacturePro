@@ -1062,9 +1062,6 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user_with
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
-# Include the router in the main app
-app.include_router(api_router)
-
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
