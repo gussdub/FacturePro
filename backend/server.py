@@ -583,14 +583,14 @@ async def create_invoice(invoice: InvoiceCreate, current_user: User = Depends(ge
     return new_invoice
 
 @api_router.get("/invoices/{invoice_id}", response_model=Invoice)
-async def get_invoice(invoice_id: str, current_user: User = Depends(get_current_user)):
+async def get_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_subscription)):
     invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     return Invoice(**invoice)
 
 @api_router.put("/invoices/{invoice_id}", response_model=Invoice)
-async def update_invoice(invoice_id: str, invoice_update: InvoiceCreate, current_user: User = Depends(get_current_user)):
+async def update_invoice(invoice_id: str, invoice_update: InvoiceCreate, current_user: User = Depends(get_current_user_with_subscription)):
     invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
