@@ -146,6 +146,9 @@ const AuthProvider = ({ children }) => {
       localStorage.setItem('token', access_token);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
       
+      // Redirect to trial setup after successful registration
+      window.location.href = '/trial/setup';
+      
       return { success: true };
     } catch (error) {
       return { 
