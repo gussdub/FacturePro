@@ -4,6 +4,8 @@ import { useAuth } from '../App';
 import { Button } from './ui/button';
 import NotificationsDropdown from './NotificationsDropdown';
 import UserProfileModal from './UserProfileModal';
+import SubscriptionAlert from './SubscriptionAlert';
+import useSubscription from '../hooks/useSubscription';
 import axios from 'axios';
 import {
   Receipt,
