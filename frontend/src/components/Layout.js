@@ -152,7 +152,7 @@ const Layout = () => {
       </div>
 
       {/* Main content */}
-      <div className="">
+      <div className="flex-1 lg:ml-0">
         {/* Top navigation */}
         <header className="bg-white shadow-sm border-b border-gray-200">
           <div className="px-4 sm:px-6 lg:px-8">
