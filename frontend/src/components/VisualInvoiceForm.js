@@ -168,7 +168,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                   <div className="text-[8px]">Logo</div>
                 </div>
               </div>
-            }
+            )}
             <div>
               <div className="flex items-center space-x-2 mb-1">
                 <div className="px-3 py-2 bg-white/20 rounded-lg">
