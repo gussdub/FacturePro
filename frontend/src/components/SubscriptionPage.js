@@ -203,7 +203,7 @@ const SubscriptionPage = () => {
             </li>
             <li className="flex items-center">
               <Check className="w-5 h-5 text-green-500 mr-3" />
-              <span className="text-sm text-gray-700">2 mois gratuits (économie de 20$)</span>
+              <span className="text-sm text-gray-700">2 mois gratuits (économie de 30$)</span>
             </li>
             <li className="flex items-center">
               <Shield className="w-5 h-5 text-indigo-500 mr-3" />
