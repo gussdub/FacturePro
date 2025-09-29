@@ -41,16 +41,21 @@ const Layout = () => {
     logout();
   };
 
-  // Close user menu when clicking outside
+  // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
+      // Close user menu if clicking outside
       if (userMenuOpen && !event.target.closest('.relative')) {
         setUserMenuOpen(false);
+      }
+      // Close notifications dropdown if clicking outside
+      if (notificationsOpen && !event.target.closest('[data-testid="notifications-btn"]') && !event.target.closest('.absolute')) {
+        setNotificationsOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [userMenuOpen]);
+  }, [userMenuOpen, notificationsOpen]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
