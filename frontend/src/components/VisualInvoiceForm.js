@@ -146,7 +146,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
         <div className="flex justify-between items-center">
           <div className="flex items-center space-x-4">
             {/* Company Logo */}
-            {settings?.logo_url && (
+            {settings?.logo_url ? (
               <div className="w-16 h-16 bg-white/10 rounded-lg p-2 flex items-center justify-center">
                 <img 
                   src={settings.logo_url} 
@@ -157,6 +157,17 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                     e.target.style.display = 'none';
                   }}
                 />
+              </div>
+            ) : (
+              <div className="w-16 h-16 bg-white/10 rounded-lg p-2 flex items-center justify-center">
+                <div className="text-white/70 text-xs text-center">
+                  <div className="w-8 h-8 bg-white/20 rounded-md mb-1 flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" className="w-4 h-4" fill="currentColor">
+                      <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" />
+                    </svg>
+                  </div>
+                  <div className="text-[8px]">Logo</div>
+                </div>
               </div>
             )}
             {/* Debug: Show if settings exist */}
