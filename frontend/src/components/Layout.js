@@ -225,13 +225,23 @@ const Layout = () => {
                 {/* User avatar with dropdown */}
                 <div className="relative">
                   <button
-                    className="w-8 h-8 bg-indigo-600 rounded-full flex items-center justify-center hover:bg-indigo-700 transition-colors"
+                    className="w-8 h-8 rounded-full flex items-center justify-center hover:opacity-80 transition-all overflow-hidden border-2 border-transparent hover:border-indigo-200"
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
                     title="Menu utilisateur"
                   >
-                    <span className="text-xs font-bold text-white">
-                      {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
-                    </span>
+                    {settings?.logo_url ? (
+                      <img 
+                        src={settings.logo_url} 
+                        alt="Logo entreprise" 
+                        className="w-full h-full object-contain bg-white rounded-full"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-indigo-600 rounded-full flex items-center justify-center">
+                        <span className="text-xs font-bold text-white">
+                          {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                        </span>
+                      </div>
+                    )}
                   </button>
 
                   {/* Dropdown menu */}
