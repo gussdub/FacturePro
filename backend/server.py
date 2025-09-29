@@ -673,7 +673,7 @@ class CheckoutRequest(BaseModel):
     plan: SubscriptionPlan
 
 @api_router.put("/invoices/{invoice_id}/status")
-async def update_invoice_status(invoice_id: str, payment_data: PaymentUpdate, current_user: User = Depends(get_current_user)):
+async def update_invoice_status(invoice_id: str, payment_data: PaymentUpdate, current_user: User = Depends(get_current_user_with_subscription)):
     invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -700,7 +700,7 @@ async def update_invoice_status(invoice_id: str, payment_data: PaymentUpdate, cu
     return {"message": "Invoice status updated successfully"}
 
 @api_router.delete("/invoices/{invoice_id}")
-async def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user)):
+async def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_subscription)):
     result = await db.invoices.delete_one({"id": invoice_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Invoice not found")
@@ -708,12 +708,12 @@ async def delete_invoice(invoice_id: str, current_user: User = Depends(get_curre
 
 # Quote routes
 @api_router.get("/quotes", response_model=List[Quote])
-async def get_quotes(current_user: User = Depends(get_current_user)):
+async def get_quotes(current_user: User = Depends(get_current_user_with_subscription)):
     quotes = await db.quotes.find({"user_id": current_user.id}).to_list(1000)
     return [Quote(**quote) for quote in quotes]
 
 @api_router.post("/quotes", response_model=Quote)
-async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_current_user)):
+async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_current_user_with_subscription)):
     # Calculate totals with Canadian taxes
     items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
         quote.items, quote.gst_rate, quote.pst_rate, quote.hst_rate,
