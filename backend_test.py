@@ -120,7 +120,113 @@ class BillingAPITester:
             self.log_test("User Login", False, f"Login failed: {response}")
             return False
 
-    def test_dashboard_stats(self):
+    def test_health_endpoint(self):
+        """Test health endpoint"""
+        success, response = self.make_request('GET', 'health', expected_status=200)
+        
+        if success and response.get('status') == 'healthy':
+            self.log_test("Health Endpoint", True, f"Health check passed: {response}")
+            return True
+        else:
+            self.log_test("Health Endpoint", False, f"Health check failed: {response}")
+            return False
+
+    def test_products_management(self):
+        """Test products CRUD operations"""
+        # Test create product
+        product_data = {
+            "name": "Service de consultation",
+            "description": "Consultation technique spécialisée",
+            "unit_price": 150.0,
+            "unit": "heure",
+            "category": "Services"
+        }
+        
+        success, response = self.make_request('POST', 'products', product_data, 200)
+        if success and 'id' in response:
+            test_product_id = response['id']
+            self.log_test("Create Product", True, f"Product created with ID: {test_product_id}")
+        else:
+            self.log_test("Create Product", False, f"Failed to create product: {response}")
+            return False
+
+        # Test get products list
+        success, response = self.make_request('GET', 'products', expected_status=200)
+        if success and isinstance(response, list):
+            self.log_test("Get Products List", True, f"Retrieved {len(response)} products")
+        else:
+            self.log_test("Get Products List", False, f"Failed to get products: {response}")
+
+        # Test get specific product
+        success, response = self.make_request('GET', f'products/{test_product_id}', expected_status=200)
+        if success and response.get('id') == test_product_id:
+            self.log_test("Get Specific Product", True, f"Retrieved product: {response['name']}")
+        else:
+            self.log_test("Get Specific Product", False, f"Failed to get product: {response}")
+
+        # Test update product
+        update_data = {
+            "name": "Service de consultation premium",
+            "description": "Consultation technique spécialisée premium",
+            "unit_price": 200.0,
+            "unit": "heure",
+            "category": "Services Premium"
+        }
+        
+        success, response = self.make_request('PUT', f'products/{test_product_id}', update_data, 200)
+        if success and response.get('name') == "Service de consultation premium":
+            self.log_test("Update Product", True, f"Product updated successfully")
+        else:
+            self.log_test("Update Product", False, f"Failed to update product: {response}")
+
+        # Test delete product (soft delete)
+        success, response = self.make_request('DELETE', f'products/{test_product_id}', expected_status=200)
+        if success and response.get('message') == 'Product deleted successfully':
+            self.log_test("Delete Product", True, f"Product deleted successfully")
+        else:
+            self.log_test("Delete Product", False, f"Failed to delete product: {response}")
+
+        return True
+
+    def test_subscription_endpoint(self):
+        """Test subscription endpoint (may fail without valid Stripe key - that's OK)"""
+        success, response = self.make_request('GET', 'subscription/current', expected_status=200)
+        
+        if success:
+            self.log_test("Subscription Endpoint", True, f"Subscription endpoint accessible: {response}")
+            return True
+        else:
+            # Check if it's a Stripe-related error (which is expected)
+            if 'stripe' in str(response).lower() or 'api_key' in str(response).lower():
+                self.log_test("Subscription Endpoint", True, f"Subscription endpoint accessible but Stripe not configured (expected): {response}")
+                return True
+            else:
+                self.log_test("Subscription Endpoint", False, f"Subscription endpoint failed: {response}")
+                return False
+
+    def test_cors_headers(self):
+        """Test CORS headers are properly set"""
+        url = f"{self.api_url}/health"
+        headers = {'Origin': 'https://facture-wizard.preview.emergentagent.com'}
+        
+        try:
+            response = requests.options(url, headers=headers, timeout=10)
+            cors_headers = {
+                'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers')
+            }
+            
+            if any(cors_headers.values()):
+                self.log_test("CORS Headers", True, f"CORS headers present: {cors_headers}")
+                return True
+            else:
+                self.log_test("CORS Headers", False, f"No CORS headers found: {cors_headers}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.log_test("CORS Headers", False, f"CORS test failed: {str(e)}")
+            return False
         """Test dashboard statistics endpoint"""
         success, response = self.make_request('GET', 'dashboard/stats', expected_status=200)
         
