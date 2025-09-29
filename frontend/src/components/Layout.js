@@ -24,6 +24,7 @@ const Layout = () => {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [settings, setSettings] = useState(null);
   const { user, logout } = useAuth();
   const location = useLocation();
 
