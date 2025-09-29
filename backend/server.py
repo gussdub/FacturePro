@@ -319,6 +319,61 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="User not found")
     return User(**user)
 
+async def check_subscription_access(user: User):
+    """Check if user has valid subscription access"""
+    now = datetime.now(timezone.utc)
+    
+    # If user is in trial period
+    if user.subscription_status == "trial":
+        if user.trial_end_date and now < user.trial_end_date:
+            return True  # Trial is still valid
+        else:
+            # Trial has expired, check if they have an active subscription
+            await db.users.update_one(
+                {"id": user.id}, 
+                {"$set": {"subscription_status": "inactive", "is_active": False}}
+            )
+            return False
+    
+    # If user has active subscription
+    if user.subscription_status == "active":
+        if user.current_period_end and now < user.current_period_end:
+            return True  # Subscription is active
+        else:
+            # Subscription period ended, deactivate account
+            await db.users.update_one(
+                {"id": user.id}, 
+                {"$set": {"subscription_status": "inactive", "is_active": False}}
+            )
+            return False
+    
+    # If user has been cancelled but period not ended
+    if user.subscription_status == "cancelled":
+        if user.current_period_end and now < user.current_period_end:
+            return True  # Still has access until end of paid period
+        else:
+            await db.users.update_one(
+                {"id": user.id}, 
+                {"$set": {"subscription_status": "inactive", "is_active": False}}
+            )
+            return False
+    
+    return False  # No valid access
+
+async def get_current_user_with_subscription(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current user and check subscription access"""
+    user = await get_current_user(credentials)
+    
+    # Check subscription access
+    has_access = await check_subscription_access(user)
+    if not has_access:
+        raise HTTPException(
+            status_code=403, 
+            detail="Votre abonnement a expiré. Veuillez renouveler votre abonnement pour continuer à utiliser FacturePro."
+        )
+    
+    return user
+
 def calculate_invoice_totals(items: List[InvoiceItemCreate], gst_rate: float = 5.0, pst_rate: float = 0.0, 
                           hst_rate: float = 0.0, apply_gst: bool = True, apply_pst: bool = False, apply_hst: bool = False):
     invoice_items = []
