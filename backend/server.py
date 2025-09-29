@@ -359,7 +359,12 @@ async def check_subscription_access(user: User):
     
     # If user has been cancelled but period not ended
     if user.subscription_status == "cancelled":
-        if user.current_period_end and now < user.current_period_end:
+        if user.current_period_end:
+            # Ensure both datetimes are timezone-aware for comparison
+            period_end = user.current_period_end
+            if period_end.tzinfo is None:
+                period_end = period_end.replace(tzinfo=timezone.utc)
+            if now < period_end:
             return True  # Still has access until end of paid period
         else:
             await db.users.update_one(
