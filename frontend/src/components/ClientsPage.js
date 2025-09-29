@@ -61,6 +61,12 @@ const ClientsPage = () => {
     setSuccess('');
 
     try {
+      // Debug: Check token
+      const token = localStorage.getItem('token');
+      console.log('Token exists:', !!token);
+      console.log('Token length:', token ? token.length : 0);
+      console.log('Axios headers:', axios.defaults.headers.common['Authorization']);
+      
       if (editingClient) {
         await axios.put(`${API}/clients/${editingClient.id}`, formData);
         setSuccess('Client modifié avec succès');
