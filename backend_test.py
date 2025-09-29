@@ -341,7 +341,10 @@ class BillingAPITester:
                     "unit_price": 75.0
                 }
             ],
-            "tax_rate": 20.0,
+            "gst_rate": 5.0,
+            "pst_rate": 9.975,
+            "apply_gst": True,
+            "apply_pst": True,
             "notes": "Facture de test"
         }
         
