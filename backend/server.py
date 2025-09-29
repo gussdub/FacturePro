@@ -451,12 +451,17 @@ async def register(user: UserCreate):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Create new user
+    # Calculate trial end date (14 days from now)
+    trial_end = datetime.now(timezone.utc) + timedelta(days=14)
+    
+    # Create new user with trial setup
     hashed_password = get_password_hash(user.password)
     new_user = User(
         email=user.email,
         hashed_password=hashed_password,
-        company_name=user.company_name
+        company_name=user.company_name,
+        subscription_status="trial",
+        trial_end_date=trial_end
     )
     
     # Save to database
