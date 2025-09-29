@@ -1292,6 +1292,62 @@ async def process_successful_subscription(transaction, user_id):
         logger.error(f"Error processing successful subscription: {e}")
         raise
 
+@api_router.post("/subscription/cancel")
+async def cancel_subscription(current_user: User = Depends(get_current_user)):
+    """Cancel user's subscription (they keep access until end of current period)"""
+    try:
+        # Update user subscription status to cancelled
+        await db.users.update_one(
+            {"id": current_user.id},
+            {"$set": {"subscription_status": "cancelled"}}
+        )
+        
+        # Update subscription record
+        await db.subscriptions.update_one(
+            {"user_id": current_user.id},
+            {
+                "$set": {
+                    "status": SubscriptionStatus.canceled,
+                    "canceled_at": datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        return {"message": "Abonnement annulé. Vous conservez l'accès jusqu'à la fin de votre période de facturation."}
+        
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {e}")
+        raise HTTPException(status_code=500, detail="Failed to cancel subscription")
+
+@api_router.get("/subscription/user-status")
+async def get_user_subscription_status(current_user: User = Depends(get_current_user)):
+    """Get detailed user subscription status"""
+    try:
+        now = datetime.now(timezone.utc)
+        
+        # Check access status
+        has_access = await check_subscription_access(current_user)
+        
+        # Calculate remaining days
+        days_remaining = 0
+        if current_user.subscription_status == "trial" and current_user.trial_end_date:
+            days_remaining = max(0, (current_user.trial_end_date - now).days)
+        elif current_user.current_period_end:
+            days_remaining = max(0, (current_user.current_period_end - now).days)
+        
+        return {
+            "subscription_status": current_user.subscription_status,
+            "has_access": has_access,
+            "trial_end_date": current_user.trial_end_date.isoformat() if current_user.trial_end_date else None,
+            "current_period_end": current_user.current_period_end.isoformat() if current_user.current_period_end else None,
+            "days_remaining": days_remaining,
+            "last_payment_date": current_user.last_payment_date.isoformat() if current_user.last_payment_date else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting user subscription status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get subscription status")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
