@@ -17,7 +17,8 @@ import {
   Bell,
   Search,
   Package,
-  BarChart3
+  BarChart3,
+  Crown
 } from 'lucide-react';
 
 const Layout = () => {
