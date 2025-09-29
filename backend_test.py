@@ -633,25 +633,25 @@ class BillingAPITester:
 
     def test_error_handling(self):
         """Test API error handling"""
-        # Test unauthorized access (without token)
+        # Test unauthorized access (should return 403)
         old_token = self.token
         self.token = None
         
         success, response = self.make_request('GET', 'clients', expected_status=403)
-        if not success and ('not authenticated' in response.get('detail', '').lower() or response.get('detail') == 'Not authenticated'):
+        if success:  # success=True means we got the expected 403
             self.log_test("Unauthorized Access", True, "Correctly rejected unauthorized request")
         else:
-            self.log_test("Unauthorized Access", False, f"Should have returned 403: {response}")
+            self.log_test("Unauthorized Access", False, f"Expected 403 but got: {response}")
         
         # Restore token
         self.token = old_token
 
-        # Test invalid client ID
+        # Test invalid client ID (should return 404)
         success, response = self.make_request('GET', 'clients/invalid-id', expected_status=404)
-        if not success and ('not found' in response.get('detail', '').lower() or response.get('detail') == 'Client not found'):
+        if success:  # success=True means we got the expected 404
             self.log_test("Invalid Client ID", True, "Correctly returned 404 for invalid client")
         else:
-            self.log_test("Invalid Client ID", False, f"Should have returned 404: {response}")
+            self.log_test("Invalid Client ID", False, f"Expected 404 but got: {response}")
 
         return True
 
