@@ -320,9 +320,9 @@ class BillingAPITester:
 
         # Test 9: Test invalid subscription plan
         invalid_checkout_data = {"plan": "invalid_plan"}
-        success, response = self.make_request('POST', 'subscription/checkout', invalid_checkout_data, expected_status=400)
-        if success:  # success=True means we got expected 400
-            self.log_test("Subscription - Invalid Plan Validation", True, "Invalid plan correctly rejected")
+        success, response = self.make_request('POST', 'subscription/checkout', invalid_checkout_data, expected_status=422)  # Pydantic validation error
+        if success:  # success=True means we got expected 422
+            self.log_test("Subscription - Invalid Plan Validation", True, "Invalid plan correctly rejected with validation error")
         else:
             self.log_test("Subscription - Invalid Plan Validation", False, f"Invalid plan not properly validated: {response}")
 
