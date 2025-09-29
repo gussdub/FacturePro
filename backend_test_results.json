@@ -1,20 +1,20 @@
 {
   "summary": {
-    "total_tests": 23,
-    "passed_tests": 6,
-    "success_rate": 26.08695652173913
+    "total_tests": 24,
+    "passed_tests": 13,
+    "success_rate": 54.166666666666664
   },
   "test_results": [
     {
       "name": "Health Endpoint",
       "success": true,
-      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T20:39:38.552909+00:00'}",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T20:44:36.315259+00:00'}",
       "response_data": null
     },
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: 614d5edf-eaf7-429b-9596-162315380001",
+      "details": "User created with ID: 530b5d77-c9c4-40ba-bc40-c67652811c67",
       "response_data": null
     },
     {
@@ -72,57 +72,63 @@
       "response_data": null
     },
     {
-      "name": "Subscription - New User Registration",
+      "name": "Subscription - Existing User Login",
       "success": true,
-      "details": "User created with trial: 6754644c-3fe8-4c6e-8d2d-7bd6415d1a54",
+      "details": "Logged in existing user: 6754644c-3fe8-4c6e-8d2d-7bd6415d1a54",
       "response_data": null
     },
     {
       "name": "Subscription - Trial Status Check",
-      "success": false,
-      "details": "Failed to get subscription status: {'detail': 'Not Found'}",
+      "success": true,
+      "details": "Trial active with 13 days remaining",
       "response_data": null
     },
     {
       "name": "Subscription - Middleware Access During Trial",
-      "success": false,
-      "details": "Protected endpoints blocked during trial: {'status_code': 500, 'text': 'Internal Server Error'}",
+      "success": true,
+      "details": "Protected endpoints accessible during trial",
       "response_data": null
     },
     {
       "name": "Subscription - Monthly Checkout Creation",
-      "success": false,
-      "details": "Failed to create monthly checkout: {'detail': 'Not Found'}",
+      "success": true,
+      "details": "Monthly checkout session created: cs_test_a1ep3nxNwix7if9ZlPnHLKm2qWhhYwANud5M2pj8u06k0RNoyLasMtebzp",
       "response_data": null
     },
     {
       "name": "Subscription - Annual Checkout Creation",
-      "success": false,
-      "details": "Failed to create annual checkout: {'detail': 'Not Found'}",
+      "success": true,
+      "details": "Annual checkout session created: cs_test_a1aD5O81UzvKJuvejovSdfJBffTlF3OGVB2gdARq1hhIq2WQxOQsqT3aBB",
+      "response_data": null
+    },
+    {
+      "name": "Subscription - Checkout Status Check",
+      "success": true,
+      "details": "Checkout status: unpaid",
       "response_data": null
     },
     {
       "name": "Subscription - Cancellation",
-      "success": false,
-      "details": "Failed to cancel subscription: {'detail': 'Not Found'}",
+      "success": true,
+      "details": "Subscription cancelled: Abonnement annul\u00e9. Vous conservez l'acc\u00e8s jusqu'\u00e0 la fin de votre p\u00e9riode de facturation.",
       "response_data": null
     },
     {
       "name": "Subscription - Webhook Endpoint",
       "success": false,
-      "details": "Webhook endpoint issue: {'detail': 'Not Found'}",
+      "details": "Webhook endpoint issue: {'detail': 'Webhook processing failed'}",
       "response_data": null
     },
     {
       "name": "Subscription - Invalid Plan Validation",
       "success": false,
-      "details": "Invalid plan not properly validated: {'detail': 'Not Found'}",
+      "details": "Invalid plan not properly validated: {'detail': [{'type': 'enum', 'loc': ['body', 'plan'], 'msg': \"Input should be 'monthly' or 'annual'\", 'input': 'invalid_plan', 'ctx': {'expected': \"'monthly' or 'annual'\"}, 'url': 'https://errors.pydantic.dev/2.11/v/enum'}]}",
       "response_data": null
     },
     {
       "name": "Subscription - Access Control Logic",
-      "success": false,
-      "details": "Access control logic missing: {'detail': 'Not Found'}",
+      "success": true,
+      "details": "Subscription access control logic implemented",
       "response_data": null
     },
     {
