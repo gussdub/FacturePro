@@ -342,7 +342,12 @@ async def check_subscription_access(user: User):
     
     # If user has active subscription
     if user.subscription_status == "active":
-        if user.current_period_end and now < user.current_period_end:
+        if user.current_period_end:
+            # Ensure both datetimes are timezone-aware for comparison
+            period_end = user.current_period_end
+            if period_end.tzinfo is None:
+                period_end = period_end.replace(tzinfo=timezone.utc)
+            if now < period_end:
             return True  # Subscription is active
         else:
             # Subscription period ended, deactivate account
