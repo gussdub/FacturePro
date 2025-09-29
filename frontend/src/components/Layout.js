@@ -43,6 +43,23 @@ const Layout = () => {
     logout();
   };
 
+  // Load company settings for logo
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const API = process.env.REACT_APP_BACKEND_URL || import.meta.env.REACT_APP_BACKEND_URL;
+        const response = await axios.get(`${API}/api/company`);
+        setSettings(response.data);
+      } catch (error) {
+        console.error('Error loading settings:', error);
+      }
+    };
+
+    if (user) {
+      fetchSettings();
+    }
+  }, [user]);
+
   // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
