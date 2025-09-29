@@ -85,24 +85,10 @@ class BillingAPITester:
 
     def test_user_login(self):
         """Test user login with existing credentials"""
-        # First create a user for login test
-        test_email = f"login_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}@example.com"
-        register_data = {
-            "email": test_email,
-            "password": "Test123",
-            "company_name": "Login Test Company"
-        }
-        
-        # Register user first
-        success, _ = self.make_request('POST', 'auth/register', register_data, 200)
-        if not success:
-            self.log_test("User Login (Setup)", False, "Failed to create test user for login")
-            return False
-
-        # Now test login
+        # Test with the specific credentials mentioned in the review request
         login_data = {
-            "email": test_email,
-            "password": "Test123"
+            "email": "test@facturepro.com",
+            "password": "testpass123"
         }
         
         success, response = self.make_request('POST', 'auth/login', login_data, 200)
@@ -111,9 +97,26 @@ class BillingAPITester:
             # Update token for subsequent tests
             self.token = response['access_token']
             self.user_id = response['user']['id']
-            self.log_test("User Login", True, f"Login successful for user: {test_email}")
+            self.log_test("User Login (Existing User)", True, f"Login successful for user: test@facturepro.com")
             return True
         else:
+            # If the specific user doesn't exist, create it first
+            register_data = {
+                "email": "test@facturepro.com",
+                "password": "testpass123",
+                "company_name": "FacturePro Test Company"
+            }
+            
+            success, _ = self.make_request('POST', 'auth/register', register_data, 200)
+            if success:
+                # Now try login again
+                success, response = self.make_request('POST', 'auth/login', login_data, 200)
+                if success and 'access_token' in response:
+                    self.token = response['access_token']
+                    self.user_id = response['user']['id']
+                    self.log_test("User Login (After Registration)", True, f"Login successful after registration")
+                    return True
+            
             self.log_test("User Login", False, f"Login failed: {response}")
             return False
 
