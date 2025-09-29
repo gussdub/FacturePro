@@ -394,7 +394,11 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                 variant="outline"
                 size="sm"
                 onClick={addItem}
-                className="text-teal-600 border-teal-300 hover:bg-teal-50"
+                style={{
+                  color: settings?.primary_color || '#0f766e',
+                  borderColor: settings?.primary_color || '#0f766e',
+                }}
+                className="border hover:opacity-80"
               >
                 <Plus className="w-4 h-4 mr-2" />
                 Ajouter un article
