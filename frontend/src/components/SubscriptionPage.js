@@ -186,12 +186,12 @@ const SubscriptionPage = () => {
             </div>
             <h3 className="text-xl font-bold text-gray-900 mb-2">Plan Annuel</h3>
             <div className="mb-2">
-              <span className="text-3xl font-bold text-gray-900">100$</span>
+              <span className="text-3xl font-bold text-gray-900">150$</span>
               <span className="text-gray-500 ml-1">/an</span>
             </div>
             <div className="text-sm">
-              <span className="text-gray-500 line-through">120$</span>
-              <span className="text-green-600 font-medium ml-2">Économisez 20$</span>
+              <span className="text-gray-500 line-through">180$</span>
+              <span className="text-green-600 font-medium ml-2">Économisez 30$</span>
             </div>
             <p className="text-gray-600 text-sm mt-2">Le meilleur rapport qualité-prix</p>
           </div>
