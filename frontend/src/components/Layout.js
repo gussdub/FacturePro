@@ -255,6 +255,17 @@ const Layout = () => {
           </div>
         </main>
       </div>
+
+      {/* Modals */}
+      <NotificationsModal
+        isOpen={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+      />
+      
+      <UserProfileModal
+        isOpen={profileOpen}
+        onClose={() => setProfileOpen(false)}
+      />
     </div>
   );
 };
