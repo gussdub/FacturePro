@@ -15,6 +15,7 @@ import SettingsPage from './components/SettingsPage';
 import SubscriptionPage from './components/SubscriptionPage';
 import SubscriptionSuccess from './components/SubscriptionSuccess';
 import SubscriptionCancel from './components/SubscriptionCancel';
+import TrialSetup from './components/TrialSetup';
 import Layout from './components/Layout';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
