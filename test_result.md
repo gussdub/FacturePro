@@ -280,8 +280,7 @@ metadata:
 test_plan:
   current_focus:
     - "Frontend client selection dropdown in invoice/quote forms"
-  stuck_tasks:
-    - "Frontend client selection dropdown in invoice/quote forms"
+  stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
