@@ -632,7 +632,7 @@ class BillingAPITester:
         self.token = None
         
         success, response = self.make_request('GET', 'clients', expected_status=403)
-        if not success and 'not authenticated' in response.get('detail', '').lower():
+        if not success and ('not authenticated' in response.get('detail', '').lower() or response.get('detail') == 'Not authenticated'):
             self.log_test("Unauthorized Access", True, "Correctly rejected unauthorized request")
         else:
             self.log_test("Unauthorized Access", False, f"Should have returned 403: {response}")
@@ -642,7 +642,7 @@ class BillingAPITester:
 
         # Test invalid client ID
         success, response = self.make_request('GET', 'clients/invalid-id', expected_status=404)
-        if not success and 'not found' in response.get('detail', '').lower():
+        if not success and ('not found' in response.get('detail', '').lower() or response.get('detail') == 'Client not found'):
             self.log_test("Invalid Client ID", True, "Correctly returned 404 for invalid client")
         else:
             self.log_test("Invalid Client ID", False, f"Should have returned 404: {response}")
