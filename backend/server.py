@@ -535,12 +535,12 @@ async def delete_client(client_id: str, current_user: User = Depends(get_current
 
 # Invoice routes
 @api_router.get("/invoices", response_model=List[Invoice])
-async def get_invoices(current_user: User = Depends(get_current_user)):
+async def get_invoices(current_user: User = Depends(get_current_user_with_subscription)):
     invoices = await db.invoices.find({"user_id": current_user.id}).to_list(1000)
     return [Invoice(**invoice) for invoice in invoices]
 
 @api_router.post("/invoices", response_model=Invoice)
-async def create_invoice(invoice: InvoiceCreate, current_user: User = Depends(get_current_user)):
+async def create_invoice(invoice: InvoiceCreate, current_user: User = Depends(get_current_user_with_subscription)):
     # Calculate totals with Canadian taxes
     items, subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
         invoice.items, invoice.gst_rate, invoice.pst_rate, invoice.hst_rate,
