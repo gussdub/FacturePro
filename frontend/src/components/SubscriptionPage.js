@@ -94,7 +94,7 @@ const SubscriptionPage = () => {
                   FacturePro {subscription.plan === 'monthly' ? 'Mensuel' : 'Annuel'}
                 </h3>
                 <p className="text-sm text-gray-500">
-                  {subscription.plan === 'monthly' ? '10$ / mois' : '100$ / an'}
+                  {subscription.plan === 'monthly' ? '15$ / mois' : '150$ / an'}
                 </p>
               </div>
             </div>
