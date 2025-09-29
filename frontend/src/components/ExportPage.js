@@ -30,9 +30,9 @@ const ExportPage = () => {
   });
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-CA', {
+    return new Intl.NumberFormat('fr-CA', {
       style: 'currency',
-      currency: 'USD'
+      currency: 'CAD'
     }).format(amount || 0);
   };
 
