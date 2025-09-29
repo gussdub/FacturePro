@@ -995,10 +995,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Subscription plans pricing
+# Subscription plans pricing (CAD)
 SUBSCRIPTION_PLANS = {
-    "monthly": {"amount": 15.00, "name": "FacturePro Monthly"},
-    "annual": {"amount": 150.00, "name": "FacturePro Annual"}  # 2 months free (15*10 = 150)
+    "monthly": {"amount": 15.00, "name": "FacturePro Monthly"},  # 15$ CAD per month
+    "annual": {"amount": 150.00, "name": "FacturePro Annual"}   # 150$ CAD per year (2 months free)
 }
 
 # Stripe routes
