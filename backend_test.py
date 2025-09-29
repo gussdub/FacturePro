@@ -905,6 +905,9 @@ class BillingAPITester:
         # Comprehensive subscription system testing (HIGH priority - review request)
         self.test_subscription_system()
         
+        # Test exemption user functionality (CRITICAL - specific review request)
+        self.test_exemption_user_access()
+        
         # CORS and error handling
         self.test_cors_headers()
         self.test_error_handling()
