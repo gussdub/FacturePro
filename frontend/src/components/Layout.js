@@ -4,6 +4,7 @@ import { useAuth } from '../App';
 import { Button } from './ui/button';
 import NotificationsDropdown from './NotificationsDropdown';
 import UserProfileModal from './UserProfileModal';
+import axios from 'axios';
 import {
   Receipt,
   Users,
