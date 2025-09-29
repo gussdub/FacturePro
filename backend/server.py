@@ -976,6 +976,11 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
         "total_revenue": total_revenue
     }
 
+# Add health endpoint
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+
 # Include the router in the main app
 app.include_router(api_router)
 
