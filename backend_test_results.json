@@ -1,20 +1,20 @@
 {
   "summary": {
-    "total_tests": 35,
-    "passed_tests": 35,
-    "success_rate": 100.0
+    "total_tests": 23,
+    "passed_tests": 6,
+    "success_rate": 26.08695652173913
   },
   "test_results": [
     {
       "name": "Health Endpoint",
       "success": true,
-      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T02:25:24.250298+00:00'}",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T20:39:38.552909+00:00'}",
       "response_data": null
     },
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: ad85cddc-c097-4ed8-bcc0-1b3ad479d758",
+      "details": "User created with ID: 614d5edf-eaf7-429b-9596-162315380001",
       "response_data": null
     },
     {
@@ -25,176 +25,104 @@
     },
     {
       "name": "Dashboard Stats",
-      "success": true,
-      "details": "All stats fields present: {'total_clients': 0, 'total_invoices': 4, 'total_quotes': 2, 'pending_invoices': 1, 'total_revenue': 0}",
+      "success": false,
+      "details": "Request failed: {'detail': 'Votre abonnement a expir\u00e9. Veuillez renouveler votre abonnement pour continuer \u00e0 utiliser FacturePro.'}",
       "response_data": null
     },
     {
       "name": "Create Client",
-      "success": true,
-      "details": "Client created with ID: ed307cd4-d59c-4096-a559-baf50d3c47cb",
+      "success": false,
+      "details": "Failed to create client: {'detail': 'Votre abonnement a expir\u00e9. Veuillez renouveler votre abonnement pour continuer \u00e0 utiliser FacturePro.'}",
       "response_data": null
     },
     {
-      "name": "Get Clients List",
-      "success": true,
-      "details": "Retrieved 1 clients",
+      "name": "Invoice Management",
+      "success": false,
+      "details": "No test client available",
       "response_data": null
     },
     {
-      "name": "Get Specific Client",
-      "success": true,
-      "details": "Retrieved client: Test Client",
+      "name": "Quote Management",
+      "success": false,
+      "details": "No test client available",
       "response_data": null
     },
     {
-      "name": "Update Client",
-      "success": true,
-      "details": "Client updated successfully",
+      "name": "Delete Invoice Setup",
+      "success": false,
+      "details": "No test client available",
       "response_data": null
     },
     {
-      "name": "Create Invoice",
-      "success": true,
-      "details": "Invoice created with correct Canadian tax calculations: INV-00009",
-      "response_data": null
-    },
-    {
-      "name": "Get Invoices List",
-      "success": true,
-      "details": "Retrieved 5 invoices",
-      "response_data": null
-    },
-    {
-      "name": "Update Invoice Status",
-      "success": true,
-      "details": "Invoice status updated to sent",
-      "response_data": null
-    },
-    {
-      "name": "Create Quote",
-      "success": true,
-      "details": "Quote created: QTE-00007",
-      "response_data": null
-    },
-    {
-      "name": "Get Quotes List",
-      "success": true,
-      "details": "Retrieved 3 quotes",
-      "response_data": null
-    },
-    {
-      "name": "Convert Quote to Invoice",
-      "success": true,
-      "details": "Quote converted to invoice: INV-00010",
-      "response_data": null
-    },
-    {
-      "name": "Delete Invoice - Create Test Invoice",
-      "success": true,
-      "details": "Test invoice created: a59e9791-de28-436a-aaf0-bf842fde1ae0",
-      "response_data": null
-    },
-    {
-      "name": "Delete Invoice - Successful Deletion",
-      "success": true,
-      "details": "Invoice a59e9791-de28-436a-aaf0-bf842fde1ae0 deleted successfully",
-      "response_data": null
-    },
-    {
-      "name": "Delete Invoice - Verify Deletion",
-      "success": true,
-      "details": "Invoice correctly not found after deletion",
-      "response_data": null
-    },
-    {
-      "name": "Delete Invoice - Non-existent ID",
-      "success": true,
-      "details": "Correctly returned 404 for non-existent invoice",
-      "response_data": null
-    },
-    {
-      "name": "Delete Invoice - Unauthorized",
-      "success": true,
-      "details": "Correctly rejected unauthorized deletion",
-      "response_data": null
-    },
-    {
-      "name": "Delete Quote - Create Test Quote",
-      "success": true,
-      "details": "Test quote created: 70d58a43-0912-4b4b-a875-8aa7167e285d",
-      "response_data": null
-    },
-    {
-      "name": "Delete Quote - Successful Deletion",
-      "success": true,
-      "details": "Quote 70d58a43-0912-4b4b-a875-8aa7167e285d deleted successfully",
-      "response_data": null
-    },
-    {
-      "name": "Delete Quote - Verify Deletion",
-      "success": true,
-      "details": "Quote correctly not found in list after deletion",
-      "response_data": null
-    },
-    {
-      "name": "Delete Quote - Non-existent ID",
-      "success": true,
-      "details": "Correctly returned 404 for non-existent quote",
-      "response_data": null
-    },
-    {
-      "name": "Delete Quote - Unauthorized",
-      "success": true,
-      "details": "Correctly rejected unauthorized deletion",
+      "name": "Delete Quote Setup",
+      "success": false,
+      "details": "No test client available",
       "response_data": null
     },
     {
       "name": "Get Company Settings",
-      "success": true,
-      "details": "Settings retrieved for: Updated Test Company",
-      "response_data": null
-    },
-    {
-      "name": "Update Company Settings",
-      "success": true,
-      "details": "Company settings updated successfully",
+      "success": false,
+      "details": "Failed to get settings: {'detail': 'Votre abonnement a expir\u00e9. Veuillez renouveler votre abonnement pour continuer \u00e0 utiliser FacturePro.'}",
       "response_data": null
     },
     {
       "name": "Create Product",
-      "success": true,
-      "details": "Product created with ID: 949761f6-e55e-4b55-ba0a-3daa9c351f6e",
+      "success": false,
+      "details": "Failed to create product: {'detail': 'Votre abonnement a expir\u00e9. Veuillez renouveler votre abonnement pour continuer \u00e0 utiliser FacturePro.'}",
       "response_data": null
     },
     {
-      "name": "Get Products List",
+      "name": "Subscription - New User Registration",
       "success": true,
-      "details": "Retrieved 1 products",
+      "details": "User created with trial: 6754644c-3fe8-4c6e-8d2d-7bd6415d1a54",
       "response_data": null
     },
     {
-      "name": "Get Specific Product",
-      "success": true,
-      "details": "Retrieved product: Service de consultation",
+      "name": "Subscription - Trial Status Check",
+      "success": false,
+      "details": "Failed to get subscription status: {'detail': 'Not Found'}",
       "response_data": null
     },
     {
-      "name": "Update Product",
-      "success": true,
-      "details": "Product updated successfully",
+      "name": "Subscription - Middleware Access During Trial",
+      "success": false,
+      "details": "Protected endpoints blocked during trial: {'status_code': 500, 'text': 'Internal Server Error'}",
       "response_data": null
     },
     {
-      "name": "Delete Product",
-      "success": true,
-      "details": "Product deleted successfully",
+      "name": "Subscription - Monthly Checkout Creation",
+      "success": false,
+      "details": "Failed to create monthly checkout: {'detail': 'Not Found'}",
       "response_data": null
     },
     {
-      "name": "Subscription Endpoint",
-      "success": true,
-      "details": "Subscription endpoint returns 404 (may not be implemented yet): {'detail': 'Not Found'}",
+      "name": "Subscription - Annual Checkout Creation",
+      "success": false,
+      "details": "Failed to create annual checkout: {'detail': 'Not Found'}",
+      "response_data": null
+    },
+    {
+      "name": "Subscription - Cancellation",
+      "success": false,
+      "details": "Failed to cancel subscription: {'detail': 'Not Found'}",
+      "response_data": null
+    },
+    {
+      "name": "Subscription - Webhook Endpoint",
+      "success": false,
+      "details": "Webhook endpoint issue: {'detail': 'Not Found'}",
+      "response_data": null
+    },
+    {
+      "name": "Subscription - Invalid Plan Validation",
+      "success": false,
+      "details": "Invalid plan not properly validated: {'detail': 'Not Found'}",
+      "response_data": null
+    },
+    {
+      "name": "Subscription - Access Control Logic",
+      "success": false,
+      "details": "Access control logic missing: {'detail': 'Not Found'}",
       "response_data": null
     },
     {
@@ -211,8 +139,8 @@
     },
     {
       "name": "Invalid Client ID",
-      "success": true,
-      "details": "Correctly returned 404 for invalid client",
+      "success": false,
+      "details": "Expected 404 but got: {'detail': 'Votre abonnement a expir\u00e9. Veuillez renouveler votre abonnement pour continuer \u00e0 utiliser FacturePro.'}",
       "response_data": null
     }
   ]
