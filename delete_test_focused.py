@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 class DeleteFunctionalityTester:
     def __init__(self):
-        self.base_url = "https://facture-master-3.preview.emergentagent.com"
+        self.base_url = "https://facture-wizard.preview.emergentagent.com"
         self.api_url = f"{self.base_url}/api"
         self.token = None
         self.test_results = []
