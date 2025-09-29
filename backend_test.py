@@ -601,15 +601,15 @@ class BillingAPITester:
         else:
             self.log_test("Delete Quote - Verify Deletion", False, f"Failed to get quotes list: {response}")
 
-        # Test deletion of non-existent quote
+        # Test deletion of non-existent quote (should return 404)
         fake_quote_id = "non-existent-quote-id"
         success, response = self.make_request('DELETE', f'quotes/{fake_quote_id}', expected_status=404)
-        if not success and ('not found' in response.get('detail', '').lower() or response.get('detail') == 'Quote not found'):
+        if success:  # success=True means we got the expected 404
             self.log_test("Delete Quote - Non-existent ID", True, "Correctly returned 404 for non-existent quote")
         else:
-            self.log_test("Delete Quote - Non-existent ID", False, f"Should have returned 404: {response}")
+            self.log_test("Delete Quote - Non-existent ID", False, f"Expected 404 but got: {response}")
 
-        # Test unauthorized deletion (without token)
+        # Test unauthorized deletion (should return 403)
         # First create another quote
         success, response = self.make_request('POST', 'quotes', quote_data, 200)
         if success and 'id' in response:
@@ -620,10 +620,10 @@ class BillingAPITester:
             self.token = None
             
             success, response = self.make_request('DELETE', f'quotes/{unauthorized_quote_id}', expected_status=403)
-            if not success and ('not authenticated' in response.get('detail', '').lower() or response.get('detail') == 'Not authenticated'):
+            if success:  # success=True means we got the expected 403
                 self.log_test("Delete Quote - Unauthorized", True, "Correctly rejected unauthorized deletion")
             else:
-                self.log_test("Delete Quote - Unauthorized", False, f"Should have returned 403: {response}")
+                self.log_test("Delete Quote - Unauthorized", False, f"Expected 403 but got: {response}")
             
             # Restore token and cleanup
             self.token = old_token
