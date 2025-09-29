@@ -211,8 +211,10 @@ class BillingAPITester:
         print("\n🔄 Testing Subscription System...")
         
         # Test 1: Register new user with trial setup
+        import time
+        timestamp = str(int(time.time()))
         trial_user_data = {
-            "email": "testsubscription@facturepro.com",
+            "email": f"testsubscription{timestamp}@facturepro.com",
             "password": "testpass123",
             "company_name": "FacturePro Test Subscription"
         }
