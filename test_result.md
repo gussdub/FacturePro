@@ -276,8 +276,9 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Clients API for gussdub@gmail.com invoice/quote selection"
-  stuck_tasks: []
+    - "Frontend client selection dropdown in invoice/quote forms"
+  stuck_tasks:
+    - "Frontend client selection dropdown in invoice/quote forms"
   test_all: false
   test_priority: "high_first"
 
