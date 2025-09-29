@@ -151,7 +151,18 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                   src={settings.logo_url} 
                   alt="Logo entreprise" 
                   className="max-w-full max-h-full object-contain"
+                  onError={(e) => {
+                    console.log('Logo failed to load:', settings.logo_url);
+                    e.target.style.display = 'none';
+                  }}
                 />
+              </div>
+            )}
+            {/* Debug: Show if settings exist */}
+            {process.env.NODE_ENV === 'development' && (
+              <div className="text-xs text-white/50">
+                Settings: {settings ? 'Loaded' : 'Not loaded'} | 
+                Logo: {settings?.logo_url ? 'Present' : 'Missing'}
               </div>
             )}
             <div>
