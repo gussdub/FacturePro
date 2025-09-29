@@ -152,9 +152,9 @@ backend:
 
   - task: "Frontend client selection dropdown in invoice/quote forms"
     implemented: true
-    working: false
-    file: "/app/frontend/src/components/VisualInvoiceForm.js"
-    stuck_count: 1
+    working: true
+    file: "/app/frontend/src/components/ui/select.jsx"
+    stuck_count: 0
     priority: "critical"
     needs_retesting: false
     status_history:
@@ -164,6 +164,9 @@ backend:
       - working: false
         agent: "testing"
         comment: "DROPDOWN ISSUE CONFIRMED: ❌ Code analysis reveals z-index conflict issue ❌ VisualInvoiceForm renders in modal with z-50 backdrop ❌ Radix UI Select dropdown content also uses z-50 but gets blocked by modal overlay ❌ Modal backdrop (.bg-black.bg-opacity-50) prevents dropdown interaction ❌ SelectContent portal rendering conflicts with modal container ❌ Issue affects both invoice and quote creation forms ❌ Root cause: Nested modal/dropdown z-index hierarchy problem ❌ SOLUTION NEEDED: Increase SelectContent z-index to z-[60] or higher, or restructure modal/dropdown interaction. The backend API works correctly, but frontend dropdown UI is broken due to CSS z-index conflicts."
+      - working: true
+        agent: "testing"
+        comment: "DROPDOWN ISSUE FIXED: ✅ SOLUTION IMPLEMENTED: Changed SelectContent z-index from z-50 to z-[60] in /app/frontend/src/components/ui/select.jsx ✅ TESTING CONFIRMED: Client dropdown now opens correctly in invoice creation form ✅ Dropdown content is visible and accessible above modal backdrop ✅ Successfully created test account and client to verify functionality ✅ Dropdown shows available clients and allows selection ✅ Z-index hierarchy now properly prioritizes dropdown content over modal overlay ✅ Fix applies to all Select components throughout the application ✅ Both invoice and quote forms now have working client selection dropdowns ✅ RESOLUTION: The reported issue by gussdub@gmail.com has been resolved - client selection dropdowns are now fully functional."
 
 frontend:
   - task: "Registration and trial redirect workflow"
