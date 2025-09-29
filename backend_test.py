@@ -513,22 +513,22 @@ class BillingAPITester:
             self.log_test("Delete Invoice - Successful Deletion", False, f"Failed to delete invoice: {response}")
             return False
 
-        # Verify invoice is actually deleted by trying to get it
+        # Verify invoice is actually deleted by trying to get it (should return 404)
         success, response = self.make_request('GET', f'invoices/{test_invoice_id}', expected_status=404)
-        if not success and ('not found' in response.get('detail', '').lower() or response.get('detail') == 'Invoice not found'):
+        if success:  # success=True means we got the expected 404
             self.log_test("Delete Invoice - Verify Deletion", True, "Invoice correctly not found after deletion")
         else:
-            self.log_test("Delete Invoice - Verify Deletion", False, f"Invoice still exists after deletion: {response}")
+            self.log_test("Delete Invoice - Verify Deletion", False, f"Expected 404 but got: {response}")
 
-        # Test deletion of non-existent invoice - this should return 404 with "Invoice not found"
+        # Test deletion of non-existent invoice (should return 404)
         fake_invoice_id = "non-existent-invoice-id"
         success, response = self.make_request('DELETE', f'invoices/{fake_invoice_id}', expected_status=404)
-        if not success and ('not found' in response.get('detail', '').lower() or response.get('detail') == 'Invoice not found'):
+        if success:  # success=True means we got the expected 404
             self.log_test("Delete Invoice - Non-existent ID", True, "Correctly returned 404 for non-existent invoice")
         else:
-            self.log_test("Delete Invoice - Non-existent ID", False, f"Should have returned 404: {response}")
+            self.log_test("Delete Invoice - Non-existent ID", False, f"Expected 404 but got: {response}")
 
-        # Test unauthorized deletion (without token) - this should return 403 with "Not authenticated"
+        # Test unauthorized deletion (should return 403)
         # First create another invoice
         success, response = self.make_request('POST', 'invoices', invoice_data, 200)
         if success and 'id' in response:
@@ -539,10 +539,10 @@ class BillingAPITester:
             self.token = None
             
             success, response = self.make_request('DELETE', f'invoices/{unauthorized_invoice_id}', expected_status=403)
-            if not success and ('not authenticated' in response.get('detail', '').lower() or response.get('detail') == 'Not authenticated'):
+            if success:  # success=True means we got the expected 403
                 self.log_test("Delete Invoice - Unauthorized", True, "Correctly rejected unauthorized deletion")
             else:
-                self.log_test("Delete Invoice - Unauthorized", False, f"Should have returned 403: {response}")
+                self.log_test("Delete Invoice - Unauthorized", False, f"Expected 403 but got: {response}")
             
             # Restore token and cleanup
             self.token = old_token
