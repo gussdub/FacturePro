@@ -102,7 +102,7 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "L'utilisateur a signalé plusieurs problèmes: 1) Le logo 'Made with Emergent' doit disparaître, 2) les boutons supprimer dans les factures et soumissions ne fonctionnent pas, 3) il y a un bug graphique en mode web (ordinateur) où le menu est à gauche et la page commence beaucoup plus bas, 4) il souhaite inclure le nom du logiciel et le logo sur la page de connexion. NOUVEAU: Utilisateur rapporte que plusieurs pages ne fonctionnent toujours pas avec des erreurs réseau dans la console du navigateur."
+user_problem_statement: "Test complet du nouveau système d'abonnement FacturePro frontend que je viens d'implémenter. Workflow de test à automatiser: 1) Inscription et redirection essai gratuit, 2) Page de configuration d'abonnement (/trial/setup), 3) Alertes d'abonnement dans l'interface, 4) Navigation et fonctionnalités. Créer un compte de test avec: Entreprise: 'Test Subscription Co', Email: 'testsubscription@example.com', Mot de passe: 'testpass123'. Endpoints à vérifier: POST /api/auth/register, GET /api/subscription/user-status, POST /api/subscription/checkout."
 
 backend:
   - task: "Delete buttons for invoices and quotes"
