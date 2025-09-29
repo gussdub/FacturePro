@@ -222,21 +222,21 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
           <div>
             <h3 className="text-lg font-semibold text-gray-900 mb-4">À:</h3>
             <div className="space-y-4">
-              <Select 
-                value={formData.client_id} 
-                onValueChange={(value) => setFormData(prev => ({ ...prev, client_id: value }))}
-              >
-                <SelectTrigger className="bg-gray-50">
-                  <SelectValue placeholder="Sélectionner un client" />
-                </SelectTrigger>
-                <SelectContent>
+              {/* Alternative dropdown while fixing Select component */}
+              <div className="relative">
+                <select 
+                  value={formData.client_id}
+                  onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
+                  className="w-full h-10 px-3 py-2 bg-gray-50 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                >
+                  <option value="">Sélectionner un client</option>
                   {clients.map(client => (
-                    <SelectItem key={client.id} value={client.id}>
+                    <option key={client.id} value={client.id}>
                       {client.name}
-                    </SelectItem>
+                    </option>
                   ))}
-                </SelectContent>
-              </Select>
+                </select>
+              </div>
 
               {clientData.id && (
                 <div className="bg-gray-50 p-4 rounded-lg">
