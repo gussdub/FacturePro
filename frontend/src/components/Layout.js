@@ -218,11 +218,33 @@ const Layout = () => {
                   {/* Dropdown menu */}
                   {userMenuOpen && (
                     <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50 border">
-                      <div className="px-4 py-2 border-b border-gray-200">
-                        <p className="text-sm font-medium text-gray-900">
-                          {user?.company_name || 'Entreprise'}
-                        </p>
-                        <p className="text-xs text-gray-500">{user?.email}</p>
+                      <div className="px-4 py-3 border-b border-gray-200">
+                        <div className="flex items-center space-x-3">
+                          {/* Company Logo */}
+                          {settings?.logo_url ? (
+                            <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+                              <img 
+                                src={settings.logo_url} 
+                                alt="Logo entreprise" 
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                              <span className="text-sm font-bold text-white">
+                                {user?.company_name?.charAt(0)?.toUpperCase() || 'E'}
+                              </span>
+                            </div>
+                          )}
+                          
+                          {/* Company Info */}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {user?.company_name || 'Mon Entreprise'}
+                            </p>
+                            <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+                          </div>
+                        </div>
                       </div>
                       <button
                         onClick={() => {
