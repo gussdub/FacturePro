@@ -798,7 +798,7 @@ async def delete_quote(quote_id: str, current_user: User = Depends(get_current_u
 
 # Company settings routes
 @api_router.get("/settings/company", response_model=CompanySettings)
-async def get_company_settings(current_user: User = Depends(get_current_user)):
+async def get_company_settings(current_user: User = Depends(get_current_user_with_subscription)):
     settings = await db.company_settings.find_one({"user_id": current_user.id})
     if not settings:
         # Create default settings
@@ -814,7 +814,7 @@ async def get_company_settings(current_user: User = Depends(get_current_user)):
     return CompanySettings(**settings)
 
 @api_router.put("/settings/company", response_model=CompanySettings)
-async def update_company_settings(settings_update: CompanySettingsUpdate, current_user: User = Depends(get_current_user)):
+async def update_company_settings(settings_update: CompanySettingsUpdate, current_user: User = Depends(get_current_user_with_subscription)):
     settings = await db.company_settings.find_one({"user_id": current_user.id})
     if not settings:
         raise HTTPException(status_code=404, detail="Company settings not found")
@@ -828,25 +828,25 @@ async def update_company_settings(settings_update: CompanySettingsUpdate, curren
 
 # Product routes
 @api_router.get("/products", response_model=List[Product])
-async def get_products(current_user: User = Depends(get_current_user)):
+async def get_products(current_user: User = Depends(get_current_user_with_subscription)):
     products = await db.products.find({"user_id": current_user.id, "is_active": True}).to_list(1000)
     return [Product(**product) for product in products]
 
 @api_router.post("/products", response_model=Product)
-async def create_product(product: ProductCreate, current_user: User = Depends(get_current_user)):
+async def create_product(product: ProductCreate, current_user: User = Depends(get_current_user_with_subscription)):
     new_product = Product(**product.dict(), user_id=current_user.id)
     await db.products.insert_one(new_product.dict())
     return new_product
 
 @api_router.get("/products/{product_id}", response_model=Product)
-async def get_product(product_id: str, current_user: User = Depends(get_current_user)):
+async def get_product(product_id: str, current_user: User = Depends(get_current_user_with_subscription)):
     product = await db.products.find_one({"id": product_id, "user_id": current_user.id})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return Product(**product)
 
 @api_router.put("/products/{product_id}", response_model=Product)
-async def update_product(product_id: str, product_update: ProductCreate, current_user: User = Depends(get_current_user)):
+async def update_product(product_id: str, product_update: ProductCreate, current_user: User = Depends(get_current_user_with_subscription)):
     product = await db.products.find_one({"id": product_id, "user_id": current_user.id})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
