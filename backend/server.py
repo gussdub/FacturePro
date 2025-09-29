@@ -1241,50 +1241,56 @@ async def get_current_subscription(current_user: User = Depends(get_current_user
         logger.error(f"Error getting subscription: {e}")
         raise HTTPException(status_code=500, detail="Failed to get subscription")
 
-async def process_successful_subscription(transaction: dict, user_id: str):
-    """Process successful subscription payment"""
+async def process_successful_subscription(transaction, user_id):
+    """Process a successful subscription payment"""
     try:
-        plan = transaction.get("metadata", {}).get("plan")
-        if not plan:
-            return
-        
-        # Calculate subscription period
+        # Get transaction details
+        plan = transaction["metadata"]["plan"]
         now = datetime.now(timezone.utc)
+        
+        # Calculate subscription end date
         if plan == "monthly":
             end_date = now + timedelta(days=30)
         else:  # annual
             end_date = now + timedelta(days=365)
         
-        # Check if user has existing subscription
-        existing_subscription = await db.subscriptions.find_one({"user_id": user_id})
+        # Update user subscription status
+        await db.users.update_one(
+            {"id": user_id},
+            {
+                "$set": {
+                    "subscription_status": "active",
+                    "current_period_end": end_date,
+                    "last_payment_date": now,
+                    "is_active": True
+                }
+            }
+        )
         
+        # Create or update subscription record
+        subscription = Subscription(
+            user_id=user_id,
+            plan=SubscriptionPlan(plan),
+            status=SubscriptionStatus.active,
+            current_period_start=now,
+            current_period_end=end_date
+        )
+        
+        # Check if subscription already exists
+        existing_subscription = await db.subscriptions.find_one({"user_id": user_id})
         if existing_subscription:
-            # Update existing subscription
             await db.subscriptions.update_one(
                 {"user_id": user_id},
-                {
-                    "$set": {
-                        "plan": plan,
-                        "status": "active",
-                        "current_period_start": now,
-                        "current_period_end": end_date,
-                        "trial_end": None  # End trial
-                    }
-                }
+                {"$set": subscription.dict(exclude={"id"})}
             )
         else:
-            # Create new subscription
-            subscription = Subscription(
-                user_id=user_id,
-                plan=plan,
-                status=SubscriptionStatus.active,
-                current_period_start=now,
-                current_period_end=end_date
-            )
             await db.subscriptions.insert_one(subscription.dict())
             
+        logger.info(f"Successfully processed subscription for user {user_id}")
+        
     except Exception as e:
         logger.error(f"Error processing successful subscription: {e}")
+        raise
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
