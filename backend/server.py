@@ -301,11 +301,16 @@ def create_access_token(data: dict):
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
+        print(f"DEBUG: Received token: {credentials.credentials[:50]}...")
+        print(f"DEBUG: SECRET_KEY: {SECRET_KEY}")
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        print(f"DEBUG: Decoded payload: {payload}")
         user_id: str = payload.get("sub")
         if user_id is None:
+            print("DEBUG: user_id is None")
             raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        print(f"DEBUG: JWT Error: {e}")
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     
     user = await db.users.find_one({"id": user_id})
