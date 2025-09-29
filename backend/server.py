@@ -977,7 +977,7 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
     }
 
 # Add health endpoint
-@app.get("/api/health")
+@api_router.get("/health")
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
