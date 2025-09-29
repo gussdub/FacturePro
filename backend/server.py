@@ -325,7 +325,12 @@ async def check_subscription_access(user: User):
     
     # If user is in trial period
     if user.subscription_status == "trial":
-        if user.trial_end_date and now < user.trial_end_date:
+        if user.trial_end_date:
+            # Ensure both datetimes are timezone-aware for comparison
+            trial_end = user.trial_end_date
+            if trial_end.tzinfo is None:
+                trial_end = trial_end.replace(tzinfo=timezone.utc)
+            if now < trial_end:
             return True  # Trial is still valid
         else:
             # Trial has expired, check if they have an active subscription
