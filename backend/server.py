@@ -995,6 +995,226 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Subscription plans pricing
+SUBSCRIPTION_PLANS = {
+    "monthly": {"amount": 10.00, "name": "FacturePro Monthly"},
+    "annual": {"amount": 100.00, "name": "FacturePro Annual"}  # 2 months free
+}
+
+# Stripe routes
+@api_router.post("/subscription/checkout")
+async def create_subscription_checkout(
+    request: CheckoutRequest,
+    http_request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        # Get plan details
+        if request.plan not in SUBSCRIPTION_PLANS:
+            raise HTTPException(status_code=400, detail="Invalid subscription plan")
+        
+        plan_details = SUBSCRIPTION_PLANS[request.plan]
+        
+        # Initialize Stripe checkout
+        host_url = str(http_request.base_url).rstrip('/')
+        webhook_url = f"{host_url}/api/webhook/stripe"
+        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+        
+        # Create checkout session
+        origin_url = http_request.headers.get("origin", host_url)
+        success_url = f"{origin_url}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{origin_url}/subscription/cancel"
+        
+        checkout_request = CheckoutSessionRequest(
+            amount=plan_details["amount"],
+            currency="usd",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                "user_id": current_user.id,
+                "plan": request.plan,
+                "subscription_type": "facturepro"
+            }
+        )
+        
+        session = await stripe_checkout.create_checkout_session(checkout_request)
+        
+        # Create payment transaction record
+        transaction = PaymentTransaction(
+            user_id=current_user.id,
+            session_id=session.session_id,
+            amount=plan_details["amount"],
+            currency="usd",
+            status="initiated",
+            payment_status="unpaid",
+            metadata={
+                "plan": request.plan,
+                "plan_name": plan_details["name"]
+            }
+        )
+        
+        await db.payment_transactions.insert_one(transaction.dict())
+        
+        return {"checkout_url": session.url, "session_id": session.session_id}
+        
+    except Exception as e:
+        logger.error(f"Error creating checkout session: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create checkout session")
+
+@api_router.get("/subscription/status/{session_id}")
+async def get_subscription_status(
+    session_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        # Initialize Stripe checkout
+        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
+        
+        # Get checkout status from Stripe
+        checkout_status = await stripe_checkout.get_checkout_status(session_id)
+        
+        # Update payment transaction
+        transaction = await db.payment_transactions.find_one({"session_id": session_id})
+        if not transaction:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+            
+        # Update transaction status
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {
+                "$set": {
+                    "status": checkout_status.status,
+                    "payment_status": checkout_status.payment_status,
+                    "updated_at": datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        # If payment is successful, create/update subscription
+        if checkout_status.payment_status == "paid":
+            await process_successful_subscription(transaction, current_user.id)
+        
+        return {
+            "status": checkout_status.status,
+            "payment_status": checkout_status.payment_status,
+            "amount_total": checkout_status.amount_total,
+            "currency": checkout_status.currency
+        }
+        
+    except Exception as e:
+        logger.error(f"Error checking subscription status: {e}")
+        raise HTTPException(status_code=500, detail="Failed to check subscription status")
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    try:
+        body = await request.body()
+        signature = request.headers.get("Stripe-Signature")
+        
+        if not signature:
+            raise HTTPException(status_code=400, detail="Missing Stripe signature")
+        
+        # Initialize Stripe checkout
+        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
+        
+        # Handle webhook
+        webhook_response = await stripe_checkout.handle_webhook(body, signature)
+        
+        if webhook_response.event_type == "checkout.session.completed":
+            # Find and update transaction
+            await db.payment_transactions.update_one(
+                {"session_id": webhook_response.session_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "payment_status": webhook_response.payment_status,
+                        "updated_at": datetime.now(timezone.utc)
+                    }
+                }
+            )
+            
+            # Process subscription if payment successful
+            if webhook_response.payment_status == "paid":
+                transaction = await db.payment_transactions.find_one({"session_id": webhook_response.session_id})
+                if transaction and transaction.get("metadata", {}).get("user_id"):
+                    await process_successful_subscription(transaction, transaction["metadata"]["user_id"])
+        
+        return {"status": "success"}
+        
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        raise HTTPException(status_code=500, detail="Webhook processing failed")
+
+@api_router.get("/subscription/current")
+async def get_current_subscription(current_user: User = Depends(get_current_user)):
+    try:
+        subscription = await db.subscriptions.find_one({"user_id": current_user.id})
+        if not subscription:
+            return {"subscription": None, "trial_days_left": 14}  # New user gets 14 day trial
+        
+        # Calculate trial days left
+        trial_days_left = 0
+        if subscription.get("status") == "trial" and subscription.get("trial_end"):
+            trial_end = subscription["trial_end"]
+            if isinstance(trial_end, str):
+                trial_end = datetime.fromisoformat(trial_end.replace('Z', '+00:00'))
+            days_left = (trial_end - datetime.now(timezone.utc)).days
+            trial_days_left = max(0, days_left)
+        
+        return {
+            "subscription": subscription,
+            "trial_days_left": trial_days_left
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting subscription: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get subscription")
+
+async def process_successful_subscription(transaction: dict, user_id: str):
+    """Process successful subscription payment"""
+    try:
+        plan = transaction.get("metadata", {}).get("plan")
+        if not plan:
+            return
+        
+        # Calculate subscription period
+        now = datetime.now(timezone.utc)
+        if plan == "monthly":
+            end_date = now + timedelta(days=30)
+        else:  # annual
+            end_date = now + timedelta(days=365)
+        
+        # Check if user has existing subscription
+        existing_subscription = await db.subscriptions.find_one({"user_id": user_id})
+        
+        if existing_subscription:
+            # Update existing subscription
+            await db.subscriptions.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "plan": plan,
+                        "status": "active",
+                        "current_period_start": now,
+                        "current_period_end": end_date,
+                        "trial_end": None  # End trial
+                    }
+                }
+            )
+        else:
+            # Create new subscription
+            subscription = Subscription(
+                user_id=user_id,
+                plan=plan,
+                status=SubscriptionStatus.active,
+                current_period_start=now,
+                current_period_end=end_date
+            )
+            await db.subscriptions.insert_one(subscription.dict())
+            
+    except Exception as e:
+        logger.error(f"Error processing successful subscription: {e}")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
