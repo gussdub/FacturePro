@@ -151,65 +151,77 @@ backend:
         comment: "BACKEND TESTING COMPLETE: Created and executed comprehensive backend test suite covering all endpoints mentioned in review request. All 35 tests passed including: Health endpoint, Authentication (register/login with test@facturepro.com), Clients CRUD, Invoices CRUD with Canadian tax calculations, Quotes CRUD, Products CRUD, Company settings, Dashboard stats, Subscription endpoint (returns expected 404 - not implemented yet), CORS headers, Error handling (401/403/404), Delete functionality for invoices and quotes. Backend is fully functional and ready for production use."
 
 frontend:
-  - task: "Fix layout issue - content starting too low"  
+  - task: "Registration and trial redirect workflow"
     implemented: true
-    working: true
-    file: "/app/frontend/src/components/Layout.js"
+    working: "NA"
+    file: "/app/frontend/src/components/LoginPage.js, /app/frontend/src/App.js"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "New subscription system implemented. Registration should redirect to /trial/setup after successful signup. Need to test complete workflow."
+
+  - task: "Trial setup page functionality"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/TrialSetup.js"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "TrialSetup component shows subscription plans (Monthly 15$, Annual 150$), trial info, and payment setup buttons. Need to test display and Stripe integration."
+
+  - task: "Subscription alerts in interface"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/SubscriptionAlert.js, /app/frontend/src/hooks/useSubscription.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
-      - working: false
+      - working: "NA"
         agent: "main"
-        comment: "Major layout issue identified - content starts very low with large white space between header and main content"
-      - working: true
-        agent: "main"
-        comment: "FIXED - Reduced padding from lg:p-8 to lg:p-4 in main content area. Layout now displays correctly with proper spacing."
-        
-  - task: "Remove Made with Emergent watermark"
+        comment: "SubscriptionAlert component integrated in Layout.js with useSubscription hook. Shows different alerts based on subscription status (trial warning, expired, cancelled). Need to test display logic."
+
+  - task: "Subscription page functionality"
     implemented: true
-    working: true
-    file: "/app/frontend/src/App.css and /app/frontend/src/App.js"
+    working: "NA"
+    file: "/app/frontend/src/components/SubscriptionPage.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
-      - working: false
+      - working: "NA"
         agent: "main"
-        comment: "Previous CSS attempts in App.css (lines 266-298) have not successfully removed the watermark"
-      - working: true
-        agent: "main"
-        comment: "FIXED - Combined enhanced CSS rules with aggressive JavaScript watermark removal in App.js useEffect. Watermark no longer visible."
-        
-  - task: "Add FacturePro logo and name to login page"
+        comment: "SubscriptionPage shows current subscription status, pricing plans, and checkout functionality. Need to test subscription management features."
+
+  - task: "Subscription success/cancel pages"
     implemented: true
-    working: true
-    file: "/app/frontend/src/components/LoginPage.js"
+    working: "NA"
+    file: "/app/frontend/src/components/SubscriptionSuccess.js, /app/frontend/src/components/SubscriptionCancel.js"
     stuck_count: 0
     priority: "medium"
-    needs_retesting: false
+    needs_retesting: true
     status_history:
-      - working: false
+      - working: "NA"
         agent: "main"
-        comment: "Logo is present in sidebar but missing from login page as requested by user"
-      - working: true
-        agent: "main"
-        comment: "FIXED - Added FacturePro logo and name to login page header, matching the design from sidebar with teal color scheme."
-        
-  - task: "Test frontend delete buttons functionality"
+        comment: "Success page handles payment verification with session_id polling. Cancel page provides user feedback and navigation options. Need to test Stripe integration flow."
+
+  - task: "Navigation and subscription integration"
     implemented: true
-    working: true
-    file: "/app/frontend/src/components/InvoicesPage.js and QuotesPage.js"
+    working: "NA"
+    file: "/app/frontend/src/components/Layout.js"
     stuck_count: 0
-    priority: "high"
-    needs_retesting: false
+    priority: "medium"
+    needs_retesting: true
     status_history:
-      - working: "needs_testing"
+      - working: "NA"
         agent: "main"
-        comment: "Backend DELETE APIs confirmed working. Need to test if frontend delete buttons properly call backend and handle responses."
-      - working: true
-        agent: "testing"
-        comment: "TESTED: Frontend delete functionality is working correctly. Successfully authenticated, navigated to invoices and quotes pages, found delete buttons with proper data-testid attributes. Tested actual deletion with real data - confirmation dialog appeared correctly ('Êtes-vous sûr de vouloir supprimer cette facture ?') and was handled properly. Delete buttons are properly implemented in both InvoicesPage.js (lines 138-150, 420-428) and QuotesPage.js (lines 149-161, 654-662). The handleDelete functions correctly call axios.delete() with proper API endpoints and show confirmation dialogs. Frontend delete functionality is fully operational."
+        comment: "Layout component integrates SubscriptionAlert and useSubscription hook. All main pages should be accessible with proper subscription status display. Need to test navigation flow."
 
 metadata:
   created_by: "main_agent"
