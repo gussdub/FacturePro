@@ -1044,7 +1044,7 @@ async def create_subscription_checkout(
             user_id=current_user.id,
             session_id=session.session_id,
             amount=plan_details["amount"],
-            currency="usd",
+            currency="cad",
             status="initiated",
             payment_status="unpaid",
             metadata={
