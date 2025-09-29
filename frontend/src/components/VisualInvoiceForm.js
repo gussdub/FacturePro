@@ -310,7 +310,13 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
           </div>
           
           <div className="border border-t-0 rounded-b-lg overflow-hidden">
-            <div className="bg-teal-50 grid grid-cols-12 gap-2 p-3 text-sm font-medium text-teal-800">
+            <div 
+              className="grid grid-cols-12 gap-2 p-3 text-sm font-medium"
+              style={{
+                backgroundColor: settings?.primary_color ? `${settings.primary_color}20` : '#f0fdfa',
+                color: settings?.primary_color || '#134e4a'
+              }}
+            >
               <div className="col-span-5">Description</div>
               <div className="col-span-2 text-center">Quantité</div>
               <div className="col-span-2 text-center">Prix unitaire</div>
