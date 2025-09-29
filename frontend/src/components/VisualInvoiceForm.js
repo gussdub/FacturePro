@@ -450,7 +450,12 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                 )}
 
                 <div className="border-t pt-3">
-                  <div className="flex justify-between text-lg font-bold text-teal-600">
+                  <div 
+                    className="flex justify-between text-lg font-bold"
+                    style={{
+                      color: settings?.primary_color || '#0f766e'
+                    }}
+                  >
                     <span>TOTAL:</span>
                     <span>{formatCurrency(calculateTotal())}</span>
                   </div>
