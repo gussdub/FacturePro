@@ -141,7 +141,6 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
             ? `linear-gradient(to right, ${settings.primary_color}, ${settings.secondary_color || settings.primary_color})` 
             : 'linear-gradient(to right, #0f766e, #134e4a)'
         }}
-        onLoad={() => console.log('Settings:', settings)}
       >
         <div className="flex justify-between items-center">
           <div className="flex items-center space-x-4">
