@@ -300,7 +300,12 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
 
         {/* Items Table */}
         <div className="mb-8">
-          <div className="bg-teal-600 text-white p-4 rounded-t-lg">
+          <div 
+            className="text-white p-4 rounded-t-lg"
+            style={{
+              backgroundColor: settings?.primary_color || '#0f766e'
+            }}
+          >
             <h3 className="font-semibold">Articles et Services</h3>
           </div>
           
