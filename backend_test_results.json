@@ -1,20 +1,20 @@
 {
   "summary": {
-    "total_tests": 24,
-    "passed_tests": 13,
-    "success_rate": 54.166666666666664
+    "total_tests": 25,
+    "passed_tests": 15,
+    "success_rate": 60.0
   },
   "test_results": [
     {
       "name": "Health Endpoint",
       "success": true,
-      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T20:44:36.315259+00:00'}",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T21:20:30.536774+00:00'}",
       "response_data": null
     },
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: 530b5d77-c9c4-40ba-bc40-c67652811c67",
+      "details": "User created with ID: 9dab98f5-b2e0-4ee3-ba60-83d714619bd3",
       "response_data": null
     },
     {
@@ -72,9 +72,9 @@
       "response_data": null
     },
     {
-      "name": "Subscription - Existing User Login",
+      "name": "Subscription - New User Registration",
       "success": true,
-      "details": "Logged in existing user: 6754644c-3fe8-4c6e-8d2d-7bd6415d1a54",
+      "details": "User created with trial: 40901309-471c-4133-9a7d-02867a0469f9",
       "response_data": null
     },
     {
@@ -92,13 +92,13 @@
     {
       "name": "Subscription - Monthly Checkout Creation",
       "success": true,
-      "details": "Monthly checkout session created: cs_test_a1ep3nxNwix7if9ZlPnHLKm2qWhhYwANud5M2pj8u06k0RNoyLasMtebzp",
+      "details": "Monthly checkout session created: cs_test_a1XceKFV7OCX2F2jzqNoNMgOMV017X5gdXeiaC2ehxtpAUB1n9xv7Eg9kj",
       "response_data": null
     },
     {
       "name": "Subscription - Annual Checkout Creation",
       "success": true,
-      "details": "Annual checkout session created: cs_test_a1aD5O81UzvKJuvejovSdfJBffTlF3OGVB2gdARq1hhIq2WQxOQsqT3aBB",
+      "details": "Annual checkout session created: cs_test_a1U79MQrnwwBRgKEWrqsZdmYuRjBGp1NgpasP64MQP9iTdfwztS5C95mN3",
       "response_data": null
     },
     {
@@ -115,20 +115,26 @@
     },
     {
       "name": "Subscription - Webhook Endpoint",
-      "success": false,
-      "details": "Webhook endpoint issue: {'detail': 'Webhook processing failed'}",
+      "success": true,
+      "details": "Webhook endpoint exists and processes requests",
       "response_data": null
     },
     {
       "name": "Subscription - Invalid Plan Validation",
-      "success": false,
-      "details": "Invalid plan not properly validated: {'detail': [{'type': 'enum', 'loc': ['body', 'plan'], 'msg': \"Input should be 'monthly' or 'annual'\", 'input': 'invalid_plan', 'ctx': {'expected': \"'monthly' or 'annual'\"}, 'url': 'https://errors.pydantic.dev/2.11/v/enum'}]}",
+      "success": true,
+      "details": "Invalid plan correctly rejected with validation error",
       "response_data": null
     },
     {
       "name": "Subscription - Access Control Logic",
       "success": true,
       "details": "Subscription access control logic implemented",
+      "response_data": null
+    },
+    {
+      "name": "Exemption User - Setup Failed",
+      "success": false,
+      "details": "Failed to setup exemption user: {'detail': 'Email already registered'}",
       "response_data": null
     },
     {
