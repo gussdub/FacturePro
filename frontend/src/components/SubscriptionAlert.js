@@ -3,6 +3,7 @@ import { Alert, AlertDescription } from './ui/alert';
 import { Button } from './ui/button';
 import { AlertTriangle, Clock, CreditCard } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../App';
 
 const SubscriptionAlert = ({ subscriptionStatus }) => {
   const navigate = useNavigate();
