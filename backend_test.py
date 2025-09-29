@@ -367,8 +367,11 @@ class BillingAPITester:
         else:
             self.log_test("Get Invoices List", False, f"Failed to get invoices: {response}")
 
-        # Test update invoice status
-        success, response = self.make_request('PUT', f'invoices/{self.test_invoice_id}/status?status=sent', expected_status=200)
+        # Test update invoice status - fix the API call
+        status_data = {
+            "status": "sent"
+        }
+        success, response = self.make_request('PUT', f'invoices/{self.test_invoice_id}/status', status_data, 200)
         if success:
             self.log_test("Update Invoice Status", True, "Invoice status updated to sent")
         else:
