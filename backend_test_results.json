@@ -1,20 +1,20 @@
 {
   "summary": {
     "total_tests": 35,
-    "passed_tests": 28,
-    "success_rate": 80.0
+    "passed_tests": 35,
+    "success_rate": 100.0
   },
   "test_results": [
     {
       "name": "Health Endpoint",
       "success": true,
-      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T02:23:54.307249+00:00'}",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T02:25:24.250298+00:00'}",
       "response_data": null
     },
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: a884259b-c5ee-4962-b827-793553371f37",
+      "details": "User created with ID: ad85cddc-c097-4ed8-bcc0-1b3ad479d758",
       "response_data": null
     },
     {
@@ -26,13 +26,13 @@
     {
       "name": "Dashboard Stats",
       "success": true,
-      "details": "All stats fields present: {'total_clients': 0, 'total_invoices': 2, 'total_quotes': 1, 'pending_invoices': 0, 'total_revenue': 0}",
+      "details": "All stats fields present: {'total_clients': 0, 'total_invoices': 4, 'total_quotes': 2, 'pending_invoices': 1, 'total_revenue': 0}",
       "response_data": null
     },
     {
       "name": "Create Client",
       "success": true,
-      "details": "Client created with ID: b0d27a20-257c-49a2-9995-6e9c416a6ca8",
+      "details": "Client created with ID: ed307cd4-d59c-4096-a559-baf50d3c47cb",
       "response_data": null
     },
     {
@@ -56,13 +56,13 @@
     {
       "name": "Create Invoice",
       "success": true,
-      "details": "Invoice created with correct Canadian tax calculations: INV-00005",
+      "details": "Invoice created with correct Canadian tax calculations: INV-00009",
       "response_data": null
     },
     {
       "name": "Get Invoices List",
       "success": true,
-      "details": "Retrieved 3 invoices",
+      "details": "Retrieved 5 invoices",
       "response_data": null
     },
     {
@@ -74,61 +74,61 @@
     {
       "name": "Create Quote",
       "success": true,
-      "details": "Quote created: QTE-00004",
+      "details": "Quote created: QTE-00007",
       "response_data": null
     },
     {
       "name": "Get Quotes List",
       "success": true,
-      "details": "Retrieved 2 quotes",
+      "details": "Retrieved 3 quotes",
       "response_data": null
     },
     {
       "name": "Convert Quote to Invoice",
       "success": true,
-      "details": "Quote converted to invoice: INV-00006",
+      "details": "Quote converted to invoice: INV-00010",
       "response_data": null
     },
     {
       "name": "Delete Invoice - Create Test Invoice",
       "success": true,
-      "details": "Test invoice created: 04af5913-b5f7-487b-9b72-313f4f04c2bf",
+      "details": "Test invoice created: a59e9791-de28-436a-aaf0-bf842fde1ae0",
       "response_data": null
     },
     {
       "name": "Delete Invoice - Successful Deletion",
       "success": true,
-      "details": "Invoice 04af5913-b5f7-487b-9b72-313f4f04c2bf deleted successfully",
+      "details": "Invoice a59e9791-de28-436a-aaf0-bf842fde1ae0 deleted successfully",
       "response_data": null
     },
     {
       "name": "Delete Invoice - Verify Deletion",
-      "success": false,
-      "details": "Invoice still exists after deletion: {'detail': 'Invoice not found'}",
+      "success": true,
+      "details": "Invoice correctly not found after deletion",
       "response_data": null
     },
     {
       "name": "Delete Invoice - Non-existent ID",
-      "success": false,
-      "details": "Should have returned 404: {'detail': 'Invoice not found'}",
+      "success": true,
+      "details": "Correctly returned 404 for non-existent invoice",
       "response_data": null
     },
     {
       "name": "Delete Invoice - Unauthorized",
-      "success": false,
-      "details": "Should have returned 403: {'detail': 'Not authenticated'}",
+      "success": true,
+      "details": "Correctly rejected unauthorized deletion",
       "response_data": null
     },
     {
       "name": "Delete Quote - Create Test Quote",
       "success": true,
-      "details": "Test quote created: 632e0c01-2687-4ec9-a162-94d787e1de19",
+      "details": "Test quote created: 70d58a43-0912-4b4b-a875-8aa7167e285d",
       "response_data": null
     },
     {
       "name": "Delete Quote - Successful Deletion",
       "success": true,
-      "details": "Quote 632e0c01-2687-4ec9-a162-94d787e1de19 deleted successfully",
+      "details": "Quote 70d58a43-0912-4b4b-a875-8aa7167e285d deleted successfully",
       "response_data": null
     },
     {
@@ -139,14 +139,14 @@
     },
     {
       "name": "Delete Quote - Non-existent ID",
-      "success": false,
-      "details": "Should have returned 404: {'detail': 'Quote not found'}",
+      "success": true,
+      "details": "Correctly returned 404 for non-existent quote",
       "response_data": null
     },
     {
       "name": "Delete Quote - Unauthorized",
-      "success": false,
-      "details": "Should have returned 403: {'detail': 'Not authenticated'}",
+      "success": true,
+      "details": "Correctly rejected unauthorized deletion",
       "response_data": null
     },
     {
@@ -164,7 +164,7 @@
     {
       "name": "Create Product",
       "success": true,
-      "details": "Product created with ID: 239caac0-8b8e-4332-a79a-f8db6bad0c6d",
+      "details": "Product created with ID: 949761f6-e55e-4b55-ba0a-3daa9c351f6e",
       "response_data": null
     },
     {
@@ -205,14 +205,14 @@
     },
     {
       "name": "Unauthorized Access",
-      "success": false,
-      "details": "Should have returned 403: {'detail': 'Not authenticated'}",
+      "success": true,
+      "details": "Correctly rejected unauthorized request",
       "response_data": null
     },
     {
       "name": "Invalid Client ID",
-      "success": false,
-      "details": "Should have returned 404: {'detail': 'Client not found'}",
+      "success": true,
+      "details": "Correctly returned 404 for invalid client",
       "response_data": null
     }
   ]
