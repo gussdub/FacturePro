@@ -348,14 +348,14 @@ async def check_subscription_access(user: User):
             if period_end.tzinfo is None:
                 period_end = period_end.replace(tzinfo=timezone.utc)
             if now < period_end:
-            return True  # Subscription is active
-        else:
-            # Subscription period ended, deactivate account
-            await db.users.update_one(
-                {"id": user.id}, 
-                {"$set": {"subscription_status": "inactive", "is_active": False}}
-            )
-            return False
+                return True  # Subscription is active
+            else:
+                # Subscription period ended, deactivate account
+                await db.users.update_one(
+                    {"id": user.id}, 
+                    {"$set": {"subscription_status": "inactive", "is_active": False}}
+                )
+                return False
     
     # If user has been cancelled but period not ended
     if user.subscription_status == "cancelled":
