@@ -120,6 +120,21 @@ backend:
         agent: "testing"
         comment: "TESTED: DELETE /api/invoices/{id} and DELETE /api/quotes/{id} routes are working correctly. Successfully created test invoices and quotes, deleted them, and verified deletion. Authentication is properly enforced. Error handling for non-existent resources returns appropriate 404 responses. Backend delete functionality is fully operational."
 
+  - task: "Fix backend connectivity - add health endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "main"
+        comment: "User reports network errors and pages not working. Troubleshoot agent identified missing /api/health endpoint causing 404 errors."
+      - working: true
+        agent: "main" 
+        comment: "FIXED: Added health endpoint @api_router.get('/health') to backend server. Local test shows 200 OK response. Production URL https://facture-wizard.preview.emergentagent.com/api/health also returns 200 OK."
+
 frontend:
   - task: "Fix layout issue - content starting too low"  
     implemented: true
