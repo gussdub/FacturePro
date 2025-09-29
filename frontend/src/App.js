@@ -244,6 +244,9 @@ function App() {
               <Route path="subscription" element={<SubscriptionPage />} />
             </Route>
             
+            {/* Trial Setup Route */}
+            <Route path="trial/setup" element={<TrialSetup />} />
+            
             {/* Subscription Routes (can be accessed without full auth) */}
             <Route path="subscription/success" element={<SubscriptionSuccess />} />
             <Route path="subscription/cancel" element={<SubscriptionCancel />} />
