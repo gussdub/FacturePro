@@ -320,6 +320,9 @@ const Layout = () => {
         {/* Page content */}
         <main className="p-4 sm:p-6 lg:p-4">
           <div className="max-w-7xl mx-auto">
+            {/* Subscription Alert */}
+            <SubscriptionAlert subscriptionStatus={subscriptionStatus} />
+            
             <Outlet />
           </div>
         </main>
