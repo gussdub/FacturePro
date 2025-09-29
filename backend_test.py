@@ -1158,6 +1158,9 @@ class BillingAPITester:
         # Test exemption user functionality (CRITICAL - specific review request)
         self.test_exemption_user_access()
         
+        # Test specific clients API issue for gussdub@gmail.com (CRITICAL - specific review request)
+        self.test_gussdub_clients_api_issue()
+        
         # CORS and error handling
         self.test_cors_headers()
         self.test_error_handling()
