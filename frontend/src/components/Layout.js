@@ -180,15 +180,23 @@ const Layout = () => {
                 </div>
 
                 {/* Notifications */}
-                <button 
-                  className="relative text-gray-500 hover:text-gray-700 transition-colors p-2 rounded-lg hover:bg-gray-100"
-                  data-testid="notifications-btn"
-                  onClick={() => setNotificationsOpen(true)}
-                  title="Notifications"
-                >
-                  <Bell className="w-5 h-5" />
-                  <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-                </button>
+                <div className="relative">
+                  <button 
+                    className="relative text-gray-500 hover:text-gray-700 transition-colors p-2 rounded-lg hover:bg-gray-100"
+                    data-testid="notifications-btn"
+                    onClick={() => setNotificationsOpen(!notificationsOpen)}
+                    title="Notifications"
+                  >
+                    <Bell className="w-5 h-5" />
+                    <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+                  </button>
+
+                  {/* Notifications Dropdown */}
+                  <NotificationsDropdown
+                    isOpen={notificationsOpen}
+                    onClose={() => setNotificationsOpen(false)}
+                  />
+                </div>
 
                 {/* User avatar with dropdown */}
                 <div className="relative">
