@@ -1366,6 +1366,9 @@ async def get_user_subscription_status(current_user: User = Depends(get_current_
         logger.error(f"Error getting user subscription status: {e}")
         raise HTTPException(status_code=500, detail="Failed to get subscription status")
 
+# Include the router in the main app (must be after all route definitions)
+app.include_router(api_router)
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
