@@ -206,6 +206,215 @@ class BillingAPITester:
 
         return True
 
+    def test_gussdub_clients_api_issue(self):
+        """Test specific clients API issue for gussdub@gmail.com"""
+        print("\n🔄 Testing Clients API Issue for gussdub@gmail.com...")
+        
+        # Store original token
+        original_token = self.token
+        
+        # Step 1: Try to login as gussdub@gmail.com or create the account
+        gussdub_token = None
+        gussdub_login_data = {
+            "email": "gussdub@gmail.com",
+            "password": "testpass123"
+        }
+        
+        # Try login first
+        success, response = self.make_request('POST', 'auth/login', gussdub_login_data, 200)
+        if success and 'access_token' in response:
+            gussdub_token = response['access_token']
+            gussdub_user_id = response['user']['id']
+            self.log_test("gussdub@gmail.com - Login Success", True, f"Successfully logged in gussdub@gmail.com")
+        else:
+            # If login fails, create the account
+            gussdub_register_data = {
+                "email": "gussdub@gmail.com",
+                "password": "testpass123",
+                "company_name": "Gussdub Test Company"
+            }
+            
+            success, response = self.make_request('POST', 'auth/register', gussdub_register_data, 200)
+            if success and 'access_token' in response:
+                gussdub_token = response['access_token']
+                gussdub_user_id = response['user']['id']
+                self.log_test("gussdub@gmail.com - Account Created", True, f"Created account for gussdub@gmail.com")
+            else:
+                self.log_test("gussdub@gmail.com - Setup Failed", False, f"Could not setup gussdub@gmail.com account: {response}")
+                return False
+
+        # Switch to gussdub token
+        self.token = gussdub_token
+
+        # Step 2: Test GET /api/clients - verify it returns data
+        success, response = self.make_request('GET', 'clients', expected_status=200)
+        if success and isinstance(response, list):
+            self.log_test("gussdub@gmail.com - GET /api/clients", True, f"GET /api/clients returned {len(response)} clients")
+            existing_clients_count = len(response)
+        else:
+            self.log_test("gussdub@gmail.com - GET /api/clients", False, f"GET /api/clients failed: {response}")
+            existing_clients_count = 0
+
+        # Step 3: Create test client as specified in review request
+        test_client_data = {
+            "name": "Client Test",
+            "email": "client.test@example.com",
+            "phone": "514-123-4567",
+            "address": "123 Rue Test",
+            "city": "Montréal",
+            "postal_code": "H1A 1A1",
+            "country": "Canada"
+        }
+        
+        success, response = self.make_request('POST', 'clients', test_client_data, 200)
+        if success and 'id' in response:
+            test_client_id = response['id']
+            self.log_test("gussdub@gmail.com - Create Test Client", True, f"Created test client with ID: {test_client_id}")
+            
+            # Verify client has required fields (id, name, email)
+            required_fields = ['id', 'name', 'email']
+            missing_fields = [field for field in required_fields if field not in response]
+            
+            if not missing_fields:
+                self.log_test("gussdub@gmail.com - Client Data Structure", True, f"Client has all required fields: {required_fields}")
+            else:
+                self.log_test("gussdub@gmail.com - Client Data Structure", False, f"Client missing required fields: {missing_fields}")
+        else:
+            self.log_test("gussdub@gmail.com - Create Test Client", False, f"Failed to create test client: {response}")
+            test_client_id = None
+
+        # Step 4: Verify GET /api/clients now returns the new client
+        success, response = self.make_request('GET', 'clients', expected_status=200)
+        if success and isinstance(response, list):
+            new_clients_count = len(response)
+            if new_clients_count > existing_clients_count:
+                self.log_test("gussdub@gmail.com - Verify Client in List", True, f"Client list now has {new_clients_count} clients (was {existing_clients_count})")
+                
+                # Find our test client in the list
+                test_client_found = False
+                for client in response:
+                    if client.get('name') == 'Client Test' and client.get('email') == 'client.test@example.com':
+                        test_client_found = True
+                        # Verify it has the required fields for frontend
+                        if 'id' in client and 'name' in client and 'email' in client:
+                            self.log_test("gussdub@gmail.com - Client Frontend Fields", True, f"Test client has id, name, email fields for frontend selection")
+                        else:
+                            self.log_test("gussdub@gmail.com - Client Frontend Fields", False, f"Test client missing frontend fields: {client}")
+                        break
+                
+                if not test_client_found:
+                    self.log_test("gussdub@gmail.com - Test Client in List", False, "Test client not found in clients list")
+                else:
+                    self.log_test("gussdub@gmail.com - Test Client in List", True, "Test client found in clients list")
+            else:
+                self.log_test("gussdub@gmail.com - Verify Client in List", False, f"Client count didn't increase: {new_clients_count} vs {existing_clients_count}")
+        else:
+            self.log_test("gussdub@gmail.com - Verify Client in List", False, f"Failed to get updated clients list: {response}")
+
+        # Step 5: Test subscription access (should be exempt)
+        success, response = self.make_request('GET', 'subscription/user-status', expected_status=200)
+        if success:
+            has_access = response.get('has_access')
+            subscription_status = response.get('subscription_status')
+            if has_access == True:
+                self.log_test("gussdub@gmail.com - Subscription Access", True, f"Has access: {has_access}, status: {subscription_status} (exempt user)")
+            else:
+                self.log_test("gussdub@gmail.com - Subscription Access", False, f"Should have access but got: {response}")
+        else:
+            self.log_test("gussdub@gmail.com - Subscription Access", False, f"Failed to check subscription status: {response}")
+
+        # Step 6: Test with different user to verify isolation
+        # Create another user to test user isolation
+        import time
+        timestamp = str(int(time.time()))
+        other_user_data = {
+            "email": f"otheruser{timestamp}@example.com",
+            "password": "testpass123",
+            "company_name": "Other User Company"
+        }
+        
+        success, response = self.make_request('POST', 'auth/register', other_user_data, 200)
+        if success and 'access_token' in response:
+            other_token = response['access_token']
+            self.log_test("User Isolation - Other User Created", True, f"Created other user: {other_user_data['email']}")
+            
+            # Switch to other user
+            self.token = other_token
+            
+            # Check that other user doesn't see gussdub's clients
+            success, response = self.make_request('GET', 'clients', expected_status=200)
+            if success and isinstance(response, list):
+                # Should not contain gussdub's test client
+                gussdub_client_visible = any(
+                    client.get('name') == 'Client Test' and client.get('email') == 'client.test@example.com'
+                    for client in response
+                )
+                
+                if not gussdub_client_visible:
+                    self.log_test("User Isolation - Client Privacy", True, "Other user cannot see gussdub's clients (proper isolation)")
+                else:
+                    self.log_test("User Isolation - Client Privacy", False, "Other user can see gussdub's clients (isolation broken)")
+            else:
+                self.log_test("User Isolation - Client Privacy", False, f"Failed to get other user's clients: {response}")
+        else:
+            self.log_test("User Isolation - Other User Created", False, f"Failed to create other user: {response}")
+
+        # Step 7: Check for 403 errors from subscription middleware
+        # Switch back to gussdub
+        self.token = gussdub_token
+        
+        # Test all protected endpoints that might be used in invoice/quote creation
+        protected_endpoints_for_forms = [
+            ('GET', 'clients', 'Clients for Forms'),
+            ('GET', 'products', 'Products for Forms'),
+            ('POST', 'invoices', 'Create Invoice', {
+                "client_id": test_client_id if test_client_id else "test-id",
+                "items": [{"description": "Test", "quantity": 1, "unit_price": 100}]
+            }),
+            ('POST', 'quotes', 'Create Quote', {
+                "client_id": test_client_id if test_client_id else "test-id",
+                "valid_until": (datetime.now() + timedelta(days=30)).isoformat(),
+                "items": [{"description": "Test", "quantity": 1, "unit_price": 100}]
+            })
+        ]
+
+        no_403_errors = True
+        for endpoint_data in protected_endpoints_for_forms:
+            if len(endpoint_data) == 3:
+                method, endpoint, test_name = endpoint_data
+                data = None
+            else:
+                method, endpoint, test_name, data = endpoint_data
+            
+            success, response = self.make_request(method, endpoint, data, expected_status=200)
+            if success:
+                self.log_test(f"gussdub@gmail.com - No 403 for {test_name}", True, f"No subscription errors for {endpoint}")
+            else:
+                if response.get('status_code') == 403 or 'abonnement' in str(response).lower():
+                    self.log_test(f"gussdub@gmail.com - No 403 for {test_name}", False, f"Got 403/subscription error for {endpoint}: {response}")
+                    no_403_errors = False
+                else:
+                    # Other errors (like validation) are acceptable
+                    self.log_test(f"gussdub@gmail.com - No 403 for {test_name}", True, f"No subscription errors for {endpoint} (got other error: {response})")
+
+        if no_403_errors:
+            self.log_test("gussdub@gmail.com - Overall No 403 Errors", True, "No subscription middleware 403 errors detected")
+        else:
+            self.log_test("gussdub@gmail.com - Overall No 403 Errors", False, "Some subscription middleware 403 errors detected")
+
+        # Cleanup test client
+        if test_client_id:
+            success, response = self.make_request('DELETE', f'clients/{test_client_id}', expected_status=200)
+            if success:
+                self.log_test("gussdub@gmail.com - Cleanup Test Client", True, "Test client cleaned up successfully")
+            else:
+                self.log_test("gussdub@gmail.com - Cleanup Test Client", False, f"Failed to cleanup test client: {response}")
+
+        # Restore original token
+        self.token = original_token
+        
+        return True
+
     def test_exemption_user_access(self):
         """Test exemption functionality for gussdub@gmail.com"""
         print("\n🔄 Testing Exemption User Access for gussdub@gmail.com...")
