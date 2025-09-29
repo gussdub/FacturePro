@@ -197,7 +197,11 @@ metadata:
   run_ui: true
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Registration and trial redirect workflow"
+    - "Trial setup page functionality"
+    - "Subscription backend endpoints"
+    - "Subscription alerts in interface"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
