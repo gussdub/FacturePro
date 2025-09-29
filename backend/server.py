@@ -749,7 +749,7 @@ async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_curr
     return new_quote
 
 @api_router.post("/quotes/{quote_id}/convert", response_model=Invoice)
-async def convert_quote_to_invoice(quote_id: str, due_date: datetime, current_user: User = Depends(get_current_user)):
+async def convert_quote_to_invoice(quote_id: str, due_date: datetime, current_user: User = Depends(get_current_user_with_subscription)):
     quote = await db.quotes.find_one({"id": quote_id, "user_id": current_user.id})
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
@@ -790,7 +790,7 @@ async def convert_quote_to_invoice(quote_id: str, due_date: datetime, current_us
     return new_invoice
 
 @api_router.delete("/quotes/{quote_id}")
-async def delete_quote(quote_id: str, current_user: User = Depends(get_current_user)):
+async def delete_quote(quote_id: str, current_user: User = Depends(get_current_user_with_subscription)):
     result = await db.quotes.delete_one({"id": quote_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Quote not found")
