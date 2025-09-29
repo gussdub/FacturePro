@@ -331,14 +331,14 @@ async def check_subscription_access(user: User):
             if trial_end.tzinfo is None:
                 trial_end = trial_end.replace(tzinfo=timezone.utc)
             if now < trial_end:
-            return True  # Trial is still valid
-        else:
-            # Trial has expired, check if they have an active subscription
-            await db.users.update_one(
-                {"id": user.id}, 
-                {"$set": {"subscription_status": "inactive", "is_active": False}}
-            )
-            return False
+                return True  # Trial is still valid
+            else:
+                # Trial has expired, check if they have an active subscription
+                await db.users.update_one(
+                    {"id": user.id}, 
+                    {"$set": {"subscription_status": "inactive", "is_active": False}}
+                )
+                return False
     
     # If user has active subscription
     if user.subscription_status == "active":
