@@ -62,6 +62,12 @@ class User(BaseModel):
     company_name: str
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Subscription fields
+    subscription_status: str = "trial"  # trial, active, inactive, cancelled
+    trial_end_date: Optional[datetime] = None
+    subscription_id: Optional[str] = None
+    current_period_end: Optional[datetime] = None
+    last_payment_date: Optional[datetime] = None
 
 class UserCreate(BaseModel):
     email: EmailStr
