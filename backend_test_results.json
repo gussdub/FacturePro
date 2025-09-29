@@ -1,20 +1,26 @@
 {
   "summary": {
-    "total_tests": 27,
-    "passed_tests": 17,
-    "success_rate": 62.96296296296296
+    "total_tests": 35,
+    "passed_tests": 24,
+    "success_rate": 68.57142857142857
   },
   "test_results": [
     {
-      "name": "User Registration",
+      "name": "Health Endpoint",
       "success": true,
-      "details": "User created with ID: 74e19147-bf15-49f7-8747-209d66548382",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T02:21:41.668405+00:00'}",
       "response_data": null
     },
     {
-      "name": "User Login",
+      "name": "User Registration",
       "success": true,
-      "details": "Login successful for user: login_test_20250928_215450@example.com",
+      "details": "User created with ID: b26d7c4a-19fb-4442-ba39-5dc90858bc8c",
+      "response_data": null
+    },
+    {
+      "name": "User Login (Existing User)",
+      "success": true,
+      "details": "Login successful for user: test@facturepro.com",
       "response_data": null
     },
     {
@@ -26,7 +32,7 @@
     {
       "name": "Create Client",
       "success": true,
-      "details": "Client created with ID: e52dfc17-1412-40ef-8bc5-0c3d66cb56f7",
+      "details": "Client created with ID: b89f67b2-aaab-4a31-938d-f49db08fcc20",
       "response_data": null
     },
     {
@@ -50,7 +56,7 @@
     {
       "name": "Create Invoice",
       "success": false,
-      "details": "Invoice calculations incorrect: {'id': '6c886ed0-f09e-4110-966f-174c58c0a7b9', 'user_id': 'c8c6a4c2-3d7c-4e82-9bcb-8ad4519e4c9b', 'client_id': 'e52dfc17-1412-40ef-8bc5-0c3d66cb56f7', 'invoice_number': 'INV-00001', 'issue_date': '2025-09-28T21:54:50.540923Z', 'due_date': '2025-10-28T21:54:50.499016', 'items': [{'description': 'Service de consultation', 'quantity': 2.0, 'unit_price': 100.0, 'total': 200.0}, {'description': 'D\u00e9veloppement web', 'quantity': 10.0, 'unit_price': 75.0, 'total': 750.0}], 'subtotal': 950.0, 'gst_rate': 5.0, 'pst_rate': 9.975, 'hst_rate': 0.0, 'gst_amount': 47.5, 'pst_amount': 94.76249999999999, 'hst_amount': 0.0, 'total_tax': 142.2625, 'total': 1092.2625, 'apply_gst': True, 'apply_pst': True, 'apply_hst': False, 'status': 'draft', 'payment_info': None, 'notes': 'Facture de test', 'province': 'QC', 'created_at': '2025-09-28T21:54:50.540930Z'}",
+      "details": "Invoice calculations incorrect: {'id': 'e2bceef0-3a0b-4b81-8585-b589e8ef3579', 'user_id': '3dffe423-f1a2-4a51-84a8-3e39534c6fdb', 'client_id': 'b89f67b2-aaab-4a31-938d-f49db08fcc20', 'invoice_number': 'INV-00001', 'issue_date': '2025-09-29T02:21:42.266517Z', 'due_date': '2025-10-29T02:21:42.232807', 'items': [{'description': 'Service de consultation', 'quantity': 2.0, 'unit_price': 100.0, 'total': 200.0}, {'description': 'D\u00e9veloppement web', 'quantity': 10.0, 'unit_price': 75.0, 'total': 750.0}], 'subtotal': 950.0, 'gst_rate': 5.0, 'pst_rate': 9.975, 'hst_rate': 0.0, 'gst_amount': 47.5, 'pst_amount': 94.76249999999999, 'hst_amount': 0.0, 'total_tax': 142.2625, 'total': 1092.2625, 'apply_gst': True, 'apply_pst': True, 'apply_hst': False, 'status': 'draft', 'payment_info': None, 'notes': 'Facture de test', 'province': 'QC', 'created_at': '2025-09-29T02:21:42.266528Z'}",
       "response_data": null
     },
     {
@@ -68,7 +74,7 @@
     {
       "name": "Create Quote",
       "success": false,
-      "details": "Quote calculations incorrect: {'id': 'cdea9198-5c05-4f8a-833c-540d9507dbaf', 'user_id': 'c8c6a4c2-3d7c-4e82-9bcb-8ad4519e4c9b', 'client_id': 'e52dfc17-1412-40ef-8bc5-0c3d66cb56f7', 'quote_number': 'QTE-00001', 'issue_date': '2025-09-28T21:54:50.689083Z', 'valid_until': '2025-10-13T21:54:50.626641', 'items': [{'description': 'Audit SEO', 'quantity': 1.0, 'unit_price': 500.0, 'total': 500.0}], 'subtotal': 500.0, 'gst_rate': 5.0, 'pst_rate': 9.975, 'hst_rate': 0.0, 'gst_amount': 25.0, 'pst_amount': 49.87499999999999, 'hst_amount': 0.0, 'total_tax': 74.875, 'total': 574.875, 'apply_gst': True, 'apply_pst': True, 'apply_hst': False, 'province': 'QC', 'status': 'pending', 'notes': 'Devis pour audit SEO', 'created_at': '2025-09-28T21:54:50.689090Z'}",
+      "details": "Quote calculations incorrect: {'id': 'c0797f0e-7119-4f14-8185-5b77853edace', 'user_id': '3dffe423-f1a2-4a51-84a8-3e39534c6fdb', 'client_id': 'b89f67b2-aaab-4a31-938d-f49db08fcc20', 'quote_number': 'QTE-00001', 'issue_date': '2025-09-29T02:21:42.490835Z', 'valid_until': '2025-10-14T02:21:42.458109', 'items': [{'description': 'Audit SEO', 'quantity': 1.0, 'unit_price': 500.0, 'total': 500.0}], 'subtotal': 500.0, 'gst_rate': 5.0, 'pst_rate': 9.975, 'hst_rate': 0.0, 'gst_amount': 25.0, 'pst_amount': 49.87499999999999, 'hst_amount': 0.0, 'total_tax': 74.875, 'total': 574.875, 'apply_gst': True, 'apply_pst': True, 'apply_hst': False, 'province': 'QC', 'status': 'pending', 'notes': 'Devis pour audit SEO', 'created_at': '2025-09-29T02:21:42.490845Z'}",
       "response_data": null
     },
     {
@@ -86,13 +92,13 @@
     {
       "name": "Delete Invoice - Create Test Invoice",
       "success": true,
-      "details": "Test invoice created: 3b8131ba-e0ce-4732-84de-1b42f09d8d7e",
+      "details": "Test invoice created: f8893fbf-c107-4aeb-9015-48c95d3b5fdf",
       "response_data": null
     },
     {
       "name": "Delete Invoice - Successful Deletion",
       "success": true,
-      "details": "Invoice 3b8131ba-e0ce-4732-84de-1b42f09d8d7e deleted successfully",
+      "details": "Invoice f8893fbf-c107-4aeb-9015-48c95d3b5fdf deleted successfully",
       "response_data": null
     },
     {
@@ -116,13 +122,13 @@
     {
       "name": "Delete Quote - Create Test Quote",
       "success": true,
-      "details": "Test quote created: 40d44e3d-f0dc-4dc1-83ca-86ad0d9b10db",
+      "details": "Test quote created: fe7e2477-5b67-42cc-90e6-e50487719fa7",
       "response_data": null
     },
     {
       "name": "Delete Quote - Successful Deletion",
       "success": true,
-      "details": "Quote 40d44e3d-f0dc-4dc1-83ca-86ad0d9b10db deleted successfully",
+      "details": "Quote fe7e2477-5b67-42cc-90e6-e50487719fa7 deleted successfully",
       "response_data": null
     },
     {
@@ -146,13 +152,55 @@
     {
       "name": "Get Company Settings",
       "success": true,
-      "details": "Settings retrieved for: Login Test Company",
+      "details": "Settings retrieved for: FacturePro Test Company",
       "response_data": null
     },
     {
       "name": "Update Company Settings",
       "success": true,
       "details": "Company settings updated successfully",
+      "response_data": null
+    },
+    {
+      "name": "Create Product",
+      "success": true,
+      "details": "Product created with ID: 0f51ced8-04ff-4090-addc-14726746d592",
+      "response_data": null
+    },
+    {
+      "name": "Get Products List",
+      "success": true,
+      "details": "Retrieved 1 products",
+      "response_data": null
+    },
+    {
+      "name": "Get Specific Product",
+      "success": true,
+      "details": "Retrieved product: Service de consultation",
+      "response_data": null
+    },
+    {
+      "name": "Update Product",
+      "success": true,
+      "details": "Product updated successfully",
+      "response_data": null
+    },
+    {
+      "name": "Delete Product",
+      "success": true,
+      "details": "Product deleted successfully",
+      "response_data": null
+    },
+    {
+      "name": "Subscription Endpoint",
+      "success": false,
+      "details": "Subscription endpoint failed: {'detail': 'Not Found'}",
+      "response_data": null
+    },
+    {
+      "name": "CORS Headers",
+      "success": true,
+      "details": "CORS headers present: {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': None, 'Access-Control-Allow-Headers': None}",
       "response_data": null
     },
     {
