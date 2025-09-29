@@ -1346,9 +1346,15 @@ async def get_user_subscription_status(current_user: User = Depends(get_current_
         # Calculate remaining days
         days_remaining = 0
         if current_user.subscription_status == "trial" and current_user.trial_end_date:
-            days_remaining = max(0, (current_user.trial_end_date - now).days)
+            trial_end = current_user.trial_end_date
+            if trial_end.tzinfo is None:
+                trial_end = trial_end.replace(tzinfo=timezone.utc)
+            days_remaining = max(0, (trial_end - now).days)
         elif current_user.current_period_end:
-            days_remaining = max(0, (current_user.current_period_end - now).days)
+            period_end = current_user.current_period_end
+            if period_end.tzinfo is None:
+                period_end = period_end.replace(tzinfo=timezone.utc)
+            days_remaining = max(0, (period_end - now).days)
         
         return {
             "subscription_status": current_user.subscription_status,
