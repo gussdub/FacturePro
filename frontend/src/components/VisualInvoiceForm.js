@@ -169,14 +169,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                   <div className="text-[8px]">Logo</div>
                 </div>
               </div>
-            )}
-            {/* Debug: Show if settings exist */}
-            {process.env.NODE_ENV === 'development' && (
-              <div className="text-xs text-white/50">
-                Settings: {settings ? 'Loaded' : 'Not loaded'} | 
-                Logo: {settings?.logo_url ? 'Present' : 'Missing'}
-              </div>
-            )}
+            }
             <div>
               <div className="flex items-center space-x-2 mb-1">
                 <div className="px-3 py-2 bg-white/20 rounded-lg">
