@@ -32,7 +32,7 @@ STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 
 # Security
 security = HTTPBearer()
-SECRET_KEY = os.environ.get("JWT_SECRET", "your-secret-key-change-in-production")
+SECRET_KEY = os.environ.get("JWT_SECRET", "votre-cle-secrete-jwt-changez-en-production")
 ALGORITHM = "HS256"
 
 # Create the main app
