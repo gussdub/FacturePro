@@ -37,6 +37,7 @@ const Layout = () => {
     { name: 'Factures', href: '/invoices', icon: FileText, current: location.pathname === '/invoices' },
     { name: 'Soumissions', href: '/quotes', icon: ScrollText, current: location.pathname === '/quotes' },
     { name: 'Exports', href: '/export', icon: BarChart3, current: location.pathname === '/export' },
+    { name: 'Abonnement', href: '/subscription', icon: Crown, current: location.pathname === '/subscription' },
     { name: 'Paramètres', href: '/settings', icon: Settings, current: location.pathname === '/settings' },
   ];
 
