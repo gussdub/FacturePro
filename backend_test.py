@@ -811,8 +811,8 @@ class BillingAPITester:
         self.test_company_settings()
         self.test_products_management()
         
-        # Subscription endpoint (may fail without Stripe - that's OK)
-        self.test_subscription_endpoint()
+        # Comprehensive subscription system testing (HIGH priority - review request)
+        self.test_subscription_system()
         
         # CORS and error handling
         self.test_cors_headers()
