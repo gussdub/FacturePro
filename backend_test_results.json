@@ -1,20 +1,20 @@
 {
   "summary": {
-    "total_tests": 29,
+    "total_tests": 30,
     "passed_tests": 19,
-    "success_rate": 65.51724137931035
+    "success_rate": 63.33333333333333
   },
   "test_results": [
     {
       "name": "Health Endpoint",
       "success": true,
-      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T21:22:31.919181+00:00'}",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-09-29T22:46:43.251651+00:00'}",
       "response_data": null
     },
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: 394b10d5-16ca-4306-8794-0d37ee99eeed",
+      "details": "User created with ID: b220241f-8891-473b-bd61-988d1b809d16",
       "response_data": null
     },
     {
@@ -74,7 +74,7 @@
     {
       "name": "Subscription - New User Registration",
       "success": true,
-      "details": "User created with trial: ccac983d-e9ed-4fa5-8634-e84cb2b3db58",
+      "details": "User created with trial: a7cf40a7-d7b8-4f05-849a-38e1f50a30e4",
       "response_data": null
     },
     {
@@ -92,13 +92,13 @@
     {
       "name": "Subscription - Monthly Checkout Creation",
       "success": true,
-      "details": "Monthly checkout session created: cs_test_a1atQacCb8QYkWOgYG3VJTtT6Xg7gIt2ddcdrNDhRkOrGWsYfzdVLOU1a3",
+      "details": "Monthly checkout session created: cs_test_a1pOqINtOsNWsMITzSfng9U1hwJf2uUcxFJeNzNH82j3EJMaD43iBCOxFF",
       "response_data": null
     },
     {
       "name": "Subscription - Annual Checkout Creation",
       "success": true,
-      "details": "Annual checkout session created: cs_test_a1TM3d8UPgLEvOIME1tYKFzVIx8OOpSvrR3G5imSaDWxI9AZWrllapz3pA",
+      "details": "Annual checkout session created: cs_test_a19jZ7Hv8jwdocudY4by6bfa9Ssxs5abPVhxSUp7xT22RHAoSQd97NYirV",
       "response_data": null
     },
     {
@@ -134,7 +134,7 @@
     {
       "name": "Exemption Logic - Test User Created",
       "success": true,
-      "details": "Created test user: testexempt1759180961@gmail.com",
+      "details": "Created test user: testexempt1759186005@gmail.com",
       "response_data": null
     },
     {
@@ -159,6 +159,12 @@
       "name": "Exemption Logic - Code Implementation",
       "success": true,
       "details": "Exemption logic is implemented in check_subscription_access() function with EXEMPT_USERS list containing gussdub@gmail.com",
+      "response_data": null
+    },
+    {
+      "name": "gussdub@gmail.com - Setup Failed",
+      "success": false,
+      "details": "Could not setup gussdub@gmail.com account: {'detail': 'Email already registered'}",
       "response_data": null
     },
     {
