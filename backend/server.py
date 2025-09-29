@@ -1014,7 +1014,7 @@ async def export_invoices_data(
 
 # Dashboard stats
 @api_router.get("/dashboard/stats")
-async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
+async def get_dashboard_stats(current_user: User = Depends(get_current_user_with_subscription)):
     # Get counts
     total_clients = await db.clients.count_documents({"user_id": current_user.id})
     total_invoices = await db.invoices.count_documents({"user_id": current_user.id})
