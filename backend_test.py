@@ -206,24 +206,138 @@ class BillingAPITester:
 
         return True
 
-    def test_subscription_endpoint(self):
-        """Test subscription endpoint (may fail without valid Stripe key - that's OK)"""
-        success, response = self.make_request('GET', 'subscription/current', expected_status=200)
+    def test_subscription_system(self):
+        """Test complete subscription system as requested in review"""
+        print("\n🔄 Testing Subscription System...")
         
-        if success:
-            self.log_test("Subscription Endpoint", True, f"Subscription endpoint accessible: {response}")
-            return True
+        # Test 1: Register new user with trial setup
+        trial_user_data = {
+            "email": "testsubscription@facturepro.com",
+            "password": "testpass123",
+            "company_name": "FacturePro Test Subscription"
+        }
+        
+        success, response = self.make_request('POST', 'auth/register', trial_user_data, 200)
+        if success and 'access_token' in response:
+            trial_token = response['access_token']
+            trial_user_id = response['user']['id']
+            self.log_test("Subscription - New User Registration", True, f"User created with trial: {trial_user_id}")
         else:
-            # Check if it's a 404 (endpoint not found) or other expected error
-            if response.get('detail') == 'Not Found':
-                self.log_test("Subscription Endpoint", True, f"Subscription endpoint returns 404 (may not be implemented yet): {response}")
-                return True
-            elif 'stripe' in str(response).lower() or 'api_key' in str(response).lower():
-                self.log_test("Subscription Endpoint", True, f"Subscription endpoint accessible but Stripe not configured (expected): {response}")
-                return True
+            # Try login if user already exists
+            login_data = {"email": "testsubscription@facturepro.com", "password": "testpass123"}
+            success, response = self.make_request('POST', 'auth/login', login_data, 200)
+            if success and 'access_token' in response:
+                trial_token = response['access_token']
+                trial_user_id = response['user']['id']
+                self.log_test("Subscription - Existing User Login", True, f"Logged in existing user: {trial_user_id}")
             else:
-                self.log_test("Subscription Endpoint", False, f"Subscription endpoint failed: {response}")
+                self.log_test("Subscription - User Setup", False, f"Failed to setup test user: {response}")
                 return False
+
+        # Store original token and switch to trial user
+        original_token = self.token
+        self.token = trial_token
+
+        # Test 2: Check user subscription status (should be trial with 14 days)
+        success, response = self.make_request('GET', 'subscription/user-status', expected_status=200)
+        if success:
+            if (response.get('subscription_status') == 'trial' and 
+                response.get('has_access') == True and
+                response.get('days_remaining', 0) > 0):
+                self.log_test("Subscription - Trial Status Check", True, f"Trial active with {response.get('days_remaining')} days remaining")
+            else:
+                self.log_test("Subscription - Trial Status Check", False, f"Unexpected trial status: {response}")
+        else:
+            self.log_test("Subscription - Trial Status Check", False, f"Failed to get subscription status: {response}")
+
+        # Test 3: Test subscription middleware - protected endpoints should work during trial
+        success, response = self.make_request('GET', 'clients', expected_status=200)
+        if success:
+            self.log_test("Subscription - Middleware Access During Trial", True, "Protected endpoints accessible during trial")
+        else:
+            self.log_test("Subscription - Middleware Access During Trial", False, f"Protected endpoints blocked during trial: {response}")
+
+        # Test 4: Test checkout session creation for monthly plan (15$ CAD)
+        checkout_data = {"plan": "monthly"}
+        success, response = self.make_request('POST', 'subscription/checkout', checkout_data, 200)
+        if success and 'checkout_url' in response and 'session_id' in response:
+            monthly_session_id = response['session_id']
+            self.log_test("Subscription - Monthly Checkout Creation", True, f"Monthly checkout session created: {monthly_session_id}")
+        else:
+            self.log_test("Subscription - Monthly Checkout Creation", False, f"Failed to create monthly checkout: {response}")
+            monthly_session_id = None
+
+        # Test 5: Test checkout session creation for annual plan (150$ CAD)
+        checkout_data = {"plan": "annual"}
+        success, response = self.make_request('POST', 'subscription/checkout', checkout_data, 200)
+        if success and 'checkout_url' in response and 'session_id' in response:
+            annual_session_id = response['session_id']
+            self.log_test("Subscription - Annual Checkout Creation", True, f"Annual checkout session created: {annual_session_id}")
+        else:
+            self.log_test("Subscription - Annual Checkout Creation", False, f"Failed to create annual checkout: {response}")
+            annual_session_id = None
+
+        # Test 6: Check checkout status (will be unpaid since we're not actually paying)
+        if monthly_session_id:
+            success, response = self.make_request('GET', f'subscription/status/{monthly_session_id}', expected_status=200)
+            if success:
+                expected_statuses = ['open', 'unpaid', 'incomplete']
+                if response.get('payment_status') in expected_statuses or response.get('status') in expected_statuses:
+                    self.log_test("Subscription - Checkout Status Check", True, f"Checkout status: {response.get('payment_status', response.get('status'))}")
+                else:
+                    self.log_test("Subscription - Checkout Status Check", False, f"Unexpected checkout status: {response}")
+            else:
+                self.log_test("Subscription - Checkout Status Check", False, f"Failed to check checkout status: {response}")
+
+        # Test 7: Test subscription cancellation
+        success, response = self.make_request('POST', 'subscription/cancel', expected_status=200)
+        if success and 'message' in response:
+            self.log_test("Subscription - Cancellation", True, f"Subscription cancelled: {response['message']}")
+        else:
+            self.log_test("Subscription - Cancellation", False, f"Failed to cancel subscription: {response}")
+
+        # Test 8: Test webhook endpoint (simulate webhook call)
+        webhook_data = {
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "test_session_id",
+                    "payment_status": "paid",
+                    "metadata": {
+                        "user_id": trial_user_id,
+                        "plan": "monthly"
+                    }
+                }
+            }
+        }
+        
+        # Note: Webhook requires special headers, so we'll test if endpoint exists
+        success, response = self.make_request('POST', 'webhook/stripe', webhook_data, expected_status=400)  # Expect 400 due to missing signature
+        if response.get('detail') == 'Missing Stripe signature':
+            self.log_test("Subscription - Webhook Endpoint", True, "Webhook endpoint exists and validates signature")
+        else:
+            self.log_test("Subscription - Webhook Endpoint", False, f"Webhook endpoint issue: {response}")
+
+        # Test 9: Test invalid subscription plan
+        invalid_checkout_data = {"plan": "invalid_plan"}
+        success, response = self.make_request('POST', 'subscription/checkout', invalid_checkout_data, expected_status=400)
+        if success:  # success=True means we got expected 400
+            self.log_test("Subscription - Invalid Plan Validation", True, "Invalid plan correctly rejected")
+        else:
+            self.log_test("Subscription - Invalid Plan Validation", False, f"Invalid plan not properly validated: {response}")
+
+        # Test 10: Test subscription access after expiration (simulate expired trial)
+        # This would require manipulating the database, so we'll test the logic exists
+        success, response = self.make_request('GET', 'subscription/user-status', expected_status=200)
+        if success and 'has_access' in response and 'subscription_status' in response:
+            self.log_test("Subscription - Access Control Logic", True, "Subscription access control logic implemented")
+        else:
+            self.log_test("Subscription - Access Control Logic", False, f"Access control logic missing: {response}")
+
+        # Restore original token
+        self.token = original_token
+        
+        return True
 
     def test_cors_headers(self):
         """Test CORS headers are properly set"""
