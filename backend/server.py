@@ -963,7 +963,7 @@ async def export_invoices_data(
     status: str = None,
     start_date: str = None,
     end_date: str = None,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_with_subscription)
 ):
     query = {"user_id": current_user.id}
     
