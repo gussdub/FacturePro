@@ -1027,7 +1027,7 @@ async def create_subscription_checkout(
         
         checkout_request = CheckoutSessionRequest(
             amount=plan_details["amount"],
-            currency="usd",
+            currency="cad",
             success_url=success_url,
             cancel_url=cancel_url,
             metadata={
