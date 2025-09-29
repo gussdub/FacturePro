@@ -630,11 +630,15 @@ class BillingAPITester:
 
     def run_all_tests(self):
         """Run all API tests"""
-        print("🚀 Starting Billing API Tests...")
+        print("🚀 Starting FacturePro Backend API Tests...")
         print(f"Testing against: {self.base_url}")
         print("=" * 60)
 
-        # Authentication tests
+        # Health endpoint test (CRITICAL - mentioned in review request)
+        if not self.test_health_endpoint():
+            print("❌ Health endpoint failed, but continuing with other tests")
+
+        # Authentication tests (CRITICAL)
         if not self.test_user_registration():
             print("❌ Registration failed, stopping tests")
             return False
@@ -643,17 +647,25 @@ class BillingAPITester:
             print("❌ Login failed, stopping tests")
             return False
 
-        # Core functionality tests
+        # Core functionality tests (HIGH priority)
         self.test_dashboard_stats()
         self.test_client_management()
         self.test_invoice_management()
         self.test_quote_management()
         
-        # Delete functionality tests (specific to the review request)
+        # Delete functionality tests (HIGH priority - specific to the review request)
         self.test_delete_invoice()
         self.test_delete_quote()
         
+        # Settings and products (MEDIUM priority)
         self.test_company_settings()
+        self.test_products_management()
+        
+        # Subscription endpoint (may fail without Stripe - that's OK)
+        self.test_subscription_endpoint()
+        
+        # CORS and error handling
+        self.test_cors_headers()
         self.test_error_handling()
 
         # Cleanup
