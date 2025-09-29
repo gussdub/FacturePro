@@ -566,6 +566,46 @@ class PaymentUpdate(BaseModel):
     amount_paid: Optional[float] = None
     payment_notes: Optional[str] = None
 
+# Subscription and Payment Models
+class SubscriptionStatus(str, Enum):
+    active = "active"
+    trial = "trial"
+    canceled = "canceled"
+    past_due = "past_due"
+    suspended = "suspended"
+
+class SubscriptionPlan(str, Enum):
+    monthly = "monthly"
+    annual = "annual"
+
+class Subscription(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    plan: SubscriptionPlan
+    status: SubscriptionStatus
+    current_period_start: datetime
+    current_period_end: datetime
+    trial_end: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    canceled_at: Optional[datetime] = None
+    stripe_subscription_id: Optional[str] = None
+
+class PaymentTransaction(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    session_id: str
+    payment_id: Optional[str] = None
+    amount: float
+    currency: str = "usd"
+    status: str = "initiated"  # initiated, pending, paid, failed, expired
+    payment_status: str = "unpaid"  # unpaid, paid, failed
+    metadata: Optional[dict] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class CheckoutRequest(BaseModel):
+    plan: SubscriptionPlan
+
 @api_router.put("/invoices/{invoice_id}/status")
 async def update_invoice_status(invoice_id: str, payment_data: PaymentUpdate, current_user: User = Depends(get_current_user)):
     invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
