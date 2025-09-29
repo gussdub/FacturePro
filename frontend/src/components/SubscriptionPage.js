@@ -137,7 +137,7 @@ const SubscriptionPage = () => {
             </div>
             <h3 className="text-xl font-bold text-gray-900 mb-2">Plan Mensuel</h3>
             <div className="mb-4">
-              <span className="text-3xl font-bold text-gray-900">10$</span>
+              <span className="text-3xl font-bold text-gray-900">15$</span>
               <span className="text-gray-500 ml-1">/mois</span>
             </div>
             <p className="text-gray-600 text-sm">Parfait pour démarrer</p>
