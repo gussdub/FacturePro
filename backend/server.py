@@ -858,7 +858,7 @@ async def update_product(product_id: str, product_update: ProductCreate, current
     return Product(**updated_product)
 
 @api_router.delete("/products/{product_id}")
-async def delete_product(product_id: str, current_user: User = Depends(get_current_user)):
+async def delete_product(product_id: str, current_user: User = Depends(get_current_user_with_subscription)):
     result = await db.products.update_one(
         {"id": product_id, "user_id": current_user.id}, 
         {"$set": {"is_active": False}}
@@ -873,7 +873,7 @@ async def export_statistics(
     start_date: str = None,
     end_date: str = None,
     period: str = "month",  # week, month, year
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_with_subscription)
 ):
     # Parse dates
     if start_date:
