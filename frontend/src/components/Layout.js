@@ -30,6 +30,7 @@ const Layout = () => {
   const [profileOpen, setProfileOpen] = useState(false);
   const [settings, setSettings] = useState(null);
   const { user, logout } = useAuth();
+  const { subscriptionStatus } = useSubscription();
   const location = useLocation();
 
   const navigation = [
