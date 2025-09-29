@@ -6,6 +6,13 @@ import { useNavigate } from 'react-router-dom';
 
 const SubscriptionAlert = ({ subscriptionStatus }) => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+
+  // Exempt users (never show subscription alerts)
+  const EXEMPT_USERS = ["gussdub@gmail.com"];
+  if (user && EXEMPT_USERS.includes(user.email)) {
+    return null; // Never show alerts for exempt users
+  }
 
   if (!subscriptionStatus) {
     return null;
