@@ -60,9 +60,9 @@ const Dashboard = () => {
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('fr-FR', {
+    return new Intl.NumberFormat('en-CA', {
       style: 'currency',
-      currency: 'EUR'
+      currency: 'USD'
     }).format(amount);
   };
 
