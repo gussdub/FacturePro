@@ -240,7 +240,12 @@ function App() {
               <Route path="quotes" element={<QuotesPage />} />
               <Route path="export" element={<ExportPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="subscription" element={<SubscriptionPage />} />
             </Route>
+            
+            {/* Subscription Routes (can be accessed without full auth) */}
+            <Route path="subscription/success" element={<SubscriptionSuccess />} />
+            <Route path="subscription/cancel" element={<SubscriptionCancel />} />
           </Routes>
         </BrowserRouter>
       </div>
