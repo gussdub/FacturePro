@@ -261,10 +261,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Registration and trial redirect workflow"
-    - "Trial setup page functionality"
-    - "Subscription backend endpoints"
-    - "Subscription alerts in interface"
+    - "Clients API for gussdub@gmail.com invoice/quote selection"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
