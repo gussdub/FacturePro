@@ -180,19 +180,15 @@ const ExportPage = () => {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Période
             </label>
-            <Select 
-              value={filters.period} 
-              onValueChange={(value) => setFilters(prev => ({ ...prev, period: value }))}
+            <select 
+              value={filters.period}
+              onChange={(e) => setFilters(prev => ({ ...prev, period: e.target.value }))}
+              className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="week">Semaine</SelectItem>
-                <SelectItem value="month">Mois</SelectItem>
-                <SelectItem value="year">Année</SelectItem>
-              </SelectContent>
-            </Select>
+              <option value="week">Semaine</option>
+              <option value="month">Mois</option>
+              <option value="year">Année</option>
+            </select>
           </div>
 
           <div>
