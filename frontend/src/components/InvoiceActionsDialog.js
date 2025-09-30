@@ -299,21 +299,18 @@ const InvoiceActionsDialog = ({ invoice, isOpen, onClose, onUpdate }) => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       Méthode de paiement
                     </label>
-                    <Select 
-                      value={paymentData.payment_method} 
-                      onValueChange={(value) => setPaymentData(prev => ({ ...prev, payment_method: value }))}
+                    <select 
+                      value={paymentData.payment_method}
+                      onChange={(e) => setPaymentData(prev => ({ ...prev, payment_method: e.target.value }))}
+                      className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                     >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {paymentMethods.map(method => (
-                          <SelectItem key={method.value} value={method.value}>
-                            {method.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      <option value="">Sélectionner méthode</option>
+                      {paymentMethods.map(method => (
+                        <option key={method.value} value={method.value}>
+                          {method.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div>
