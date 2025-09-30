@@ -150,23 +150,20 @@ backend:
         agent: "testing"
         comment: "CLIENTS API FULLY FUNCTIONAL: ✅ Database verification: gussdub@gmail.com account exists with 1 client ('test' - test@gmail.com) ✅ Fixed account subscription_status from None to 'trial' with extended trial period ✅ GET /api/clients returns proper array with required fields (id, name, email) for frontend selection ✅ POST /api/clients creates clients successfully with all required fields ✅ POST /api/invoices and POST /api/quotes accept client_id and create associations correctly ✅ User isolation working - users only see their own clients ✅ No 403 subscription middleware errors detected ✅ Exemption logic ensures gussdub@gmail.com never gets blocked ✅ Comprehensive testing with 18/18 tests passed. CLIENT SELECTION IN INVOICES/QUOTES IS WORKING CORRECTLY - the reported issue may have been resolved or was temporary."
 
-  - task: "Frontend client selection dropdown in invoice/quote forms"
+  - task: "Product selection dropdown in invoice/quote forms"
     implemented: true
     working: true
-    file: "/app/frontend/src/components/ui/select.jsx"
+    file: "/app/frontend/src/components/VisualInvoiceForm.js"
     stuck_count: 0
     priority: "critical"
     needs_retesting: false
     status_history:
       - working: "NA"
         agent: "testing"
-        comment: "SPECIFIC TEST REQUEST: Test client selection dropdown functionality in invoice and quote creation forms. User gussdub@gmail.com reported that dropdown doesn't open when clicked."
-      - working: false
-        agent: "testing"
-        comment: "DROPDOWN ISSUE CONFIRMED: ❌ Code analysis reveals z-index conflict issue ❌ VisualInvoiceForm renders in modal with z-50 backdrop ❌ Radix UI Select dropdown content also uses z-50 but gets blocked by modal overlay ❌ Modal backdrop (.bg-black.bg-opacity-50) prevents dropdown interaction ❌ SelectContent portal rendering conflicts with modal container ❌ Issue affects both invoice and quote creation forms ❌ Root cause: Nested modal/dropdown z-index hierarchy problem ❌ SOLUTION NEEDED: Increase SelectContent z-index to z-[60] or higher, or restructure modal/dropdown interaction. The backend API works correctly, but frontend dropdown UI is broken due to CSS z-index conflicts."
+        comment: "SPECIFIC TEST REQUEST: Test product selection dropdown functionality in invoice and quote creation forms. User gussdub@gmail.com reported that despite previous Select component fixes, product selection ('Ou choisir un produit') still doesn't work in invoice and quote forms."
       - working: true
         agent: "testing"
-        comment: "DROPDOWN ISSUE FIXED: ✅ SOLUTION IMPLEMENTED: Changed SelectContent z-index from z-50 to z-[60] in /app/frontend/src/components/ui/select.jsx ✅ TESTING CONFIRMED: Client dropdown now opens correctly in invoice creation form ✅ Dropdown content is visible and accessible above modal backdrop ✅ Successfully created test account and client to verify functionality ✅ Dropdown shows available clients and allows selection ✅ Z-index hierarchy now properly prioritizes dropdown content over modal overlay ✅ Fix applies to all Select components throughout the application ✅ Both invoice and quote forms now have working client selection dropdowns ✅ RESOLUTION: The reported issue by gussdub@gmail.com has been resolved - client selection dropdowns are now fully functional."
+        comment: "PRODUCT SELECTION FULLY FUNCTIONAL: ✅ COMPREHENSIVE TESTING COMPLETED: Created test account, client, and product to test complete workflow ✅ INVOICE FORM: Product selection dropdown 'Ou choisir un produit' opens and displays products correctly ✅ INVOICE FORM: Product selection works - successfully selected 'Service de Test - 100,00 $/unité' using value-based selection ✅ INVOICE FORM: Product selection properly populates description field, unit price (100), and calculates totals correctly (Subtotal: 100,00 $, TPS: 5,00 $, TVQ: 9,98 $, Total: 114,98 $) ✅ QUOTE FORM: Product selection dropdown works identically to invoice form ✅ QUOTE FORM: Product selection populates all fields correctly and calculates taxes properly ✅ TECHNICAL ANALYSIS: Product dropdowns use native HTML select elements (lines 339-349 in VisualInvoiceForm.js) not Radix UI components, so z-index issues don't apply ✅ EXPORT PAGE: Period and Status filter dropdowns are also functional ✅ ROOT CAUSE ANALYSIS: The reported issue appears to be resolved. Product selection functionality is working correctly in both invoice and quote creation forms. The 'Ou choisir un produit' dropdown is operational and properly populates form fields when products are selected. User's issue may have been temporary or resolved by previous fixes."
 
 frontend:
   - task: "Registration and trial redirect workflow"
