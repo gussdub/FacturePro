@@ -217,21 +217,17 @@ const ExportPage = () => {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Statut
             </label>
-            <Select 
-              value={filters.status} 
-              onValueChange={(value) => setFilters(prev => ({ ...prev, status: value }))}
+            <select 
+              value={filters.status}
+              onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
+              className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Tous</SelectItem>
-                <SelectItem value="draft">Brouillon</SelectItem>
-                <SelectItem value="sent">Envoyées</SelectItem>
-                <SelectItem value="paid">Payées</SelectItem>
-                <SelectItem value="overdue">En retard</SelectItem>
-              </SelectContent>
-            </Select>
+              <option value="all">Tous</option>
+              <option value="draft">Brouillon</option>
+              <option value="sent">Envoyées</option>
+              <option value="paid">Payées</option>
+              <option value="overdue">En retard</option>
+            </select>
           </div>
         </div>
       </Card>
