@@ -336,18 +336,17 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                     placeholder="Description du service/produit"
                     className="mb-2"
                   />
-                  <Select onValueChange={(value) => addProductToItem(index, value)}>
-                    <SelectTrigger className="text-xs bg-gray-50">
-                      <SelectValue placeholder="Ou choisir un produit" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {products.map(product => (
-                        <SelectItem key={product.id} value={product.id}>
-                          {product.name} - {formatCurrency(product.unit_price)}/{product.unit}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <select 
+                    onChange={(e) => addProductToItem(index, e.target.value)}
+                    className="w-full text-xs bg-gray-50 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  >
+                    <option value="">Ou choisir un produit</option>
+                    {products.map(product => (
+                      <option key={product.id} value={product.id}>
+                        {product.name} - {formatCurrency(product.unit_price)}/{product.unit}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 
                 <div className="col-span-2">
