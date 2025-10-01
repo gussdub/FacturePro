@@ -25,7 +25,10 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
     apply_pst: true,
     apply_hst: false,
     province: 'QC',
-    notes: ''
+    notes: '',
+    is_recurring: false,
+    recurrence_type: 'monthly',
+    recurrence_interval: 1
   });
 
   useEffect(() => {
