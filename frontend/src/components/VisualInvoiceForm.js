@@ -344,8 +344,11 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                       data-item-index={index}
                       value={item.product_id || ''}
                       onChange={(e) => {
+                        console.log('Product selected:', e.target.value);
                         handleItemChange(index, 'product_id', e.target.value);
-                        addProductToItem(index, e.target.value);
+                        if (e.target.value) {
+                          addProductToItem(index, e.target.value);
+                        }
                       }}
                       className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
