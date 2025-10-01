@@ -3,11 +3,25 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card } from './ui/card';
+import { Alert, AlertDescription } from './ui/alert';
 import { useAuth } from '../App';
-import { User, Mail, Building, Phone, MapPin, Save } from 'lucide-react';
+import { User, Mail, Building, Phone, MapPin, Save, Lock, Eye, EyeOff } from 'lucide-react';
+import axios from 'axios';
 
 const UserProfileModal = ({ isOpen, onClose }) => {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState('profile');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [passwordData, setPasswordData] = useState({
+    current_password: '',
+    new_password: '',
+    confirm_password: ''
+  });
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+  
   const [formData, setFormData] = useState({
     company_name: user?.company_name || '',
     email: user?.email || '',
