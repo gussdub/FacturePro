@@ -295,7 +295,8 @@ metadata:
 test_plan:
   current_focus:
     - "Product selection dropdown in invoice/quote forms"
-  stuck_tasks: []
+  stuck_tasks:
+    - "Product selection dropdown in invoice/quote forms"
   test_all: false
   test_priority: "high_first"
 
