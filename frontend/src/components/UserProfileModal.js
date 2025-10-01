@@ -86,7 +86,6 @@ const UserProfileModal = ({ isOpen, onClose }) => {
         </DialogHeader>
         
         <div className="space-y-6">
-        <div className="space-y-6">
           {/* Tabs */}
           <div className="flex border-b border-gray-200">
             <button
