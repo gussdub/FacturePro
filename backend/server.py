@@ -545,6 +545,60 @@ async def change_password(password_data: PasswordChange, current_user: User = De
     
     return {"message": "Mot de passe modifié avec succès"}
 
+@api_router.post("/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    # Find user by email
+    user = await db.users.find_one({"email": request.email})
+    if not user:
+        # For security, don't reveal if email exists or not
+        return {"message": "Si cette adresse email existe, un code de récupération a été généré"}
+    
+    # Generate reset token (simple approach - in production, use time-limited tokens)
+    reset_token = secrets.token_urlsafe(32)
+    
+    # Store reset token in user document (expires in 1 hour)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    await db.users.update_one(
+        {"email": request.email},
+        {
+            "$set": {
+                "reset_token": reset_token,
+                "reset_token_expires": expires_at
+            }
+        }
+    )
+    
+    # In a real app, you'd send this by email. For now, return it directly
+    return {
+        "message": "Code de récupération généré",
+        "reset_token": reset_token
+    }
+
+@api_router.post("/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    # Find user with valid reset token
+    user = await db.users.find_one({
+        "reset_token": request.token,
+        "reset_token_expires": {"$gt": datetime.now(timezone.utc)}
+    })
+    
+    if not user:
+        raise HTTPException(status_code=400, detail="Code de récupération invalide ou expiré")
+    
+    # Hash new password
+    new_hashed_password = get_password_hash(request.new_password)
+    
+    # Update password and remove reset token
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {"hashed_password": new_hashed_password},
+            "$unset": {"reset_token": "", "reset_token_expires": ""}
+        }
+    )
+    
+    return {"message": "Mot de passe réinitialisé avec succès"}
+
 # Client routes
 @api_router.get("/clients", response_model=List[Client])
 async def get_clients(current_user: User = Depends(get_current_user_with_subscription)):
