@@ -126,6 +126,11 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
     if (product) {
       handleItemChange(index, 'description', product.name + (product.description ? ` - ${product.description}` : ''));
       handleItemChange(index, 'unit_price', product.unit_price);
+      // Reset the select dropdown to show placeholder again
+      const selectElement = document.querySelector(`select[data-item-index="${index}"]`);
+      if (selectElement) {
+        selectElement.value = '';
+      }
     }
   };
 
