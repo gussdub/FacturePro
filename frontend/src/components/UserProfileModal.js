@@ -217,9 +217,9 @@ const UserProfileModal = ({ isOpen, onClose }) => {
 
           {/* Avatar Section - moved inside profile tab */}
           {activeTab === 'profile' && (
-
-          {/* Profile Form */}
-          <Card className="p-4">
+            <>
+              {/* Profile Form */}
+              <Card className="p-4">
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
