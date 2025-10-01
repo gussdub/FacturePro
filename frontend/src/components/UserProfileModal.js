@@ -305,6 +305,7 @@ const UserProfileModal = ({ isOpen, onClose }) => {
               Annuler
             </Button>
           </div>
+          </>
           )}
 
         </div>
