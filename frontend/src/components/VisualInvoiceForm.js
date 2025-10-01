@@ -17,7 +17,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
     invoice_number: '',
     issue_date: new Date().toISOString().split('T')[0],
     due_date: '',
-    items: [{ description: '', quantity: 1, unit_price: 0 }],
+    items: [{ description: '', quantity: 1, unit_price: 0, product_id: '' }],
     gst_rate: 5.0,
     pst_rate: 9.975,
     hst_rate: 0.0,
