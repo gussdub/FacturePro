@@ -1090,6 +1090,20 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user_with
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
+@api_router.get("/debug/user/{email}")
+async def debug_user_exists(email: str):
+    """Debug endpoint to check if user exists (temporary)"""
+    user = await db.users.find_one({"email": email})
+    if user:
+        return {
+            "exists": True,
+            "email": user["email"],
+            "company": user["company_name"],
+            "created_at": user["created_at"],
+            "subscription_status": user.get("subscription_status", "unknown")
+        }
+    return {"exists": False, "email": email}
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
