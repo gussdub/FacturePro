@@ -324,9 +324,10 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Product selection dropdown in invoice/quote forms"
+    - "facturepro.ca CORS configuration issue"
   stuck_tasks:
     - "Product selection dropdown in invoice/quote forms"
+    - "facturepro.ca CORS configuration issue"
   test_all: false
   test_priority: "high_first"
 
