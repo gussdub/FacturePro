@@ -38,6 +38,36 @@ const UserProfileModal = ({ isOpen, onClose }) => {
     }));
   };
 
+  const handlePasswordChange = async () => {
+    if (passwordData.new_password !== passwordData.confirm_password) {
+      setPasswordError('Les nouveaux mots de passe ne correspondent pas');
+      return;
+    }
+
+    if (passwordData.new_password.length < 6) {
+      setPasswordError('Le nouveau mot de passe doit contenir au moins 6 caractères');
+      return;
+    }
+
+    setLoading(true);
+    setPasswordError('');
+    setPasswordSuccess('');
+
+    try {
+      const response = await axios.put(`${process.env.REACT_APP_BACKEND_URL}/api/auth/change-password`, {
+        current_password: passwordData.current_password,
+        new_password: passwordData.new_password
+      });
+
+      setPasswordSuccess('Mot de passe modifié avec succès');
+      setPasswordData({ current_password: '', new_password: '', confirm_password: '' });
+    } catch (error) {
+      setPasswordError(error.response?.data?.detail || 'Erreur lors du changement de mot de passe');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSave = () => {
     // Ici vous pouvez implémenter la sauvegarde
     console.log('Saving profile:', formData);
