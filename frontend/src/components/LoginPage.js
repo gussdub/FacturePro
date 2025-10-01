@@ -231,7 +231,7 @@ const LoginPage = () => {
               <div className="mt-4 text-center">
                 <button
                   type="button"
-                  onClick={() => alert('Fonctionnalité en cours de développement. Contactez le support pour réinitialiser votre mot de passe.')}
+                  onClick={() => setShowForgotPassword(true)}
                   className="text-sm text-indigo-600 hover:text-indigo-800 underline"
                 >
                   Mot de passe oublié ?
