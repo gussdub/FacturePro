@@ -103,9 +103,11 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
   };
 
   const handleItemChange = (index, field, value) => {
+    console.log(`Changing item ${index}, field ${field} to:`, value);
     const newItems = [...formData.items];
     newItems[index] = { ...newItems[index], [field]: value };
     setFormData(prev => ({ ...prev, items: newItems }));
+    console.log('Updated formData items:', newItems);
   };
 
   const addItem = () => {
