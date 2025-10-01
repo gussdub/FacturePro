@@ -338,26 +338,41 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
             {formData.items.map((item, index) => (
               <div key={index} className="grid grid-cols-12 gap-2 p-3 border-t border-gray-200">
                 <div className="col-span-5">
-                  <div className="flex gap-2">
-                    <Input
-                      value={item.description || ''}
-                      onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                      placeholder="Description du service/produit"
-                      className="flex-1"
-                    />
-                    <select 
-                      data-item-index={index}
-                      onChange={(e) => addProductToItem(index, e.target.value)}
-                      className="w-32 text-xs bg-gray-50 border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                      title="Choisir un produit prédéfini"
-                    >
-                      <option value="">Produits</option>
-                      {products.map(product => (
-                        <option key={product.id} value={product.id}>
-                          {product.name} - {formatCurrency(product.unit_price)}
-                        </option>
-                      ))}
-                    </select>
+                  {/* Product Selection Section */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-medium text-gray-600">Produit:</label>
+                      <select 
+                        data-item-index={index}
+                        onChange={(e) => addProductToItem(index, e.target.value)}
+                        className="flex-1 text-sm bg-blue-50 border border-blue-200 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="">-- Sélectionner un produit --</option>
+                        {products.map(product => (
+                          <option key={product.id} value={product.id}>
+                            {product.name} ({formatCurrency(product.unit_price)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    
+                    {/* Description Field */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-medium text-gray-600">Description:</label>
+                      <Input
+                        value={item.description || ''}
+                        onChange={(e) => handleItemChange(index, 'description', e.target.value)}
+                        placeholder="Description détaillée du service/produit"
+                        className="flex-1 text-sm"
+                      />
+                    </div>
+                    
+                    {/* Selected Product Info */}
+                    {item.selectedProduct && (
+                      <div className="text-xs text-green-600 bg-green-50 px-2 py-1 rounded">
+                        ✓ Produit sélectionné: {item.selectedProduct}
+                      </div>
+                    )}
                   </div>
                 </div>
                 
