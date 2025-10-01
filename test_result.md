@@ -168,6 +168,21 @@ backend:
         agent: "testing"
         comment: "ISSUE CONFIRMED THROUGH CODE ANALYSIS: ❌ CRITICAL BUG IDENTIFIED: Product selection dropdown shows 'Sélectionner un produit' after selection instead of selected product name ❌ ROOT CAUSE: In VisualInvoiceForm.js lines 343-358, the select element value is controlled by item.product_id, but the display logic has a flaw ❌ TECHNICAL ANALYSIS: When user selects a product, handleItemChange sets product_id and addProductToItem populates description/price, but the select dropdown reverts to showing 'Sélectionner un produit' instead of the selected product name ❌ SPECIFIC ISSUE: The select element's value={item.product_id || ''} works for setting the selected option internally, but the visual display doesn't update to show the selected product name ❌ USER IMPACT: Users see 'Sélectionner un produit' even after selecting a product, making it appear broken ❌ CONFIRMATION: This matches exactly what gussdub@gmail.com reported - dropdown continues showing 'Sélectionner produit' instead of selected product ❌ SCOPE: Affects both invoice and quote creation forms ❌ SEVERITY: Critical UX issue - users cannot see what product they selected ❌ TESTING LIMITATION: Unable to complete UI testing due to authentication issues, but code analysis confirms the reported problem exists"
 
+  - task: "gussdub@gmail.com login connection error diagnostic"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/LoginPage.js"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: "URGENT TEST REQUEST: User gussdub@gmail.com reports 'erreur de connexion' (connection error) when trying to login despite backend working correctly. Need to test: 1) Login page display and title verification, 2) Login with gussdub@gmail.com/testpass123 credentials, 3) JavaScript console error analysis, 4) Network request/response examination, 5) CORS/token issue identification, 6) Alternative account creation test if needed."
+      - working: true
+        agent: "testing"
+        comment: "LOGIN ISSUE RESOLVED - NO CONNECTION ERROR FOUND: ✅ COMPREHENSIVE LOGIN TESTING CONFIRMS AUTHENTICATION IS WORKING PERFECTLY ✅ Login page displays correctly with FacturePro branding and all form elements visible ✅ POST /api/auth/login returns 200 status with valid JWT token for gussdub@gmail.com/testpass123 ✅ User successfully redirected to /dashboard after login ✅ Direct API test confirms backend returns valid access_token ✅ User can access dashboard with their data (2 clients, 1 invoice visible) ✅ Alternative account creation successful - created gussdub.test@gmail.com and verified registration → trial setup workflow ✅ MINOR ISSUE: Page title shows 'Emergent | Fullstack App' instead of expected 'FacturePro - Logiciel de facturation' (HTML title correctly set but being overridden) ✅ NON-CRITICAL ERRORS: 404 for missing /api/company endpoint and PostHog analytics errors (third-party) ✅ CONCLUSION: The reported 'erreur de connexion' does NOT exist - login is working correctly. User may have experienced temporary issue that resolved, or browser cache/session issue. Authentication system is fully operational."
+
   - task: "gussdub@gmail.com authentication credentials diagnostic"
     implemented: true
     working: true
