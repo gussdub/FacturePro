@@ -520,6 +520,24 @@ async def login(user_credentials: UserLogin):
     
     return Token(access_token=access_token, user=user_response)
 
+@api_router.put("/auth/change-password")
+async def change_password(password_data: PasswordChange, current_user: User = Depends(get_current_user)):
+    # Verify current password
+    user = await db.users.find_one({"id": current_user.id})
+    if not user or not verify_password(password_data.current_password, user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Mot de passe actuel incorrect")
+    
+    # Hash new password
+    new_hashed_password = get_password_hash(password_data.new_password)
+    
+    # Update password
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"hashed_password": new_hashed_password}}
+    )
+    
+    return {"message": "Mot de passe modifié avec succès"}
+
 # Client routes
 @api_router.get("/clients", response_model=List[Client])
 async def get_clients(current_user: User = Depends(get_current_user_with_subscription)):
