@@ -206,6 +206,137 @@ class BillingAPITester:
 
         return True
 
+    def test_gussdub_authentication_issue(self):
+        """Test specific authentication issue for gussdub@gmail.com as requested in review"""
+        print("\n🔄 URGENT: Testing gussdub@gmail.com Authentication Issue...")
+        
+        # Store original token
+        original_token = self.token
+        
+        # Test passwords as specified in review request
+        test_passwords = ['testpass123', 'password123', 'admin123']
+        gussdub_token = None
+        successful_password = None
+        
+        print("🔍 Testing login with different passwords...")
+        
+        for password in test_passwords:
+            login_data = {
+                "email": "gussdub@gmail.com",
+                "password": password
+            }
+            
+            success, response = self.make_request('POST', 'auth/login', login_data, 200)
+            if success and 'access_token' in response:
+                gussdub_token = response['access_token']
+                gussdub_user_id = response['user']['id']
+                successful_password = password
+                self.log_test("gussdub@gmail.com - Login Success", True, f"Successfully logged in with password: {password}")
+                break
+            else:
+                print(f"❌ Login failed with password '{password}': {response.get('detail', 'Unknown error')}")
+        
+        # If login failed with all passwords, try to create the account
+        if not gussdub_token:
+            print("🔄 Login failed with all passwords, attempting to create account...")
+            
+            register_data = {
+                "email": "gussdub@gmail.com",
+                "password": "testpass123",
+                "company_name": "Gussdub Company"
+            }
+            
+            success, response = self.make_request('POST', 'auth/register', register_data, 200)
+            if success and 'access_token' in response:
+                gussdub_token = response['access_token']
+                gussdub_user_id = response['user']['id']
+                successful_password = "testpass123"
+                self.log_test("gussdub@gmail.com - Account Created", True, f"Created new account for gussdub@gmail.com")
+            else:
+                # Account might already exist but with different password
+                if response.get('detail') == 'Email already registered':
+                    self.log_test("gussdub@gmail.com - Account Exists", True, f"Account exists but password unknown: {response}")
+                    # Try to get account info without authentication
+                    print("⚠️ Account exists but cannot authenticate with tested passwords")
+                    return False
+                else:
+                    self.log_test("gussdub@gmail.com - Setup Failed", False, f"Could not create account: {response}")
+                    return False
+        
+        # Switch to gussdub token for further testing
+        self.token = gussdub_token
+        
+        # Test account status and subscription
+        success, response = self.make_request('GET', 'subscription/user-status', expected_status=200)
+        if success:
+            subscription_status = response.get('subscription_status')
+            has_access = response.get('has_access')
+            is_active = response.get('is_active', True)  # Default to True if not present
+            
+            self.log_test("gussdub@gmail.com - Account Status Check", True, 
+                         f"Status: {subscription_status}, Access: {has_access}, Active: {is_active}")
+            
+            # Check if user is properly exempt
+            if has_access == True:
+                self.log_test("gussdub@gmail.com - Exemption Status", True, "User has access (exemption working)")
+            else:
+                self.log_test("gussdub@gmail.com - Exemption Status", False, f"User should have access but got: {has_access}")
+        else:
+            self.log_test("gussdub@gmail.com - Account Status Check", False, f"Failed to get account status: {response}")
+        
+        # Test critical endpoints that user needs access to
+        critical_endpoints = [
+            ('GET', 'clients', 'Client Management'),
+            ('GET', 'products', 'Product Management'),
+            ('GET', 'invoices', 'Invoice Management'),
+            ('GET', 'quotes', 'Quote Management'),
+            ('GET', 'dashboard/stats', 'Dashboard Access')
+        ]
+        
+        all_endpoints_working = True
+        for method, endpoint, test_name in critical_endpoints:
+            success, response = self.make_request(method, endpoint, expected_status=200)
+            if success:
+                self.log_test(f"gussdub@gmail.com - {test_name}", True, f"Access to {endpoint} working")
+            else:
+                self.log_test(f"gussdub@gmail.com - {test_name}", False, f"Access denied to {endpoint}: {response}")
+                all_endpoints_working = False
+        
+        # Test product creation specifically (mentioned in review)
+        product_data = {
+            "name": "Test Product for Gussdub",
+            "description": "Test product creation",
+            "unit_price": 50.0,
+            "unit": "unité",
+            "category": "Test"
+        }
+        
+        success, response = self.make_request('POST', 'products', product_data, 200)
+        if success and 'id' in response:
+            test_product_id = response['id']
+            self.log_test("gussdub@gmail.com - Product Creation", True, f"Successfully created product: {test_product_id}")
+            
+            # Clean up test product
+            self.make_request('DELETE', f'products/{test_product_id}', expected_status=200)
+        else:
+            self.log_test("gussdub@gmail.com - Product Creation", False, f"Failed to create product: {response}")
+            all_endpoints_working = False
+        
+        # Restore original token
+        self.token = original_token
+        
+        # Summary for this critical test
+        if all_endpoints_working and gussdub_token:
+            self.log_test("gussdub@gmail.com - OVERALL STATUS", True, 
+                         f"✅ RESOLVED: User can authenticate with '{successful_password}' and access all features")
+            print(f"\n✅ SOLUTION: gussdub@gmail.com can login with password: '{successful_password}'")
+            return True
+        else:
+            self.log_test("gussdub@gmail.com - OVERALL STATUS", False, 
+                         "❌ CRITICAL: Authentication or access issues persist")
+            print(f"\n❌ ISSUE PERSISTS: gussdub@gmail.com authentication/access problems")
+            return False
+
     def test_gussdub_clients_api_issue(self):
         """Test specific clients API issue for gussdub@gmail.com"""
         print("\n🔄 Testing Clients API Issue for gussdub@gmail.com...")
