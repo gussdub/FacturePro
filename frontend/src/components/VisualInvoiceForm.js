@@ -343,18 +343,27 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                   <div className="flex items-center gap-2">
                     <label className="w-20 text-sm font-medium text-gray-700">Produit:</label>
                     <select 
-                      key={`product-${index}-${item.product_id}`} 
                       data-item-index={index}
                       value={item.product_id || ''}
                       onChange={(e) => {
-                        console.log('Product selected:', e.target.value);
-                        const newItems = [...formData.items];
-                        newItems[index] = { ...newItems[index], product_id: e.target.value };
-                        setFormData(prev => ({ ...prev, items: newItems }));
+                        const productId = e.target.value;
+                        console.log('Product selected:', productId);
                         
-                        if (e.target.value) {
-                          addProductToItem(index, e.target.value);
+                        // Update directly in one step
+                        const newItems = [...formData.items];
+                        newItems[index] = { ...newItems[index], product_id: productId };
+                        
+                        // If a product is selected, populate the fields
+                        if (productId) {
+                          const product = products.find(p => p.id === productId);
+                          if (product) {
+                            newItems[index].description = product.name + (product.description ? ` - ${product.description}` : '');
+                            newItems[index].unit_price = product.unit_price;
+                          }
                         }
+                        
+                        setFormData(prev => ({ ...prev, items: newItems }));
+                        console.log('Updated items:', newItems);
                       }}
                       className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
