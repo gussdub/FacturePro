@@ -343,11 +343,15 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                   <div className="flex items-center gap-2">
                     <label className="w-20 text-sm font-medium text-gray-700">Produit:</label>
                     <select 
+                      key={`product-${index}-${item.product_id}`} 
                       data-item-index={index}
                       value={item.product_id || ''}
                       onChange={(e) => {
                         console.log('Product selected:', e.target.value);
-                        handleItemChange(index, 'product_id', e.target.value);
+                        const newItems = [...formData.items];
+                        newItems[index] = { ...newItems[index], product_id: e.target.value };
+                        setFormData(prev => ({ ...prev, items: newItems }));
+                        
                         if (e.target.value) {
                           addProductToItem(index, e.target.value);
                         }
