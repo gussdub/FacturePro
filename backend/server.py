@@ -1166,10 +1166,17 @@ async def debug_user_exists(email: str):
     return {"exists": False, "email": email}
 
 # CORS middleware
+allowed_origins = [
+    "https://facturepro.ca",
+    "https://facture-wizard.preview.emergentagent.com",
+    "http://localhost:3000",
+    "*"
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
