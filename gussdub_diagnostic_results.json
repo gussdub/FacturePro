@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "user": "gussdub@gmail.com",
+    "issue": "Invalid authentication credentials for product creation",
+    "total_tests": 1,
+    "passed_tests": 0,
+    "success_rate": 0.0,
+    "timestamp": "2025-10-01T12:58:39.396888+00:00"
+  },
+  "detailed_results": [
+    {
+      "test": "Login/Registration for gussdub@gmail.com",
+      "success": false,
+      "details": "Could not login or create account",
+      "response": {
+        "detail": "Email already registered"
+      },
+      "timestamp": "2025-10-01T12:58:39.396638+00:00"
+    }
+  ]
+}
