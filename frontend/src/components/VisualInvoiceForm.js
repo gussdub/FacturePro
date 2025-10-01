@@ -435,6 +435,50 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
           </div>
         </div>
 
+        {/* Province and Tax Configuration */}
+        <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Configuration des taxes</h3>
+          <div className="flex items-center gap-4">
+            <label className="text-sm font-medium text-gray-700">Province:</label>
+            <select 
+              value={formData.province}
+              onChange={(e) => {
+                const province = e.target.value;
+                setFormData(prev => {
+                  if (province === 'ON') {
+                    return {
+                      ...prev,
+                      province: province,
+                      gst_rate: 0,
+                      pst_rate: 0,
+                      hst_rate: 13.0,
+                      apply_gst: false,
+                      apply_pst: false,
+                      apply_hst: true
+                    };
+                  } else if (province === 'QC') {
+                    return {
+                      ...prev,
+                      province: province,
+                      gst_rate: 5.0,
+                      pst_rate: 9.975,
+                      hst_rate: 0,
+                      apply_gst: true,
+                      apply_pst: true,
+                      apply_hst: false
+                    };
+                  }
+                  return { ...prev, province: province };
+                });
+              }}
+              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="QC">Québec (TPS 5% + TVQ 9.975%)</option>
+              <option value="ON">Ontario (HST 13%)</option>
+            </select>
+          </div>
+        </div>
+
         {/* Summary */}
         <div className="flex justify-between">
           <div className="w-1/2">
