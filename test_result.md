@@ -198,6 +198,21 @@ backend:
         agent: "testing"
         comment: "AUTHENTICATION ISSUE DIAGNOSED AND RESOLVED: ✅ ROOT CAUSE IDENTIFIED: The 'Invalid authentication credentials' error occurs in get_current_user() function (lines 313-315 server.py) BEFORE subscription/exemption logic is reached ✅ EXEMPTION VERIFICATION: Code analysis confirms EXEMPT_USERS = ['gussdub@gmail.com'] is correctly implemented and working ✅ BACKEND API TESTING: Created fresh test account and successfully tested POST /api/products - the API is working correctly ✅ AUTHENTICATION FLOW: JWT token validation happens first, then subscription checking - error occurs at token validation stage ✅ TECHNICAL ANALYSIS: This is a client-side authentication token issue (expired/invalid JWT), not a backend API or exemption problem ✅ SOLUTION CONFIRMED: User needs to log out completely and log back in to get fresh JWT token ✅ VERIFICATION: Product creation works perfectly with valid authentication - created and deleted test product successfully ✅ EXEMPTION STATUS: gussdub@gmail.com exemption logic is working correctly and will provide permanent free access once properly authenticated ✅ CONCLUSION: Backend is functioning correctly. Issue resolved by having user refresh their authentication token."
 
+  - task: "facturepro.ca CORS configuration issue"
+    implemented: false
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "critical"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: "URGENT TEST REQUEST: User gussdub@gmail.com reports 'erreur de connexion' (connection error) when trying to login on facturepro.ca despite backend working correctly. Need to test: 1) facturepro.ca accessibility, 2) Login with gussdub@gmail.com/testpass123 credentials, 3) JavaScript console error analysis, 4) Network request/response examination, 5) CORS/backend configuration issues."
+      - working: false
+        agent: "testing"
+        comment: "CRITICAL CORS ISSUE IDENTIFIED ON FACTUREPRO.CA: ❌ ISSUE CONFIRMED: facturepro.ca login fails with 'Erreur de connexion' due to CORS policy blocking API requests ❌ ROOT CAUSE: facturepro.ca frontend tries to make API calls to https://facture-wizard.emergent.host/api/auth/login but gets blocked by CORS policy ❌ TECHNICAL ANALYSIS: Browser console shows 'Access to XMLHttpRequest at https://facture-wizard.emergent.host/api/auth/login from origin https://facturepro.ca has been blocked by CORS policy: No Access-Control-Allow-Origin header is present on the requested resource' ❌ DEPLOYMENT ISSUE: facturepro.ca appears to be a separate deployment with different backend URL configuration than the working https://facture-wizard.preview.emergentagent.com ❌ BACKEND MISMATCH: facturepro.ca frontend is configured to use https://facture-wizard.emergent.host backend, but that backend doesn't allow CORS requests from facturepro.ca origin ❌ USER IMPACT: gussdub@gmail.com cannot login on facturepro.ca despite credentials being correct ❌ VERIFICATION: Login works perfectly on https://facture-wizard.preview.emergentagent.com but fails on facturepro.ca ❌ SOLUTION NEEDED: Backend at https://facture-wizard.emergent.host needs CORS configuration updated to allow requests from https://facturepro.ca origin, OR facturepro.ca frontend needs to be reconfigured to use correct backend URL ❌ URGENCY: HIGH - User cannot access their account on the production domain facturepro.ca"
+
 frontend:
   - task: "Registration and trial redirect workflow"
     implemented: true
