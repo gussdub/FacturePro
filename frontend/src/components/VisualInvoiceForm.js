@@ -125,10 +125,21 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
   };
 
   const addProductToItem = (index, productId) => {
+    if (!productId) return; // If empty selection, do nothing
+    
     const product = products.find(p => p.id === productId);
     if (product) {
-      handleItemChange(index, 'description', product.name + (product.description ? ` - ${product.description}` : ''));
-      handleItemChange(index, 'unit_price', product.unit_price);
+      // Update the item with product information
+      const newItems = [...formData.items];
+      newItems[index] = {
+        ...newItems[index],
+        description: product.name + (product.description ? ` - ${product.description}` : ''),
+        unit_price: product.unit_price,
+        selectedProduct: product.name // Store product name for display
+      };
+      
+      setFormData(prev => ({ ...prev, items: newItems }));
+      
       // Reset the select dropdown to show placeholder again
       const selectElement = document.querySelector(`select[data-item-index="${index}"]`);
       if (selectElement) {
