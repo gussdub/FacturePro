@@ -113,7 +113,9 @@ const InvoicesPage = () => {
         
         // Update status if needed
         if (status !== 'draft') {
-          await axios.put(`${API}/invoices/${response.data.id}/status?status=${status}`);
+          await axios.put(`${API}/invoices/${response.data.id}/status`, {
+            status: status
+          });
         }
       }
       
