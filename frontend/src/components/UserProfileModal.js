@@ -86,18 +86,137 @@ const UserProfileModal = ({ isOpen, onClose }) => {
         </DialogHeader>
         
         <div className="space-y-6">
-          {/* Avatar Section */}
-          <div className="flex items-center space-x-4">
-            <div className="w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center">
-              <span className="text-xl font-bold text-white">
-                {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
-              </span>
-            </div>
-            <div>
-              <h3 className="font-medium text-gray-900">{user?.company_name || 'Entreprise'}</h3>
-              <p className="text-sm text-gray-500">{user?.email}</p>
-            </div>
+        <div className="space-y-6">
+          {/* Tabs */}
+          <div className="flex border-b border-gray-200">
+            <button
+              onClick={() => setActiveTab('profile')}
+              className={`px-4 py-2 text-sm font-medium ${
+                activeTab === 'profile'
+                  ? 'border-b-2 border-indigo-500 text-indigo-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <User className="w-4 h-4 inline mr-2" />
+              Profil
+            </button>
+            <button
+              onClick={() => setActiveTab('password')}
+              className={`px-4 py-2 text-sm font-medium ${
+                activeTab === 'password'
+                  ? 'border-b-2 border-indigo-500 text-indigo-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <Lock className="w-4 h-4 inline mr-2" />
+              Mot de passe
+            </button>
           </div>
+
+          {activeTab === 'profile' && (
+            <>
+              {/* Avatar Section */}
+              <div className="flex items-center space-x-4">
+                <div className="w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center">
+                  <span className="text-xl font-bold text-white">
+                    {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                  </span>
+                </div>
+                <div>
+                  <h3 className="font-medium text-gray-900">{user?.company_name || 'Entreprise'}</h3>
+                  <p className="text-sm text-gray-500">{user?.email}</p>
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === 'password' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-gray-900">Changer le mot de passe</h3>
+              
+              {passwordError && (
+                <Alert className="border-red-200 bg-red-50">
+                  <AlertDescription className="text-red-800">{passwordError}</AlertDescription>
+                </Alert>
+              )}
+              
+              {passwordSuccess && (
+                <Alert className="border-green-200 bg-green-50">
+                  <AlertDescription className="text-green-800">{passwordSuccess}</AlertDescription>
+                </Alert>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Mot de passe actuel
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showCurrentPassword ? "text" : "password"}
+                    value={passwordData.current_password}
+                    onChange={(e) => setPasswordData(prev => ({ ...prev, current_password: e.target.value }))}
+                    placeholder="Entrez votre mot de passe actuel"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500"
+                  >
+                    {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nouveau mot de passe
+                </label>
+                <div className="relative">
+                  <Input
+                    type={showNewPassword ? "text" : "password"}
+                    value={passwordData.new_password}
+                    onChange={(e) => setPasswordData(prev => ({ ...prev, new_password: e.target.value }))}
+                    placeholder="Entrez un nouveau mot de passe"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewPassword(!showNewPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500"
+                  >
+                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Confirmer le nouveau mot de passe
+                </label>
+                <Input
+                  type="password"
+                  value={passwordData.confirm_password}
+                  onChange={(e) => setPasswordData(prev => ({ ...prev, confirm_password: e.target.value }))}
+                  placeholder="Confirmez le nouveau mot de passe"
+                />
+              </div>
+
+              <Button
+                onClick={handlePasswordChange}
+                disabled={loading || !passwordData.current_password || !passwordData.new_password || !passwordData.confirm_password}
+                className="w-full"
+              >
+                {loading ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                ) : (
+                  <Lock className="w-4 h-4 mr-2" />
+                )}
+                Changer le mot de passe
+              </Button>
+            </div>
+          )}
+
+          {/* Avatar Section - moved inside profile tab */}
+          {activeTab === 'profile' && (
 
           {/* Profile Form */}
           <Card className="p-4">
