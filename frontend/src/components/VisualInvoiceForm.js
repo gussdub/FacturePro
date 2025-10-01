@@ -335,23 +335,27 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
             {formData.items.map((item, index) => (
               <div key={index} className="grid grid-cols-12 gap-2 p-3 border-t border-gray-200">
                 <div className="col-span-5">
-                  <Input
-                    value={item.description || ''}
-                    onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                    placeholder="Description du service/produit"
-                    className="mb-2"
-                  />
-                  <select 
-                    onChange={(e) => addProductToItem(index, e.target.value)}
-                    className="w-full text-xs bg-gray-50 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                  >
-                    <option value="">Ou choisir un produit</option>
-                    {products.map(product => (
-                      <option key={product.id} value={product.id}>
-                        {product.name} - {formatCurrency(product.unit_price)}/{product.unit}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex gap-2">
+                    <Input
+                      value={item.description || ''}
+                      onChange={(e) => handleItemChange(index, 'description', e.target.value)}
+                      placeholder="Description du service/produit"
+                      className="flex-1"
+                    />
+                    <select 
+                      data-item-index={index}
+                      onChange={(e) => addProductToItem(index, e.target.value)}
+                      className="w-32 text-xs bg-gray-50 border border-gray-300 rounded-md px-2 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      title="Choisir un produit prédéfini"
+                    >
+                      <option value="">Produits</option>
+                      {products.map(product => (
+                        <option key={product.id} value={product.id}>
+                          {product.name} - {formatCurrency(product.unit_price)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 
                 <div className="col-span-2">
