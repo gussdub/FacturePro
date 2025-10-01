@@ -126,17 +126,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
     }
   };
 
-  const addProductToItem = (index, productId) => {
-    if (!productId) return;
-    
-    const product = products.find(p => p.id === productId);
-    if (product) {
-      handleItemChange(index, 'description', product.name + (product.description ? ` - ${product.description}` : ''));
-      handleItemChange(index, 'unit_price', product.unit_price);
-      
-      // Ne PAS remettre le select à vide - laisser le produit sélectionné visible
-    }
-  };
+ 
 
   const clientData = getClientData();
 
