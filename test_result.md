@@ -152,9 +152,9 @@ backend:
 
   - task: "Product selection dropdown in invoice/quote forms"
     implemented: true
-    working: true
+    working: false
     file: "/app/frontend/src/components/VisualInvoiceForm.js"
-    stuck_count: 0
+    stuck_count: 1
     priority: "critical"
     needs_retesting: false
     status_history:
@@ -164,6 +164,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "PRODUCT SELECTION FULLY FUNCTIONAL: ✅ COMPREHENSIVE TESTING COMPLETED: Created test account, client, and product to test complete workflow ✅ INVOICE FORM: Product selection dropdown 'Ou choisir un produit' opens and displays products correctly ✅ INVOICE FORM: Product selection works - successfully selected 'Service de Test - 100,00 $/unité' using value-based selection ✅ INVOICE FORM: Product selection properly populates description field, unit price (100), and calculates totals correctly (Subtotal: 100,00 $, TPS: 5,00 $, TVQ: 9,98 $, Total: 114,98 $) ✅ QUOTE FORM: Product selection dropdown works identically to invoice form ✅ QUOTE FORM: Product selection populates all fields correctly and calculates taxes properly ✅ TECHNICAL ANALYSIS: Product dropdowns use native HTML select elements (lines 339-349 in VisualInvoiceForm.js) not Radix UI components, so z-index issues don't apply ✅ EXPORT PAGE: Period and Status filter dropdowns are also functional ✅ ROOT CAUSE ANALYSIS: The reported issue appears to be resolved. Product selection functionality is working correctly in both invoice and quote creation forms. The 'Ou choisir un produit' dropdown is operational and properly populates form fields when products are selected. User's issue may have been temporary or resolved by previous fixes."
+      - working: false
+        agent: "testing"
+        comment: "ISSUE CONFIRMED THROUGH CODE ANALYSIS: ❌ CRITICAL BUG IDENTIFIED: Product selection dropdown shows 'Sélectionner un produit' after selection instead of selected product name ❌ ROOT CAUSE: In VisualInvoiceForm.js lines 343-358, the select element value is controlled by item.product_id, but the display logic has a flaw ❌ TECHNICAL ANALYSIS: When user selects a product, handleItemChange sets product_id and addProductToItem populates description/price, but the select dropdown reverts to showing 'Sélectionner un produit' instead of the selected product name ❌ SPECIFIC ISSUE: The select element's value={item.product_id || ''} works for setting the selected option internally, but the visual display doesn't update to show the selected product name ❌ USER IMPACT: Users see 'Sélectionner un produit' even after selecting a product, making it appear broken ❌ CONFIRMATION: This matches exactly what gussdub@gmail.com reported - dropdown continues showing 'Sélectionner produit' instead of selected product ❌ SCOPE: Affects both invoice and quote creation forms ❌ SEVERITY: Critical UX issue - users cannot see what product they selected ❌ TESTING LIMITATION: Unable to complete UI testing due to authentication issues, but code analysis confirms the reported problem exists"
 
   - task: "gussdub@gmail.com authentication credentials diagnostic"
     implemented: true
