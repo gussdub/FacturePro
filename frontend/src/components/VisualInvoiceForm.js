@@ -476,6 +476,68 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
           </div>
         </div>
 
+        {/* Recurring Invoice Settings */}
+        {!isQuote && (
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Récurrence</h3>
+            <div className="space-y-4">
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="is_recurring"
+                  checked={formData.is_recurring}
+                  onChange={(e) => setFormData(prev => ({ ...prev, is_recurring: e.target.checked }))}
+                  className="mr-2"
+                />
+                <label htmlFor="is_recurring" className="text-sm font-medium text-gray-700">
+                  Facture récurrente
+                </label>
+              </div>
+              
+              {formData.is_recurring && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 ml-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Fréquence
+                    </label>
+                    <select 
+                      value={formData.recurrence_type}
+                      onChange={(e) => setFormData(prev => ({ ...prev, recurrence_type: e.target.value }))}
+                      className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                    >
+                      <option value="weekly">Hebdomadaire</option>
+                      <option value="monthly">Mensuel</option>
+                      <option value="quarterly">Trimestriel</option>
+                      <option value="yearly">Annuel</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Intervalle
+                    </label>
+                    <Input
+                      type="number"
+                      min="1"
+                      max="12"
+                      value={formData.recurrence_interval}
+                      onChange={(e) => setFormData(prev => ({ ...prev, recurrence_interval: parseInt(e.target.value) || 1 }))}
+                      placeholder="1"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Répéter tous les {formData.recurrence_interval} {
+                        formData.recurrence_type === 'weekly' ? 'semaine(s)' :
+                        formData.recurrence_type === 'monthly' ? 'mois' :
+                        formData.recurrence_type === 'quarterly' ? 'trimestre(s)' : 'année(s)'
+                      }
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex justify-between items-center mt-8 pt-6 border-t border-gray-200">
           <Button
