@@ -1289,6 +1289,9 @@ class BillingAPITester:
         # Test exemption user functionality (CRITICAL - specific review request)
         self.test_exemption_user_access()
         
+        # Test gussdub@gmail.com authentication issue (URGENT - specific review request)
+        self.test_gussdub_authentication_issue()
+        
         # Test specific clients API issue for gussdub@gmail.com (CRITICAL - specific review request)
         self.test_gussdub_clients_api_issue()
         
