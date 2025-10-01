@@ -4,6 +4,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
+import ForgotPasswordModal from './ForgotPasswordModal';
 import { Eye, EyeOff, Receipt, Zap, Shield, Clock } from 'lucide-react';
 
 const LoginPage = () => {
