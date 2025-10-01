@@ -294,8 +294,8 @@ const UserProfileModal = ({ isOpen, onClose }) => {
               </div>
             </div>
           </Card>
-
-          {/* Action Buttons */}
+          
+          {/* Action Buttons for Profile Tab */}
           <div className="flex space-x-3">
             <Button onClick={handleSave} className="flex-1">
               <Save className="w-4 h-4 mr-2" />
@@ -305,6 +305,8 @@ const UserProfileModal = ({ isOpen, onClose }) => {
               Annuler
             </Button>
           </div>
+          )}
+
         </div>
       </DialogContent>
     </Dialog>
