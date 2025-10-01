@@ -111,7 +111,7 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
   const addItem = () => {
     setFormData(prev => ({
       ...prev,
-      items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }]
+      items: [...prev.items, { description: '', quantity: 1, unit_price: 0, product_id: '' }]
     }));
   };
 
