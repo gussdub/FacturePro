@@ -106,14 +106,31 @@ const ExpensesPage = () => {
     setSuccess('');
 
     try {
-      await axios.post(`${API}/expenses`, {
+      const response = await axios.post(`${API}/expenses`, {
         ...formData,
         amount: parseFloat(formData.amount),
         expense_date: new Date(formData.expense_date).toISOString()
       });
       
-      setSuccess('Dépense créée avec succès');
+      // Store the new expense ID for potential file upload
+      setNewExpenseId(response.data.id);
+      setSuccess('Dépense créée avec succès. Vous pouvez maintenant ajouter un justificatif.');
+      
+      // Don't close the form yet - let user upload file first
+      fetchData();
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la création');
+    }
+  };
+
+  const handleUploadComplete = (receiptUrl, filename) => {
+    if (receiptUrl) {
+      setSuccess('Justificatif ajouté avec succès !');
+    }
+    // Close form and reset after successful upload
+    setTimeout(() => {
       setShowExpenseForm(false);
+      setNewExpenseId(null);
       setFormData({
         employee_id: '',
         description: '',
@@ -123,9 +140,11 @@ const ExpensesPage = () => {
         notes: ''
       });
       fetchData();
-    } catch (error) {
-      setError(error.response?.data?.detail || 'Erreur lors de la création');
-    }
+    }, 1500);
+  };
+
+  const handleUploadError = (errorMessage) => {
+    setError(errorMessage);
   };
 
   const updateExpenseStatus = async (expenseId, newStatus) => {
