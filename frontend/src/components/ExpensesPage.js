@@ -239,11 +239,27 @@ const ExpensesPage = () => {
                       </Badge>
                     )}
                   </div>
-                  <div className="text-right">
+                  <div className="text-right space-y-2">
                     <div className="text-lg font-semibold text-gray-900">
                       {formatCurrency(expense.amount)}
                     </div>
                     {getStatusBadge(expense.status)}
+                    {expense.receipt_url && (
+                      <div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const url = `${process.env.REACT_APP_BACKEND_URL}/api/expenses/${expense.id}/receipt`;
+                            window.open(url, '_blank');
+                          }}
+                          className="text-blue-600 border-blue-200"
+                        >
+                          <Paperclip className="w-4 h-4 mr-1" />
+                          Justificatif
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
                 
