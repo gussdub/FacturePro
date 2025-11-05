@@ -31,7 +31,9 @@ const ProductsPage = () => {
     description: '',
     unit_price: 0,
     unit: 'unité',
-    category: ''
+    category: '',
+    is_reimbursable: false,
+    default_employee_id: ''
   });
 
   useEffect(() => {
