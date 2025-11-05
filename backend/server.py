@@ -1043,6 +1043,86 @@ async def delete_product(product_id: str, current_user: User = Depends(get_curre
         raise HTTPException(status_code=404, detail="Product not found")
     return {"message": "Product deleted successfully"}
 
+# Employee routes
+@api_router.get("/employees", response_model=List[Employee])
+async def get_employees(current_user: User = Depends(get_current_user_with_subscription)):
+    employees = await db.employees.find({"user_id": current_user.id, "is_active": True}).to_list(1000)
+    return [Employee(**employee) for employee in employees]
+
+@api_router.post("/employees", response_model=Employee)
+async def create_employee(employee: EmployeeCreate, current_user: User = Depends(get_current_user_with_subscription)):
+    new_employee = Employee(**employee.dict(), user_id=current_user.id)
+    await db.employees.insert_one(new_employee.dict())
+    return new_employee
+
+@api_router.get("/employees/{employee_id}", response_model=Employee)
+async def get_employee(employee_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+    employee = await db.employees.find_one({"id": employee_id, "user_id": current_user.id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return Employee(**employee)
+
+@api_router.put("/employees/{employee_id}", response_model=Employee)
+async def update_employee(employee_id: str, employee_update: EmployeeCreate, current_user: User = Depends(get_current_user_with_subscription)):
+    employee = await db.employees.find_one({"id": employee_id, "user_id": current_user.id})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    update_data = employee_update.dict()
+    await db.employees.update_one({"id": employee_id}, {"$set": update_data})
+    
+    updated_employee = await db.employees.find_one({"id": employee_id})
+    return Employee(**updated_employee)
+
+@api_router.delete("/employees/{employee_id}")
+async def delete_employee(employee_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+    result = await db.employees.update_one(
+        {"id": employee_id, "user_id": current_user.id}, 
+        {"$set": {"is_active": False}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return {"message": "Employee deleted successfully"}
+
+# Expense routes
+@api_router.get("/expenses", response_model=List[Expense])
+async def get_expenses(current_user: User = Depends(get_current_user_with_subscription)):
+    expenses = await db.expenses.find({"user_id": current_user.id}).to_list(1000)
+    return [Expense(**expense) for expense in expenses]
+
+@api_router.post("/expenses", response_model=Expense)
+async def create_expense(expense: ExpenseCreate, current_user: User = Depends(get_current_user_with_subscription)):
+    new_expense = Expense(**expense.dict(), user_id=current_user.id)
+    await db.expenses.insert_one(new_expense.dict())
+    return new_expense
+
+@api_router.put("/expenses/{expense_id}/status")
+async def update_expense_status(expense_id: str, status: ExpenseStatus, current_user: User = Depends(get_current_user_with_subscription)):
+    now = datetime.now(timezone.utc)
+    update_data = {"status": status.value}
+    
+    if status == ExpenseStatus.approved:
+        update_data["approved_by"] = current_user.id
+        update_data["approved_at"] = now
+    elif status == ExpenseStatus.paid:
+        update_data["paid_at"] = now
+    
+    result = await db.expenses.update_one(
+        {"id": expense_id, "user_id": current_user.id},
+        {"$set": update_data}
+    )
+    
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    return {"message": "Expense status updated successfully"}
+
+@api_router.delete("/expenses/{expense_id}")
+async def delete_expense(expense_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+    result = await db.expenses.delete_one({"id": expense_id, "user_id": current_user.id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    return {"message": "Expense deleted successfully"}
+
 # Export routes
 @api_router.get("/export/statistics")
 async def export_statistics(
