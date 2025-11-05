@@ -436,14 +436,27 @@ const ExpensesPage = () => {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setShowExpenseForm(false)}
+                  onClick={() => {
+                    setShowExpenseForm(false);
+                    setNewExpenseId(null);
+                    setFormData({
+                      employee_id: '',
+                      description: '',
+                      amount: 0,
+                      category: '',
+                      expense_date: new Date().toISOString().split('T')[0],
+                      notes: ''
+                    });
+                  }}
                 >
-                  Annuler
+                  {newExpenseId ? 'Terminer' : 'Annuler'}
                 </Button>
-                <Button type="submit">
-                  <Save className="w-4 h-4 mr-2" />
-                  Créer la dépense
-                </Button>
+                {!newExpenseId && (
+                  <Button type="submit">
+                    <Save className="w-4 h-4 mr-2" />
+                    Créer la dépense
+                  </Button>
+                )}
               </div>
             </form>
           </div>
