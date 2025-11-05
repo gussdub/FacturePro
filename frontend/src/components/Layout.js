@@ -20,7 +20,9 @@ import {
   Search,
   Package,
   BarChart3,
-  Crown
+  Crown,
+  UserCheck,
+  CreditCard
 } from 'lucide-react';
 
 const Layout = () => {
