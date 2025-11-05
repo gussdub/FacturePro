@@ -242,6 +242,8 @@ function App() {
               <Route path="dashboard" element={<Dashboard />} />
               <Route path="clients" element={<ClientsPage />} />
               <Route path="products" element={<ProductsPage />} />
+              <Route path="employees" element={<EmployeesPage />} />
+              <Route path="expenses" element={<ExpensesPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="quotes" element={<QuotesPage />} />
               <Route path="export" element={<ExportPage />} />
