@@ -303,6 +303,65 @@ class CompanySettingsUpdate(BaseModel):
     pst_number: Optional[str] = None
     hst_number: Optional[str] = None
 
+# Employee Models
+class Employee(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str  # Company owner
+    name: str
+    email: str
+    phone: Optional[str] = None
+    employee_number: Optional[str] = None
+    department: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class EmployeeCreate(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    employee_number: Optional[str] = None
+    department: Optional[str] = None
+
+# Expense Models
+class ExpenseStatus(str, Enum):
+    pending = "pending"
+    approved = "approved" 
+    paid = "paid"
+    rejected = "rejected"
+
+class ExpenseType(str, Enum):
+    manual = "manual"        # Manually entered expense
+    automatic = "automatic"  # Auto-generated from invoice
+
+class Expense(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str  # Company owner
+    employee_id: str
+    description: str
+    amount: float
+    category: Optional[str] = None
+    expense_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    status: ExpenseStatus = ExpenseStatus.pending
+    expense_type: ExpenseType = ExpenseType.manual
+    # Links to invoice/product if auto-generated
+    related_invoice_id: Optional[str] = None
+    related_product_id: Optional[str] = None
+    # Receipt/proof
+    receipt_url: Optional[str] = None
+    notes: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class ExpenseCreate(BaseModel):
+    employee_id: str
+    description: str
+    amount: float
+    category: Optional[str] = None
+    expense_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
 # Utility functions
 def get_password_hash(password):
     # Generate salt and hash with PBKDF2
