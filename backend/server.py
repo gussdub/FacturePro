@@ -150,6 +150,9 @@ class Product(BaseModel):
     unit: str = "unité"  # unité, heure, kg, etc.
     category: Optional[str] = None
     is_active: bool = True
+    # Expense settings
+    is_reimbursable: bool = False  # Si ce produit génère des dépenses
+    default_employee_id: Optional[str] = None  # Employé par défaut pour cette dépense
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ProductCreate(BaseModel):
@@ -158,6 +161,8 @@ class ProductCreate(BaseModel):
     unit_price: float
     unit: str = "unité"
     category: Optional[str] = None
+    is_reimbursable: bool = False
+    default_employee_id: Optional[str] = None
 
 class PaymentInfo(BaseModel):
     payment_date: datetime
