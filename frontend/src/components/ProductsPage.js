@@ -39,6 +39,7 @@ const ProductsPage = () => {
 
   useEffect(() => {
     fetchProducts();
+    fetchEmployees();
   }, []);
 
   const fetchProducts = async () => {
@@ -51,6 +52,15 @@ const ProductsPage = () => {
       setError('Erreur lors du chargement des produits');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchEmployees = async () => {
+    try {
+      const response = await axios.get(`${API}/employees`);
+      setEmployees(response.data);
+    } catch (error) {
+      console.error('Erreur lors du chargement des employés:', error);
     }
   };
 
