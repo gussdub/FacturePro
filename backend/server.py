@@ -1123,6 +1123,79 @@ async def delete_expense(expense_id: str, current_user: User = Depends(get_curre
         raise HTTPException(status_code=404, detail="Expense not found")
     return {"message": "Expense deleted successfully"}
 
+# File upload for expenses
+@api_router.post("/expenses/{expense_id}/upload-receipt")
+async def upload_expense_receipt(
+    expense_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Validate file
+    if file.size > 10 * 1024 * 1024:  # 10 MB limit
+        raise HTTPException(status_code=400, detail="Le fichier doit faire moins de 10 MB")
+    
+    # Validate file type
+    allowed_extensions = {'.jpg', '.jpeg', '.png', '.heic', '.pdf', '.doc', '.docx', '.xlsx'}
+    file_extension = '.' + file.filename.split('.')[-1].lower()
+    if file_extension not in allowed_extensions:
+        raise HTTPException(status_code=400, detail="Type de fichier non autorisé")
+    
+    # Check if expense exists and belongs to user
+    expense = await db.expenses.find_one({"id": expense_id, "user_id": current_user.id})
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    
+    # Create uploads directory if it doesn't exist
+    upload_dir = Path("/app/uploads/receipts")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{expense_id}_{timestamp}_{file.filename}"
+    file_path = upload_dir / filename
+    
+    # Save file
+    try:
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # Update expense with receipt URL
+        receipt_url = f"/uploads/receipts/{filename}"
+        await db.expenses.update_one(
+            {"id": expense_id},
+            {"$set": {"receipt_url": receipt_url}}
+        )
+        
+        return {
+            "message": "Justificatif uploadé avec succès",
+            "receipt_url": receipt_url,
+            "filename": filename
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Erreur lors de la sauvegarde du fichier")
+
+@api_router.get("/expenses/{expense_id}/receipt")
+async def get_expense_receipt(
+    expense_id: str,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Check if expense exists and belongs to user
+    expense = await db.expenses.find_one({"id": expense_id, "user_id": current_user.id})
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    
+    if not expense.get("receipt_url"):
+        raise HTTPException(status_code=404, detail="Aucun justificatif trouvé")
+    
+    file_path = Path(f"/app{expense['receipt_url']}")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Fichier non trouvé")
+    
+    from fastapi.responses import FileResponse
+    return FileResponse(file_path, filename=file_path.name)
+
 # Export routes
 @api_router.get("/export/statistics")
 async def export_statistics(
