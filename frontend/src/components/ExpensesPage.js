@@ -418,6 +418,20 @@ const ExpensesPage = () => {
                 />
               </div>
 
+              {/* File Upload Section */}
+              {newExpenseId && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Justificatif (optionnel)
+                  </label>
+                  <FileUpload
+                    expenseId={newExpenseId}
+                    onUploadComplete={handleUploadComplete}
+                    onError={handleUploadError}
+                  />
+                </div>
+              )}
+
               <div className="flex justify-end space-x-3 pt-4">
                 <Button
                   type="button"
