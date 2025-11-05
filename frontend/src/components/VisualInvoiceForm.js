@@ -213,6 +213,27 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
                 <div>{settings?.country}</div>
                 <div>{settings?.email}</div>
                 <div>{settings?.phone}</div>
+                
+                {/* Tax Numbers */}
+                {(settings?.gst_number || settings?.pst_number || settings?.hst_number) && (
+                  <div className="border-t border-gray-300 pt-2 mt-3">
+                    {settings?.gst_number && (
+                      <div className="text-xs text-gray-600">
+                        <strong>TPS :</strong> {settings.gst_number}
+                      </div>
+                    )}
+                    {settings?.pst_number && (
+                      <div className="text-xs text-gray-600">
+                        <strong>TVQ :</strong> {settings.pst_number}
+                      </div>
+                    )}
+                    {settings?.hst_number && (
+                      <div className="text-xs text-gray-600">
+                        <strong>HST :</strong> {settings.hst_number}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
