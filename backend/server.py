@@ -298,6 +298,10 @@ class CompanySettingsUpdate(BaseModel):
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
     default_due_days: Optional[int] = None
+    # Tax Numbers
+    gst_number: Optional[str] = None
+    pst_number: Optional[str] = None
+    hst_number: Optional[str] = None
 
 # Utility functions
 def get_password_hash(password):
