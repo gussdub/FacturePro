@@ -12,6 +12,8 @@ import InvoicesPage from './components/InvoicesPage';
 import QuotesPage from './components/QuotesPage';
 import ExportPage from './components/ExportPage';
 import SettingsPage from './components/SettingsPage';
+import EmployeesPage from './components/EmployeesPage';
+import ExpensesPage from './components/ExpensesPage';
 import SubscriptionPage from './components/SubscriptionPage';
 import SubscriptionSuccess from './components/SubscriptionSuccess';
 import SubscriptionCancel from './components/SubscriptionCancel';
