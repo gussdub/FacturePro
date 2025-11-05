@@ -281,6 +281,10 @@ class CompanySettings(BaseModel):
     default_due_days: int = 30  # Jours d'échéance par défaut
     next_invoice_number: int = 1
     next_quote_number: int = 1
+    # Tax Numbers
+    gst_number: Optional[str] = None  # Numéro TPS (fédéral)
+    pst_number: Optional[str] = None  # Numéro TVQ/PST (provincial) 
+    hst_number: Optional[str] = None  # Numéro HST (harmonisé)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class CompanySettingsUpdate(BaseModel):
