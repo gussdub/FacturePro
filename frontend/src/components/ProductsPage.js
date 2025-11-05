@@ -20,6 +20,7 @@ const API = `${BACKEND_URL}/api`;
 
 const ProductsPage = () => {
   const [products, setProducts] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showProductDialog, setShowProductDialog] = useState(false);
