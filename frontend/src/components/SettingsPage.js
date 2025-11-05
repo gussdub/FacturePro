@@ -31,7 +31,10 @@ const SettingsPage = () => {
     logo_url: '',
     primary_color: '#3B82F6',
     secondary_color: '#1F2937',
-    default_due_days: 30
+    default_due_days: 30,
+    gst_number: '',
+    pst_number: '',
+    hst_number: ''
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
