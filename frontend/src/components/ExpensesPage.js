@@ -37,6 +37,7 @@ const ExpensesPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [newExpenseId, setNewExpenseId] = useState(null); // Pour l'upload après création
   const [formData, setFormData] = useState({
     employee_id: '',
     description: '',
