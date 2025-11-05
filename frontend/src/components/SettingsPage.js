@@ -312,6 +312,60 @@ const SettingsPage = () => {
               </div>
             </div>
             
+            {/* Tax Numbers Section */}
+            <div className="pt-6 border-t border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Numéros de taxes</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Numéro TPS (Fédéral)
+                  </label>
+                  <Input
+                    value={settings.gst_number || ''}
+                    onChange={(e) => handleChange('gst_number', e.target.value)}
+                    placeholder="123456789 RT0001"
+                    data-testid="gst-number-input"
+                    className="form-input"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Ex: 123456789 RT0001 (TPS/GST)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Numéro TVQ (Québec)
+                  </label>
+                  <Input
+                    value={settings.pst_number || ''}
+                    onChange={(e) => handleChange('pst_number', e.target.value)}
+                    placeholder="1234567890 TQ0001"
+                    data-testid="pst-number-input"
+                    className="form-input"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Ex: 1234567890 TQ0001 (TVQ)
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Numéro HST (Ontario+)
+                  </label>
+                  <Input
+                    value={settings.hst_number || ''}
+                    onChange={(e) => handleChange('hst_number', e.target.value)}
+                    placeholder="123456789 RT0001"
+                    data-testid="hst-number-input"
+                    className="form-input"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Ex: 123456789 RT0001 (HST)
+                  </p>
+                </div>
+              </div>
+            </div>
+            
             {/* Default Due Days */}
             <div className="pt-4 border-t border-gray-200">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Paramètres de facturation</h3>
