@@ -39,6 +39,8 @@ const Layout = () => {
     { name: 'Tableau de bord', href: '/dashboard', icon: Receipt, current: location.pathname === '/dashboard' },
     { name: 'Clients', href: '/clients', icon: Users, current: location.pathname === '/clients' },
     { name: 'Produits', href: '/products', icon: Package, current: location.pathname === '/products' },
+    { name: 'Employés', href: '/employees', icon: UserCheck, current: location.pathname === '/employees' },
+    { name: 'Dépenses', href: '/expenses', icon: CreditCard, current: location.pathname === '/expenses' },
     { name: 'Factures', href: '/invoices', icon: FileText, current: location.pathname === '/invoices' },
     { name: 'Soumissions', href: '/quotes', icon: ScrollText, current: location.pathname === '/quotes' },
     { name: 'Exports', href: '/export', icon: BarChart3, current: location.pathname === '/export' },
