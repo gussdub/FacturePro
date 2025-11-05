@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
+import FileUpload from './FileUpload';
 import { 
   Receipt, 
   Plus, 
@@ -19,7 +20,8 @@ import {
   XCircle,
   Eye,
   Save,
-  X
+  X,
+  Paperclip
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
