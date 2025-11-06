@@ -228,6 +228,21 @@ backend:
         agent: "testing"
         comment: "PDF EXPORT FULLY FUNCTIONAL - ALL TESTS PASSED: ✅ COMPREHENSIVE TESTING COMPLETED (14/14 tests passed) ✅ Created test employee and expense for realistic testing ✅ HTTP Status: 200 OK - endpoint responding correctly ✅ Content-Type Header: 'application/pdf' - correct MIME type ✅ Content-Disposition Header: Present with filename - enables proper download ✅ Content-Length Header: 2,368 bytes - file size correctly reported ✅ PDF File Size: 2.3KB (not 0 bytes) - valid file generated ✅ PDF Magic Bytes: File starts with '%PDF-1.4' - valid PDF header ✅ PDF EOF Marker: Contains '%%EOF' - complete PDF structure ✅ PDF Readability: Successfully validated with PyPDF2 library - PDF is readable ✅ PDF with Filters: Tested with date range, employee, and status filters - all working ✅ ReportLab Installation: Working correctly - generating valid PDFs ✅ File Structure: Valid PDF document with proper ReportLab formatting ✅ Generated PDF Location: /app/uploads/exports/depenses_20251106_151419.pdf ✅ CONCLUSION: PDF export functionality is working perfectly. Generated PDFs are valid, have correct headers, proper structure, and should open in any PDF reader. User's reported issue 'PDFs don't open after download' is NOT reproducible. Possible causes for user's issue: browser caching, corrupted download, network interruption, or PDF reader issue on user's device. The backend PDF generation is functioning correctly."
 
+  - task: "gussdub@gmail.com password reset - cannot login"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "URGENT: User gussdub@gmail.com reports cannot login with previous credentials (gussdub@gmail.com/testpass123). Says password is 'bizarre' (weird). User needs immediate access to account."
+      - working: true
+        agent: "testing"
+        comment: "PASSWORD RESET COMPLETED - ISSUE RESOLVED: ✅ DIAGNOSTIC COMPLETED: Created comprehensive diagnostic script to analyze account state ✅ ACCOUNT EXISTS: gussdub@gmail.com account found in database (User ID: 95f79689-6e5d-4853-bb7b-6e35382a6ead, Company: ProFireManager) ✅ ACCOUNT STATE: is_active=True, subscription_status=trial, trial_end_date=2026-10-01 (extended trial) ✅ PASSWORD HASH: Valid format (128 characters = 64 salt + 64 hash) using PBKDF2-HMAC-SHA256 ✅ ROOT CAUSE IDENTIFIED: None of the common passwords (testpass123, password123, admin123, etc.) matched the stored hash - password was set to something unknown ✅ SOLUTION IMPLEMENTED: Reset password to 'testpass123' using password reset script ✅ LOGIN VERIFIED: Successfully tested login with gussdub@gmail.com/testpass123 - returns 200 OK with valid JWT token ✅ ALL ENDPOINTS TESTED: Verified access to subscription/user-status, clients (2), products (1), invoices (0), quotes (1), dashboard/stats - all working ✅ EXEMPTION STATUS: User has has_access=True with trial subscription (exempt user functionality working) ✅ CONCLUSION: User can now login with password 'testpass123' and has full access to all features. Account is fully operational."
+
 frontend:
   - task: "Registration and trial redirect workflow"
     implemented: true
