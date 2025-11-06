@@ -158,15 +158,15 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
             {settings?.logo_url ? (
               <div className="w-16 h-16 bg-white/10 rounded-lg p-2 flex items-center justify-center">
                 <img 
-                  src={`${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`}
+                  src={`${BACKEND_URL}${settings.logo_url}`}
                   alt="Logo entreprise" 
                   className="max-w-full max-h-full object-contain"
                   onError={(e) => {
-                    console.log('Logo failed to load:', `${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`);
+                    console.log('Logo failed to load:', `${BACKEND_URL}${settings.logo_url}`);
                     e.target.style.display = 'none';
                   }}
                   onLoad={() => {
-                    console.log('Logo loaded successfully:', `${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`);
+                    console.log('Logo loaded successfully:', `${BACKEND_URL}${settings.logo_url}`);
                   }}
                 />
               </div>
