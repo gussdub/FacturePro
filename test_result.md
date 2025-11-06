@@ -369,7 +369,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "gussdub@gmail.com password reset - cannot login"
+    - "Forgot password button functionality"
   stuck_tasks:
     - "Product selection dropdown in invoice/quote forms"
     - "facturepro.ca CORS configuration issue"
