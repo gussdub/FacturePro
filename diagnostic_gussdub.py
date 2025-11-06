@@ -73,7 +73,7 @@ async def diagnose_gussdub_account():
         print("📋 Step 3: Examining password hash structure...")
         hashed_password = user.get('hashed_password', '')
         print(f"   Hash length: {len(hashed_password)} characters")
-        print(f"   Hash format: {'VALID (salt + hash)' if len(hashed_password) == 192 else 'INVALID'}")
+        print(f"   Hash format: {'VALID (salt + hash)' if len(hashed_password) == 128 else 'INVALID'}")
         print(f"   Hash preview: {hashed_password[:20]}...{hashed_password[-20:]}")
         print()
         
