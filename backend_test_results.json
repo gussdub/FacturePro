@@ -1,26 +1,32 @@
 {
   "summary": {
-    "total_tests": 30,
-    "passed_tests": 19,
-    "success_rate": 63.33333333333333
+    "total_tests": 32,
+    "passed_tests": 20,
+    "success_rate": 62.5
   },
   "test_results": [
     {
       "name": "Health Endpoint",
       "success": true,
-      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-10-01T13:00:58.655206+00:00'}",
+      "details": "Health check passed: {'status': 'healthy', 'timestamp': '2025-11-06T15:12:20.953015+00:00'}",
       "response_data": null
     },
     {
       "name": "User Registration",
       "success": true,
-      "details": "User created with ID: 1253622a-91a0-4d75-8fb3-e592e08cbfdf",
+      "details": "User created with ID: 312724ee-c00e-4363-b4d7-5b976df974de",
       "response_data": null
     },
     {
       "name": "User Login (Existing User)",
       "success": true,
       "details": "Login successful for user: test@facturepro.com",
+      "response_data": null
+    },
+    {
+      "name": "PDF Export - Create Test Employee",
+      "success": false,
+      "details": "Failed to create employee: {'detail': 'Votre abonnement a expir\u00e9. Veuillez renouveler votre abonnement pour continuer \u00e0 utiliser FacturePro.'}",
       "response_data": null
     },
     {
@@ -74,7 +80,7 @@
     {
       "name": "Subscription - New User Registration",
       "success": true,
-      "details": "User created with trial: 1e9a2329-f989-4daf-9892-239f2fc8c0a8",
+      "details": "User created with trial: 5ba3407f-b031-4533-9e67-b25065d5772a",
       "response_data": null
     },
     {
@@ -92,13 +98,13 @@
     {
       "name": "Subscription - Monthly Checkout Creation",
       "success": true,
-      "details": "Monthly checkout session created: cs_test_a1HHNHAIYkId7FunN0cscTfGJ26HvHOSN2BsA0zuNegsfE3SYS1PzkolUK",
+      "details": "Monthly checkout session created: cs_test_a1686JWx1W7aJQoTY1Mkxla1Orb5BkKH0h9xO9uO17HwhoUr1ZVuvJ3F2O",
       "response_data": null
     },
     {
       "name": "Subscription - Annual Checkout Creation",
       "success": true,
-      "details": "Annual checkout session created: cs_test_a1Qup5zTngsPltjxsQiMOjmRUGlIdtbdrLdmZCvkrMquMbJWlmJl5IvucD",
+      "details": "Annual checkout session created: cs_test_a1yPMRzg9m4GbqYHccvHxNBM6loDL6BthQf7nQHnFighDo7a2B8kyeFKvX",
       "response_data": null
     },
     {
@@ -134,7 +140,7 @@
     {
       "name": "Exemption Logic - Test User Created",
       "success": true,
-      "details": "Created test user: testexempt1759323660@gmail.com",
+      "details": "Created test user: testexempt1762441943@gmail.com",
       "response_data": null
     },
     {
@@ -159,6 +165,12 @@
       "name": "Exemption Logic - Code Implementation",
       "success": true,
       "details": "Exemption logic is implemented in check_subscription_access() function with EXEMPT_USERS list containing gussdub@gmail.com",
+      "response_data": null
+    },
+    {
+      "name": "gussdub@gmail.com - Account Exists",
+      "success": true,
+      "details": "Account exists but password unknown: {'detail': 'Email already registered'}",
       "response_data": null
     },
     {
