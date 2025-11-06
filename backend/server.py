@@ -1328,6 +1328,204 @@ async def export_business_summary(
         "export_date": datetime.now(timezone.utc).isoformat()
     }
 
+@api_router.get("/export/expenses-pdf")
+async def export_expenses_pdf(
+    start_date: str = None,
+    end_date: str = None,
+    employee_id: str = None,
+    status: str = None,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Get expenses data (same logic as JSON export)
+    query = {"user_id": current_user.id}
+    
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        query["expense_date"] = {"$gte": start_dt}
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        if "expense_date" in query:
+            query["expense_date"]["$lte"] = end_dt
+        else:
+            query["expense_date"] = {"$lte": end_dt}
+    if employee_id and employee_id != 'all':
+        query["employee_id"] = employee_id
+    if status and status != 'all':
+        query["status"] = status
+    
+    expenses = await db.expenses.find(query).to_list(1000)
+    employees = await db.employees.find({"user_id": current_user.id}).to_list(1000)
+    employees_dict = {emp["id"]: emp for emp in employees}
+    
+    # Get company settings for header
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    
+    # Generate PDF HTML template
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .header { text-align: center; border-bottom: 2px solid #3B82F6; padding-bottom: 20px; margin-bottom: 30px; }
+            .company-name { font-size: 24px; font-weight: bold; color: #1F2937; }
+            .report-title { font-size: 18px; color: #6B7280; margin-top: 10px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #D1D5DB; padding: 8px; text-align: left; }
+            th { background-color: #F3F4F6; font-weight: bold; }
+            .total-row { background-color: #FEF3C7; font-weight: bold; }
+            .footer { margin-top: 30px; text-align: center; font-size: 12px; color: #6B7280; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="company-name">{{ company_name }}</div>
+            <div class="report-title">Rapport de Dépenses</div>
+            <div>{{ start_date }} au {{ end_date }}</div>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Employé</th>
+                    <th>Description</th>
+                    <th>Catégorie</th>
+                    <th>Montant (CAD)</th>
+                    <th>Statut</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for expense in expenses %}
+                <tr>
+                    <td>{{ expense.date }}</td>
+                    <td>{{ expense.employee_name }}</td>
+                    <td>{{ expense.description }}</td>
+                    <td>{{ expense.category }}</td>
+                    <td style="text-align: right;">${{ "%.2f"|format(expense.amount) }}</td>
+                    <td>{{ expense.status }}</td>
+                </tr>
+                {% endfor %}
+                <tr class="total-row">
+                    <td colspan="4"><strong>TOTAL</strong></td>
+                    <td style="text-align: right;"><strong>${{ "%.2f"|format(total_amount) }}</strong></td>
+                    <td></td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>Rapport généré le {{ export_date }} par FacturePro</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Prepare data for template
+    template_data = {
+        'company_name': settings.get('company_name', 'Mon Entreprise') if settings else 'Mon Entreprise',
+        'start_date': start_date or 'Début',
+        'end_date': end_date or 'Fin',
+        'expenses': [],
+        'total_amount': 0,
+        'export_date': datetime.now(timezone.utc).strftime('%d/%m/%Y à %H:%M')
+    }
+    
+    total_amount = 0
+    for expense in expenses:
+        employee = employees_dict.get(expense["employee_id"], {})
+        template_data['expenses'].append({
+            'date': expense["expense_date"].strftime('%d/%m/%Y') if expense.get("expense_date") else '',
+            'employee_name': employee.get("name", "Employé inconnu"),
+            'description': expense["description"],
+            'category': expense.get("category", ""),
+            'amount': expense["amount"],
+            'status': expense["status"]
+        })
+        total_amount += expense["amount"]
+    
+    template_data['total_amount'] = total_amount
+    
+    # Generate PDF
+    template = Template(html_template)
+    html_content = template.render(**template_data)
+    
+    # Create PDF file
+    pdf_dir = Path("/app/uploads/exports")
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"depenses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_path = pdf_dir / filename
+    
+    HTML(string=html_content).write_pdf(pdf_path)
+    
+    return FileResponse(pdf_path, media_type='application/pdf', filename=filename)
+
+@api_router.get("/export/expenses-excel")
+async def export_expenses_excel(
+    start_date: str = None,
+    end_date: str = None,
+    employee_id: str = None,
+    status: str = None,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Get same data as JSON export
+    expenses_data = await export_expenses(start_date, end_date, employee_id, status, current_user)
+    
+    # Create Excel workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Dépenses"
+    
+    # Headers
+    headers = [
+        'Date', 'Employé', 'Email', 'Description', 'Catégorie', 
+        'Montant (CAD)', 'Statut', 'Type', 'Justificatif'
+    ]
+    ws.append(headers)
+    
+    # Style headers
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col)
+        cell.font = openpyxl.styles.Font(bold=True)
+        cell.fill = openpyxl.styles.PatternFill(start_color="CCCCCC", end_color="CCCCCC", fill_type="solid")
+    
+    # Add data
+    for expense in expenses_data["expenses"]:
+        ws.append([
+            expense["date"],
+            expense["employee_name"],
+            expense["employee_email"],
+            expense["description"],
+            expense["category"],
+            expense["amount"],
+            expense["status"],
+            expense["type"],
+            "Oui" if expense["has_receipt"] else "Non"
+        ])
+    
+    # Add total row
+    total_row = ['', '', '', '', 'TOTAL', expenses_data["total_amount"], '', '', '']
+    ws.append(total_row)
+    
+    # Style total row
+    for col in range(1, len(headers) + 1):
+        cell = ws.cell(row=ws.max_row, column=col)
+        cell.font = openpyxl.styles.Font(bold=True)
+        cell.fill = openpyxl.styles.PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+    
+    # Save to file
+    excel_dir = Path("/app/uploads/exports")
+    excel_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"depenses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    excel_path = excel_dir / filename
+    
+    wb.save(excel_path)
+    
+    return FileResponse(excel_path, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename=filename)
+
 # File upload for expenses
 @api_router.post("/expenses/{expense_id}/upload-receipt")
 async def upload_expense_receipt(
