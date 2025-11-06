@@ -114,8 +114,8 @@ async def diagnose_gussdub_account():
             if other_user.get('email') != 'gussdub@gmail.com':
                 other_hash = other_user.get('hashed_password', '')
                 print(f"   User: {other_user.get('email')}")
-                print(f"     Hash length: {len(other_hash)} (expected: 192)")
-                print(f"     Hash format: {'VALID' if len(other_hash) == 192 else 'INVALID'}")
+                print(f"     Hash length: {len(other_hash)} (expected: 128)")
+                print(f"     Hash format: {'VALID' if len(other_hash) == 128 else 'INVALID'}")
                 
                 # Test if testpass123 works for this user
                 if verify_password('testpass123', other_hash):
