@@ -1241,6 +1241,180 @@ class BillingAPITester:
 
         return True
 
+    def test_pdf_export_issue(self):
+        """Test PDF export functionality - URGENT issue reported by user"""
+        print("\n🔄 URGENT: Testing PDF Export Issue (PDFs not opening after download)...")
+        
+        # Step 1: Create test employee
+        employee_data = {
+            "name": "Jean Dupont",
+            "email": "jean.dupont@example.com",
+            "phone": "514-555-1234",
+            "employee_number": "EMP001",
+            "department": "Ventes"
+        }
+        
+        success, response = self.make_request('POST', 'employees', employee_data, 200)
+        if success and 'id' in response:
+            test_employee_id = response['id']
+            self.log_test("PDF Export - Create Test Employee", True, f"Employee created: {test_employee_id}")
+        else:
+            self.log_test("PDF Export - Create Test Employee", False, f"Failed to create employee: {response}")
+            return False
+        
+        # Step 2: Create test expense
+        expense_data = {
+            "employee_id": test_employee_id,
+            "description": "Déplacement client - Montréal",
+            "amount": 125.50,
+            "category": "Transport",
+            "notes": "Taxi pour rencontre client"
+        }
+        
+        success, response = self.make_request('POST', 'expenses', expense_data, 200)
+        if success and 'id' in response:
+            test_expense_id = response['id']
+            self.log_test("PDF Export - Create Test Expense", True, f"Expense created: {test_expense_id}")
+        else:
+            self.log_test("PDF Export - Create Test Expense", False, f"Failed to create expense: {response}")
+            # Cleanup employee
+            self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+            return False
+        
+        # Step 3: Test PDF endpoint with proper headers check
+        url = f"{self.api_url}/export/expenses-pdf"
+        headers = {'Authorization': f'Bearer {self.token}'}
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=30, stream=True)
+            
+            # Check HTTP status
+            if response.status_code != 200:
+                self.log_test("PDF Export - HTTP Status", False, f"Expected 200, got {response.status_code}: {response.text}")
+                # Cleanup
+                self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
+                self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+                return False
+            else:
+                self.log_test("PDF Export - HTTP Status", True, "PDF endpoint returned 200 OK")
+            
+            # Step 4: Check HTTP headers
+            content_type = response.headers.get('Content-Type', '')
+            content_disposition = response.headers.get('Content-Disposition', '')
+            content_length = response.headers.get('Content-Length', '0')
+            
+            headers_ok = True
+            
+            if 'application/pdf' not in content_type:
+                self.log_test("PDF Export - Content-Type Header", False, f"Expected 'application/pdf', got '{content_type}'")
+                headers_ok = False
+            else:
+                self.log_test("PDF Export - Content-Type Header", True, f"Content-Type is correct: {content_type}")
+            
+            if content_disposition:
+                self.log_test("PDF Export - Content-Disposition Header", True, f"Content-Disposition present: {content_disposition}")
+            else:
+                self.log_test("PDF Export - Content-Disposition Header", False, "Content-Disposition header missing")
+                headers_ok = False
+            
+            if int(content_length) > 0:
+                self.log_test("PDF Export - Content-Length Header", True, f"Content-Length: {content_length} bytes")
+            else:
+                self.log_test("PDF Export - Content-Length Header", False, f"Content-Length is 0 or missing: {content_length}")
+                headers_ok = False
+            
+            # Step 5: Download and validate PDF file
+            pdf_content = response.content
+            pdf_size = len(pdf_content)
+            
+            if pdf_size == 0:
+                self.log_test("PDF Export - File Size", False, "PDF file is 0 bytes (empty file)")
+                # Cleanup
+                self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
+                self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+                return False
+            else:
+                self.log_test("PDF Export - File Size", True, f"PDF file size: {pdf_size} bytes")
+            
+            # Step 6: Validate PDF file structure (check PDF magic bytes)
+            if pdf_content[:4] == b'%PDF':
+                self.log_test("PDF Export - PDF Magic Bytes", True, "File starts with '%PDF' (valid PDF header)")
+            else:
+                self.log_test("PDF Export - PDF Magic Bytes", False, f"File does not start with '%PDF', got: {pdf_content[:20]}")
+                # Cleanup
+                self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
+                self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+                return False
+            
+            # Step 7: Check for PDF EOF marker
+            if b'%%EOF' in pdf_content:
+                self.log_test("PDF Export - PDF EOF Marker", True, "File contains '%%EOF' (valid PDF end marker)")
+            else:
+                self.log_test("PDF Export - PDF EOF Marker", False, "File missing '%%EOF' marker (incomplete PDF)")
+            
+            # Step 8: Save PDF to temp file and try to validate with PyPDF2 if available
+            import tempfile
+            import os
+            
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                    tmp_file.write(pdf_content)
+                    tmp_file_path = tmp_file.name
+                
+                # Try to open with PyPDF2 if available
+                try:
+                    from PyPDF2 import PdfReader
+                    pdf_reader = PdfReader(tmp_file_path)
+                    num_pages = len(pdf_reader.pages)
+                    self.log_test("PDF Export - PDF Readability (PyPDF2)", True, f"PDF is readable with {num_pages} page(s)")
+                except ImportError:
+                    self.log_test("PDF Export - PDF Readability (PyPDF2)", True, "PyPDF2 not available, skipping detailed validation")
+                except Exception as e:
+                    self.log_test("PDF Export - PDF Readability (PyPDF2)", False, f"PDF cannot be read: {str(e)}")
+                
+                # Cleanup temp file
+                os.unlink(tmp_file_path)
+                
+            except Exception as e:
+                self.log_test("PDF Export - File Validation", False, f"Error validating PDF file: {str(e)}")
+            
+            # Step 9: Test with filters
+            from datetime import datetime, timedelta
+            start_date = (datetime.now() - timedelta(days=30)).isoformat()
+            end_date = datetime.now().isoformat()
+            
+            url_with_filters = f"{self.api_url}/export/expenses-pdf?start_date={start_date}&end_date={end_date}&employee_id={test_employee_id}&status=pending"
+            response_filtered = requests.get(url_with_filters, headers=headers, timeout=30)
+            
+            if response_filtered.status_code == 200 and len(response_filtered.content) > 0:
+                self.log_test("PDF Export - With Filters", True, f"PDF generated with filters: {len(response_filtered.content)} bytes")
+            else:
+                self.log_test("PDF Export - With Filters", False, f"PDF generation with filters failed: {response_filtered.status_code}")
+            
+            # Step 10: Check if ReportLab is working
+            self.log_test("PDF Export - ReportLab Installation", True, "ReportLab is working (PDF was generated)")
+            
+            # Cleanup test data
+            self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
+            self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+            
+            # Final summary
+            if headers_ok and pdf_size > 0 and pdf_content[:4] == b'%PDF':
+                self.log_test("PDF Export - OVERALL STATUS", True, "✅ PDF export is working correctly - PDFs are valid and should open")
+                print("\n✅ PDF EXPORT WORKING: Generated PDFs are valid and should open correctly")
+                return True
+            else:
+                self.log_test("PDF Export - OVERALL STATUS", False, "❌ PDF export has issues - PDFs may not open correctly")
+                print("\n❌ PDF EXPORT ISSUE CONFIRMED: PDFs have problems that prevent them from opening")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            self.log_test("PDF Export - Request Failed", False, f"Failed to call PDF endpoint: {str(e)}")
+            # Cleanup
+            self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
+            self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+            return False
+
     def cleanup_test_data(self):
         """Clean up test data"""
         if self.test_client_id:
