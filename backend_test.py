@@ -1743,6 +1743,12 @@ class BillingAPITester:
         print("🚨 URGENT: Testing PDF Export Issue")
         print("=" * 60)
         self.test_pdf_export_issue()
+        
+        # URGENT: Logo Upload Issue Test (CRITICAL - specific review request)
+        print("\n" + "=" * 60)
+        print("🚨 URGENT: Testing Logo Upload Issue")
+        print("=" * 60)
+        self.test_logo_upload_issue()
 
         # Core functionality tests (HIGH priority)
         self.test_dashboard_stats()
