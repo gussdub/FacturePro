@@ -16,7 +16,10 @@ import {
   Settings
 } from 'lucide-react';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+// Force production URL when on facturepro.ca
+const BACKEND_URL = window.location.hostname === 'facturepro.ca' 
+  ? 'https://facturepro.ca'
+  : process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 const SettingsPage = () => {
