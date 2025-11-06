@@ -262,7 +262,7 @@ const Layout = () => {
                           {settings?.logo_url ? (
                             <div className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
                               <img 
-                                src={settings.logo_url} 
+                                src={`${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`}
                                 alt="Logo entreprise" 
                                 className="w-full h-full object-contain"
                               />
