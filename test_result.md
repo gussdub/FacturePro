@@ -354,7 +354,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "PDF Export functionality - expenses-pdf endpoint"
+    - "gussdub@gmail.com password reset - cannot login"
   stuck_tasks:
     - "Product selection dropdown in invoice/quote forms"
     - "facturepro.ca CORS configuration issue"
