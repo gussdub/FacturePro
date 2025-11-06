@@ -3,15 +3,23 @@ import axios from 'axios';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
+import { Badge } from './ui/badge';
 import { 
   Download, 
   Calendar, 
   TrendingUp, 
   FileSpreadsheet,
   BarChart3,
-  PieChart
+  PieChart,
+  Receipt,
+  Users,
+  FileText,
+  ScrollText,
+  CreditCard,
+  DollarSign,
+  Calculator,
+  Building
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -21,12 +29,12 @@ const ExportPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [statisticsData, setStatisticsData] = useState(null);
   const [filters, setFilters] = useState({
     period: 'month',
     start_date: '',
     end_date: '',
-    status: 'all'
+    status: 'all',
+    employee_id: 'all'
   });
 
   const formatCurrency = (amount) => {
