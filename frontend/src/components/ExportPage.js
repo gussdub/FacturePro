@@ -168,13 +168,21 @@ const ExportPage = () => {
         });
         
         // Create download link
-        const blob = new Blob([response.data], { 
-          type: format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-        });
+        const contentType = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        const fileExt = format === 'excel' ? 'xlsx' : format;
+        
+        const blob = new Blob([response.data], { type: contentType });
         const link = document.createElement('a');
-        link.href = window.URL.createObjectURL(blob);
-        link.download = `${exportType}_${new Date().toISOString().split('T')[0]}.${format === 'excel' ? 'xlsx' : format}`;
+        const url = window.URL.createObjectURL(blob);
+        
+        link.href = url;
+        link.download = `${exportType}_${new Date().toISOString().split('T')[0]}.${fileExt}`;
+        document.body.appendChild(link);
         link.click();
+        
+        // Clean up
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
         
         setSuccess(`Export ${format.toUpperCase()} téléchargé avec succès`);
       } else {
