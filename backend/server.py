@@ -1450,6 +1450,226 @@ async def export_expenses_pdf(
     
     return FileResponse(pdf_path, media_type='application/pdf', filename=filename)
 
+@api_router.get("/export/pending-quotes-pdf")
+async def export_pending_quotes_pdf(current_user: User = Depends(get_current_user_with_subscription)):
+    # Get pending quotes data
+    quotes = await db.quotes.find({
+        "user_id": current_user.id,
+        "status": {"$in": ["pending", "sent"]}
+    }).to_list(1000)
+    
+    clients = await db.clients.find({"user_id": current_user.id}).to_list(1000)
+    clients_dict = {client["id"]: client for client in clients}
+    
+    # Get company settings
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    
+    # Generate PDF using ReportLab
+    pdf_dir = Path("/app/uploads/exports")
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"soumissions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_path = pdf_dir / filename
+    
+    # Create PDF document
+    doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+    elements = []
+    
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        spaceAfter=30,
+        textColor=colors.HexColor('#1F2937'),
+        alignment=1  # Center
+    )
+    
+    # Add title
+    company_name = settings.get('company_name', 'Mon Entreprise') if settings else 'Mon Entreprise'
+    elements.append(Paragraph(f"{company_name}<br/>Soumissions en Cours", title_style))
+    elements.append(Spacer(1, 20))
+    
+    # Prepare table data
+    table_data = [['N° Soumission', 'Client', 'Date émission', 'Valide jusqu\'au', 'Montant (CAD)', 'Statut']]
+    total_value = 0
+    
+    for quote in quotes:
+        client = clients_dict.get(quote["client_id"], {})
+        table_data.append([
+            quote.get("quote_number", ""),
+            client.get("name", "Client inconnu"),
+            quote["issue_date"].strftime('%d/%m/%Y') if quote.get("issue_date") else '',
+            quote["valid_until"].strftime('%d/%m/%Y') if quote.get("valid_until") else '',
+            f"${quote['total']:.2f}",
+            quote["status"]
+        ])
+        total_value += quote.get("total", 0)
+    
+    # Add total row
+    table_data.append(['', '', '', 'TOTAL', f"${total_value:.2f}", ''])
+    
+    # Create table
+    table = Table(table_data, colWidths=[1.2*inch, 1.8*inch, 1.2*inch, 1.2*inch, 1*inch, 1*inch])
+    table.setStyle(TableStyle([
+        # Header style
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        
+        # Data rows
+        ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        
+        # Total row
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FEF3C7')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 10),
+    ]))
+    
+    elements.append(table)
+    elements.append(Spacer(1, 30))
+    
+    # Add footer
+    footer_style = ParagraphStyle(
+        'Footer',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.gray,
+        alignment=1
+    )
+    elements.append(Paragraph(f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} par FacturePro", footer_style))
+    
+    # Build PDF
+    doc.build(elements)
+    
+    return FileResponse(pdf_path, media_type='application/pdf', filename=filename)
+
+@api_router.get("/export/invoices-pdf")
+async def export_invoices_pdf(
+    start_date: str = None,
+    end_date: str = None,
+    status: str = None,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Get invoices data
+    query = {"user_id": current_user.id}
+    
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        if "issue_date" not in query:
+            query["issue_date"] = {}
+        query["issue_date"]["$gte"] = start_dt
+    
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        if "issue_date" not in query:
+            query["issue_date"] = {}
+        query["issue_date"]["$lte"] = end_dt
+    
+    if status and status != 'all':
+        query["status"] = status
+    
+    invoices = await db.invoices.find(query).to_list(1000)
+    clients = await db.clients.find({"user_id": current_user.id}).to_list(1000)
+    clients_dict = {client["id"]: client for client in clients}
+    
+    # Get company settings
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    
+    # Generate PDF using ReportLab
+    pdf_dir = Path("/app/uploads/exports")
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"factures_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_path = pdf_dir / filename
+    
+    # Create PDF document
+    doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+    elements = []
+    
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        spaceAfter=30,
+        textColor=colors.HexColor('#1F2937'),
+        alignment=1
+    )
+    
+    # Add title
+    company_name = settings.get('company_name', 'Mon Entreprise') if settings else 'Mon Entreprise'
+    elements.append(Paragraph(f"{company_name}<br/>Rapport de Factures", title_style))
+    elements.append(Spacer(1, 20))
+    
+    # Prepare table data
+    table_data = [['N° Facture', 'Client', 'Date émission', 'Échéance', 'Montant (CAD)', 'Statut']]
+    total_value = 0
+    
+    for invoice in invoices:
+        client = clients_dict.get(invoice["client_id"], {})
+        table_data.append([
+            invoice.get("invoice_number", ""),
+            client.get("name", "Client inconnu"),
+            invoice["issue_date"].strftime('%d/%m/%Y') if invoice.get("issue_date") else '',
+            invoice["due_date"].strftime('%d/%m/%Y') if invoice.get("due_date") else '',
+            f"${invoice['total']:.2f}",
+            invoice["status"]
+        ])
+        total_value += invoice.get("total", 0)
+    
+    # Add total row
+    table_data.append(['', '', '', 'TOTAL', f"${total_value:.2f}", ''])
+    
+    # Create table
+    table = Table(table_data, colWidths=[1.2*inch, 1.8*inch, 1.2*inch, 1.2*inch, 1*inch, 1*inch])
+    table.setStyle(TableStyle([
+        # Header style
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        
+        # Data rows
+        ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        
+        # Total row
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FEF3C7')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 10),
+    ]))
+    
+    elements.append(table)
+    elements.append(Spacer(1, 30))
+    
+    # Add footer
+    footer_style = ParagraphStyle(
+        'Footer',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.gray,
+        alignment=1
+    )
+    elements.append(Paragraph(f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} par FacturePro", footer_style))
+    
+    # Build PDF
+    doc.build(elements)
+    
+    return FileResponse(pdf_path, media_type='application/pdf', filename=filename)
+
 @api_router.get("/export/expenses-excel")
 async def export_expenses_excel(
     start_date: str = None,
