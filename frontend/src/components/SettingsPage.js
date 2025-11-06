@@ -422,11 +422,11 @@ const SettingsPage = () => {
                   <div className="space-y-4">
                     <div className="w-32 h-32 mx-auto border-2 border-gray-200 rounded-lg overflow-hidden bg-white">
                       <img
-                        src={`${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`}
+                        src={`${BACKEND_URL}${settings.logo_url}`}
                         alt="Logo de l'entreprise"
                         className="w-full h-full object-contain"
                         onError={(e) => {
-                          console.log('Settings logo failed to load:', `${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`);
+                          console.log('Settings logo failed to load:', `${BACKEND_URL}${settings.logo_url}`);
                           e.target.style.display = 'none';
                           e.target.nextSibling.style.display = 'block';
                         }}
