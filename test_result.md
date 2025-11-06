@@ -335,6 +335,21 @@ backend:
         comment: "FORGOT PASSWORD FUNCTIONALITY FULLY OPERATIONAL: ✅ COMPREHENSIVE TESTING COMPLETED on https://facture-wizard.preview.emergentagent.com/login ✅ BUTTON VISIBILITY: 'Mot de passe oublié ?' button is visible on login page (line 232-238 LoginPage.js) ✅ BUTTON CLICKABLE: Button responds to clicks correctly, triggers setShowForgotPassword(true) ✅ MODAL OPENS: ForgotPasswordModal component opens successfully after button click ✅ MODAL CONTENT: Displays correct title 'Mot de passe oublié', email input field, and 'Générer le code' button ✅ EMAIL INPUT: Email input field accepts and validates user input ✅ API INTEGRATION: POST /api/auth/forgot-password endpoint called successfully (Status 200) ✅ RESET TOKEN GENERATION: Backend generates reset token using secrets.token_urlsafe(32) and stores in database with 1-hour expiration ✅ STEP TRANSITION: Modal successfully transitions from email step to password reset step ✅ TOKEN DISPLAY: Reset token displayed in blue box for user to copy (lines 145-155 ForgotPasswordModal.js) ✅ PASSWORD INPUTS: New password and confirm password fields work correctly ✅ PASSWORD VALIDATION: Validates password match and minimum 6 characters ✅ RESET API: POST /api/auth/reset-password endpoint called successfully (Status 200) ✅ PASSWORD UPDATE: Backend updates hashed_password and removes reset token from database ✅ SUCCESS MESSAGE: 'Mot de passe réinitialisé avec succès' displayed, modal auto-closes after 2 seconds ✅ NO CONSOLE ERRORS: No JavaScript errors detected during entire workflow ✅ COMPLETE FLOW TESTED: Entire workflow from button click → email entry → code generation → password reset → success works perfectly ✅ CONCLUSION: The 'Mot de passe oublié' button IS WORKING CORRECTLY. User's reported issue cannot be reproduced. All functionality operational. User may have experienced temporary browser cache issue or network problem. Recommend user clear browser cache and try again."
 
 frontend:
+  - task: "facturepro.ca production deployment - REACT_APP_BACKEND_URL configuration"
+    implemented: false
+    working: false
+    file: "/app/frontend/.env"
+    stuck_count: 0
+    priority: "critical"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "CRITICAL PRODUCTION ISSUE: User gussdub.prod@gmail.com reports logo not displaying on facturepro.ca. Console shows requests going to facture-wizard.emergent.host instead of facturepro.ca backend."
+      - working: false
+        agent: "testing"
+        comment: "CRITICAL DEPLOYMENT CONFIGURATION ISSUE CONFIRMED: ❌ Tested on facturepro.ca with gussdub.prod@gmail.com/testpass123 ❌ ALL API requests go to https://facture-wizard.emergent.host instead of correct production backend ❌ Network analysis shows: POST /api/auth/login → facture-wizard.emergent.host, GET /api/settings/company → facture-wizard.emergent.host, POST /api/settings/company/upload-logo → facture-wizard.emergent.host ❌ Logo upload succeeds but logo fails to load with error: net::ERR_BLOCKED_BY_ORB ❌ Logo URL: https://facture-wizard.emergent.host/uploads/logos/logo_f417c401-be51-4dba-9580-4acd38ebda70_20251106_221103.png ❌ ROOT CAUSE: facturepro.ca deployment has REACT_APP_BACKEND_URL environment variable set to wrong backend URL ❌ CODE IS CORRECT: Frontend properly uses process.env.REACT_APP_BACKEND_URL throughout (App.js line 23, SettingsPage.js line 19, VisualInvoiceForm.js line 8, Layout.js) ❌ SOLUTION: Update production deployment REACT_APP_BACKEND_URL to correct backend (https://facturepro.ca or proper production API), rebuild frontend, redeploy, configure backend CORS for facturepro.ca origin ❌ IMPACT: Logo display broken on facturepro.ca in settings, invoices, quotes, navigation - affects all production users ❌ URGENCY: CRITICAL - Production site branding broken"
+
   - task: "Registration and trial redirect workflow"
     implemented: true
     working: true
