@@ -33,18 +33,18 @@ load_dotenv(ROOT_DIR / '.env')
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]  # Use database name from environment
+db = client[os.environ.get('DB_NAME', 'facturepro')]
 
-# Stripe configuration
+# Stripe configuration  
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 
 # Security
 security = HTTPBearer()
-SECRET_KEY = os.environ.get("JWT_SECRET", "votre-cle-secrete-jwt-changez-en-production")
+SECRET_KEY = os.environ['JWT_SECRET']  # Required in production
 ALGORITHM = "HS256"
 
 # Create the main app
-app = FastAPI(title="Logiciel de Facturation", version="1.0.0")
+app = FastAPI(title="FacturePro API", version="2.0.0", description="Professional Invoicing Solution")
 api_router = APIRouter(prefix="/api")
 
 # Enums
