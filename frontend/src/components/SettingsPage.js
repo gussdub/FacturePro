@@ -4,6 +4,7 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Alert, AlertDescription } from './ui/alert';
+import { BACKEND_URL, API } from '../utils/api';
 import { 
   Building2, 
   Palette, 
@@ -15,12 +16,6 @@ import {
   MapPin,
   Settings
 } from 'lucide-react';
-
-// Force production URL when on facturepro.ca
-const BACKEND_URL = window.location.hostname === 'facturepro.ca' 
-  ? 'https://facturepro.ca'
-  : process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
