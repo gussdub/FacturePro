@@ -1363,105 +1363,90 @@ async def export_expenses_pdf(
     # Get company settings for header
     settings = await db.company_settings.find_one({"user_id": current_user.id})
     
-    # Generate PDF HTML template
-    html_template = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; }
-            .header { text-align: center; border-bottom: 2px solid #3B82F6; padding-bottom: 20px; margin-bottom: 30px; }
-            .company-name { font-size: 24px; font-weight: bold; color: #1F2937; }
-            .report-title { font-size: 18px; color: #6B7280; margin-top: 10px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #D1D5DB; padding: 8px; text-align: left; }
-            th { background-color: #F3F4F6; font-weight: bold; }
-            .total-row { background-color: #FEF3C7; font-weight: bold; }
-            .footer { margin-top: 30px; text-align: center; font-size: 12px; color: #6B7280; }
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <div class="company-name">{{ company_name }}</div>
-            <div class="report-title">Rapport de Dépenses</div>
-            <div>{{ start_date }} au {{ end_date }}</div>
-        </div>
-        
-        <table>
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Employé</th>
-                    <th>Description</th>
-                    <th>Catégorie</th>
-                    <th>Montant (CAD)</th>
-                    <th>Statut</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for expense in expenses %}
-                <tr>
-                    <td>{{ expense.date }}</td>
-                    <td>{{ expense.employee_name }}</td>
-                    <td>{{ expense.description }}</td>
-                    <td>{{ expense.category }}</td>
-                    <td style="text-align: right;">${{ "%.2f"|format(expense.amount) }}</td>
-                    <td>{{ expense.status }}</td>
-                </tr>
-                {% endfor %}
-                <tr class="total-row">
-                    <td colspan="4"><strong>TOTAL</strong></td>
-                    <td style="text-align: right;"><strong>${{ "%.2f"|format(total_amount) }}</strong></td>
-                    <td></td>
-                </tr>
-            </tbody>
-        </table>
-        
-        <div class="footer">
-            <p>Rapport généré le {{ export_date }} par FacturePro</p>
-        </div>
-    </body>
-    </html>
-    """
-    
-    # Prepare data for template
-    template_data = {
-        'company_name': settings.get('company_name', 'Mon Entreprise') if settings else 'Mon Entreprise',
-        'start_date': start_date or 'Début',
-        'end_date': end_date or 'Fin',
-        'expenses': [],
-        'total_amount': 0,
-        'export_date': datetime.now(timezone.utc).strftime('%d/%m/%Y à %H:%M')
-    }
-    
-    total_amount = 0
-    for expense in expenses:
-        employee = employees_dict.get(expense["employee_id"], {})
-        template_data['expenses'].append({
-            'date': expense["expense_date"].strftime('%d/%m/%Y') if expense.get("expense_date") else '',
-            'employee_name': employee.get("name", "Employé inconnu"),
-            'description': expense["description"],
-            'category': expense.get("category", ""),
-            'amount': expense["amount"],
-            'status': expense["status"]
-        })
-        total_amount += expense["amount"]
-    
-    template_data['total_amount'] = total_amount
-    
-    # Generate PDF
-    template = Template(html_template)
-    html_content = template.render(**template_data)
-    
-    # Create PDF file
+    # Generate PDF using ReportLab
     pdf_dir = Path("/app/uploads/exports")
     pdf_dir.mkdir(parents=True, exist_ok=True)
     
     filename = f"depenses_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_path = pdf_dir / filename
     
-    HTML(string=html_content).write_pdf(pdf_path)
+    # Create PDF document
+    doc = SimpleDocTemplate(str(pdf_path), pagesize=A4)
+    elements = []
+    
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        spaceAfter=30,
+        textColor=colors.HexColor('#1F2937'),
+        alignment=1  # Center
+    )
+    
+    # Add title
+    company_name = settings.get('company_name', 'Mon Entreprise') if settings else 'Mon Entreprise'
+    elements.append(Paragraph(f"{company_name}<br/>Rapport de Dépenses", title_style))
+    elements.append(Spacer(1, 20))
+    
+    # Prepare table data
+    table_data = [['Date', 'Employé', 'Description', 'Catégorie', 'Montant (CAD)', 'Statut']]
+    total_amount = 0
+    
+    for expense in expenses:
+        employee = employees_dict.get(expense["employee_id"], {})
+        table_data.append([
+            expense["expense_date"].strftime('%d/%m/%Y') if expense.get("expense_date") else '',
+            employee.get("name", "Employé inconnu"),
+            expense["description"],
+            expense.get("category", ""),
+            f"${expense['amount']:.2f}",
+            expense["status"]
+        ])
+        total_amount += expense["amount"]
+    
+    # Add total row
+    table_data.append(['', '', '', 'TOTAL', f"${total_amount:.2f}", ''])
+    
+    # Create table
+    table = Table(table_data, colWidths=[1.2*inch, 1.5*inch, 2.5*inch, 1*inch, 1*inch, 1*inch])
+    table.setStyle(TableStyle([
+        # Header style
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        
+        # Data rows
+        ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        
+        # Total row
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FEF3C7')),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 10),
+    ]))
+    
+    elements.append(table)
+    elements.append(Spacer(1, 30))
+    
+    # Add footer
+    footer_style = ParagraphStyle(
+        'Footer',
+        parent=styles['Normal'],
+        fontSize=8,
+        textColor=colors.gray,
+        alignment=1
+    )
+    elements.append(Paragraph(f"Rapport généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')} par FacturePro", footer_style))
+    
+    # Build PDF
+    doc.build(elements)
     
     return FileResponse(pdf_path, media_type='application/pdf', filename=filename)
 
