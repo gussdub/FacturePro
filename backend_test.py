@@ -1284,11 +1284,13 @@ class BillingAPITester:
             return False
         
         # Step 2: Create test expense
+        from datetime import datetime
         expense_data = {
             "employee_id": test_employee_id,
             "description": "Déplacement client - Montréal",
             "amount": 125.50,
             "category": "Transport",
+            "expense_date": datetime.now().isoformat(),
             "notes": "Taxi pour rencontre client"
         }
         
