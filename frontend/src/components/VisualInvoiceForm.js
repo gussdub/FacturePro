@@ -5,12 +5,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Calendar, Upload, Plus, X, Save, Send } from 'lucide-react';
-
-// Force production URL when on facturepro.ca
-const BACKEND_URL = window.location.hostname === 'facturepro.ca' 
-  ? 'https://facturepro.ca'
-  : process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import { BACKEND_URL, API } from '../utils/api';
 
 const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) => {
   const [clients, setClients] = useState([]);
