@@ -218,9 +218,6 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
           <div>
             <h3 className="text-lg font-semibold text-gray-900 mb-4">De:</h3>
             <div className="bg-gray-50 p-4 rounded-lg">
-              {settings?.logo_url && (
-                <img src={settings.logo_url} alt="Logo" className="h-12 mb-3" />
-              )}
               <div className="space-y-1 text-sm">
                 <div className="font-medium">{settings?.company_name || 'Mon Entreprise'}</div>
                 <div>{settings?.address}</div>
