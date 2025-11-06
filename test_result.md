@@ -102,7 +102,83 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "Test complet du nouveau système d'abonnement FacturePro frontend que je viens d'implémenter. Workflow de test à automatiser: 1) Inscription et redirection essai gratuit, 2) Page de configuration d'abonnement (/trial/setup), 3) Alertes d'abonnement dans l'interface, 4) Navigation et fonctionnalités. Créer un compte de test avec: Entreprise: 'Test Subscription Co', Email: 'testsubscription@example.com', Mot de passe: 'testpass123'. Endpoints à vérifier: POST /api/auth/register, GET /api/subscription/user-status, POST /api/subscription/checkout."
+user_problem_statement: "Test urgent de l'endpoint d'upload de logo qui ne fonctionne pas en production. L'utilisateur upload un logo dans les paramètres mais il ne s'affiche pas. Zone 'Logo actuel' reste vide malgré l'upload. Tests à effectuer: 1) POST /api/settings/company/upload-logo, 2) GET /api/uploads/logos/{filename}, 3) Vérifier sauvegarde logo_url dans company_settings, 4) Tester workflow complet Upload → Sauvegarde → Affichage."
+
+backend:
+  - task: "Logo upload endpoint - POST /api/settings/company/upload-logo"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "urgent"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "URGENT: User reports logo upload not working. User uploads logo in settings but it doesn't display. 'Logo actuel' area remains empty despite upload."
+      - working: true
+        agent: "testing"
+        comment: "COMPREHENSIVE TESTING COMPLETED - BACKEND LOGO UPLOAD FULLY FUNCTIONAL: ✅ Tested POST /api/settings/company/upload-logo endpoint with real image file (200x200 PNG) ✅ Upload successful: returns 200 status with logo_url and filename ✅ File validation working: rejects invalid file types (text files) with 400 error ✅ File size validation working: rejects files >5MB with 400 error ✅ Accepts valid image formats: JPG, PNG, WebP ✅ Generates unique filename with timestamp: logo_{user_id}_{timestamp}.{ext} ✅ Creates /app/uploads/logos/ directory if not exists ✅ File saved successfully to disk with correct permissions (644) ✅ Returns correct response: {'message': 'Logo uploadé avec succès', 'logo_url': '/uploads/logos/filename.png', 'filename': 'filename.png'} ✅ Tested with gussdub@gmail.com account - upload working perfectly ✅ Multiple uploads tested - each creates new file with unique timestamp. BACKEND UPLOAD ENDPOINT IS WORKING CORRECTLY."
+
+  - task: "Logo URL saved in company_settings database"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "urgent"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "Need to verify logo_url is properly saved in company_settings after upload so frontend can retrieve it."
+      - working: true
+        agent: "testing"
+        comment: "DATABASE SAVE VERIFIED - LOGO_URL CORRECTLY STORED: ✅ After upload, GET /api/settings/company returns logo_url field ✅ logo_url matches the value returned from upload endpoint ✅ Format: '/uploads/logos/logo_{user_id}_{timestamp}.{ext}' ✅ Database update working: await db.company_settings.update_one({'user_id': user_id}, {'$set': {'logo_url': logo_url, 'updated_at': datetime.now()}}) ✅ Tested with gussdub@gmail.com: logo_url = '/uploads/logos/logo_95f79689-6e5d-4853-bb7b-6e35382a6ead_20251106_213123.png' ✅ Multiple uploads update logo_url correctly (replaces old value) ✅ CompanySettings model includes logo_url field (Optional[str]) ✅ GET /api/settings/company endpoint returns logo_url in response. DATABASE PERSISTENCE IS WORKING CORRECTLY."
+
+  - task: "Logo file serving - GET /api/uploads/logos/{filename}"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "urgent"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "Need to verify uploaded logo files are accessible via GET endpoint for frontend to display them."
+      - working: true
+        agent: "testing"
+        comment: "LOGO FILE SERVING FULLY FUNCTIONAL: ✅ GET /api/uploads/logos/{filename} endpoint working correctly ✅ Returns 200 status with image file content ✅ Correct Content-Type header: 'image/png', 'image/jpeg', etc. ✅ File served using FastAPI FileResponse ✅ Requires authentication (HTTPBearer token) ✅ Returns 404 if file doesn't exist ✅ File path: /app/uploads/logos/{filename} ✅ Tested retrieval: Content-Length: 592 bytes, Content-Type: image/png ✅ Full URL format: https://facture-wizard.preview.emergentagent.com/api/uploads/logos/{filename} ✅ Files have correct permissions (644) and are readable ✅ Directory /app/uploads/logos/ exists with correct permissions (755). LOGO FILE SERVING IS WORKING CORRECTLY."
+
+  - task: "Logo upload complete workflow"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "urgent"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "Test complete workflow: Upload file → Save to disk → Save URL to database → Retrieve file → Display in frontend."
+      - working: true
+        agent: "testing"
+        comment: "COMPLETE WORKFLOW TESTED AND WORKING: ✅ STEP 1 - Upload: POST /api/settings/company/upload-logo with image file → Returns 200 with logo_url ✅ STEP 2 - Save to Disk: File saved to /app/uploads/logos/ with unique filename ✅ STEP 3 - Save to Database: logo_url saved in company_settings collection ✅ STEP 4 - Retrieve Settings: GET /api/settings/company returns logo_url field ✅ STEP 5 - Serve File: GET /api/uploads/logos/{filename} returns image file ✅ STEP 6 - Multiple Uploads: Each upload creates new file and updates logo_url ✅ TESTED WITH REAL USER: gussdub@gmail.com account tested successfully ✅ BACKEND WORKFLOW COMPLETE AND FUNCTIONAL. ROOT CAUSE ANALYSIS: Backend is working perfectly. If logo not displaying in frontend, issue is in: 1) Frontend not fetching logo_url from GET /api/settings/company, 2) Frontend not constructing correct image URL, 3) Frontend image component not rendering, 4) CORS/auth issues in frontend requests. BACKEND IS NOT THE PROBLEM."
+
+  - task: "Logo upload directory permissions"
+    implemented: true
+    working: true
+    file: "/app/uploads/logos/"
+    stuck_count: 0
+    priority: "urgent"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: "Verify /app/uploads/logos/ directory exists and has correct permissions for file uploads."
+      - working: true
+        agent: "testing"
+        comment: "DIRECTORY PERMISSIONS VERIFIED: ✅ Directory exists: /app/uploads/logos/ ✅ Directory permissions: drwxr-xr-x (755) - correct for read/write ✅ Directory owner: root:root ✅ Files created with permissions: -rw-r--r-- (644) - correct for read ✅ Directory created automatically by code: upload_dir.mkdir(parents=True, exist_ok=True) ✅ Multiple logo files present in directory (5+ files) ✅ All files readable and accessible ✅ No permission errors in backend logs. DIRECTORY PERMISSIONS ARE CORRECT."
 
 backend:
   - task: "Subscription backend endpoints"
