@@ -1419,6 +1419,9 @@ class BillingAPITester:
             self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
             self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
             
+            # Restore original token
+            self.token = original_token
+            
             # Final summary
             if headers_ok and pdf_size > 0 and pdf_content[:4] == b'%PDF':
                 self.log_test("PDF Export - OVERALL STATUS", True, "✅ PDF export is working correctly - PDFs are valid and should open")
@@ -1434,6 +1437,8 @@ class BillingAPITester:
             # Cleanup
             self.make_request('DELETE', f'expenses/{test_expense_id}', expected_status=200)
             self.make_request('DELETE', f'employees/{test_employee_id}', expected_status=200)
+            # Restore original token
+            self.token = original_token
             return False
 
     def cleanup_test_data(self):
