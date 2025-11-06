@@ -460,14 +460,12 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Logo upload endpoint - POST /api/settings/company/upload-logo"
-    - "Logo file serving - GET /api/uploads/logos/{filename}"
-    - "Logo upload complete workflow"
+    - "facturepro.ca production deployment - REACT_APP_BACKEND_URL configuration"
   stuck_tasks:
     - "Product selection dropdown in invoice/quote forms"
     - "facturepro.ca CORS configuration issue"
   test_all: false
-  test_priority: "urgent_first"
+  test_priority: "critical_first"
 
 agent_communication:
   - agent: "main"
