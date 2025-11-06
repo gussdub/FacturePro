@@ -1123,6 +1123,206 @@ async def delete_expense(expense_id: str, current_user: User = Depends(get_curre
         raise HTTPException(status_code=404, detail="Expense not found")
     return {"message": "Expense deleted successfully"}
 
+# Enhanced Export routes
+@api_router.get("/export/expenses")
+async def export_expenses(
+    start_date: str = None,
+    end_date: str = None,
+    employee_id: str = None,
+    status: str = None,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    query = {"user_id": current_user.id}
+    
+    # Apply filters
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+        query["expense_date"] = {"$gte": start_dt}
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+        if "expense_date" in query:
+            query["expense_date"]["$lte"] = end_dt
+        else:
+            query["expense_date"] = {"$lte": end_dt}
+    if employee_id and employee_id != 'all':
+        query["employee_id"] = employee_id
+    if status and status != 'all':
+        query["status"] = status
+    
+    expenses = await db.expenses.find(query).to_list(1000)
+    employees = await db.employees.find({"user_id": current_user.id}).to_list(1000)
+    employees_dict = {emp["id"]: emp for emp in employees}
+    
+    # Format for export
+    export_data = []
+    for expense in expenses:
+        employee = employees_dict.get(expense["employee_id"], {})
+        export_data.append({
+            "date": expense["expense_date"],
+            "employee_name": employee.get("name", "Employé inconnu"),
+            "employee_email": employee.get("email", ""),
+            "description": expense["description"],
+            "category": expense.get("category", ""),
+            "amount": expense["amount"],
+            "status": expense["status"],
+            "type": expense.get("expense_type", "manual"),
+            "notes": expense.get("notes", ""),
+            "has_receipt": bool(expense.get("receipt_url"))
+        })
+    
+    return {
+        "expenses": export_data,
+        "total_count": len(export_data),
+        "total_amount": sum(exp["amount"] for exp in export_data),
+        "export_date": datetime.now(timezone.utc).isoformat()
+    }
+
+@api_router.get("/export/pending-quotes")
+async def export_pending_quotes(current_user: User = Depends(get_current_user_with_subscription)):
+    # Get quotes that are still pending (not converted to invoices)
+    quotes = await db.quotes.find({
+        "user_id": current_user.id,
+        "status": {"$in": ["pending", "sent"]}
+    }).to_list(1000)
+    
+    clients = await db.clients.find({"user_id": current_user.id}).to_list(1000)
+    clients_dict = {client["id"]: client for client in clients}
+    
+    export_data = []
+    for quote in quotes:
+        client = clients_dict.get(quote["client_id"], {})
+        export_data.append({
+            "quote_number": quote["quote_number"],
+            "client_name": client.get("name", "Client inconnu"),
+            "client_email": client.get("email", ""),
+            "issue_date": quote["issue_date"],
+            "valid_until": quote["valid_until"],
+            "status": quote["status"],
+            "subtotal": quote["subtotal"],
+            "total_tax": quote["total_tax"],
+            "total": quote["total"],
+            "notes": quote.get("notes", "")
+        })
+    
+    return {
+        "quotes": export_data,
+        "total_count": len(export_data),
+        "total_value": sum(q["total"] for q in export_data),
+        "export_date": datetime.now(timezone.utc).isoformat()
+    }
+
+@api_router.get("/export/tax-report")
+async def export_tax_report(
+    start_date: str = None,
+    end_date: str = None,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Get date range
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+    else:
+        # Default to start of current month
+        now = datetime.now(timezone.utc)
+        start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+    else:
+        end_dt = datetime.now(timezone.utc)
+    
+    # Get paid invoices in date range
+    paid_invoices = await db.invoices.find({
+        "user_id": current_user.id,
+        "status": "paid",
+        "issue_date": {"$gte": start_dt, "$lte": end_dt}
+    }).to_list(1000)
+    
+    # Calculate tax totals
+    total_sales = sum(invoice.get("subtotal", 0) for invoice in paid_invoices)
+    total_gst = sum(invoice.get("gst_amount", 0) for invoice in paid_invoices)
+    total_pst = sum(invoice.get("pst_amount", 0) for invoice in paid_invoices)
+    total_hst = sum(invoice.get("hst_amount", 0) for invoice in paid_invoices)
+    
+    return {
+        "period": {
+            "start_date": start_dt.isoformat(),
+            "end_date": end_dt.isoformat()
+        },
+        "summary": {
+            "total_sales": total_sales,
+            "total_gst_collected": total_gst,
+            "total_pst_collected": total_pst, 
+            "total_hst_collected": total_hst,
+            "total_taxes": total_gst + total_pst + total_hst
+        },
+        "invoices": paid_invoices,
+        "invoice_count": len(paid_invoices),
+        "export_date": datetime.now(timezone.utc).isoformat()
+    }
+
+@api_router.get("/export/business-summary")
+async def export_business_summary(
+    start_date: str = None,
+    end_date: str = None,
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Get date range
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+    else:
+        now = datetime.now(timezone.utc)
+        start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+    else:
+        end_dt = datetime.now(timezone.utc)
+    
+    # Get data
+    invoices = await db.invoices.find({
+        "user_id": current_user.id,
+        "issue_date": {"$gte": start_dt, "$lte": end_dt}
+    }).to_list(1000)
+    
+    expenses = await db.expenses.find({
+        "user_id": current_user.id,
+        "expense_date": {"$gte": start_dt, "$lte": end_dt}
+    }).to_list(1000)
+    
+    # Calculate metrics
+    total_revenue = sum(inv.get("total", 0) for inv in invoices if inv.get("status") == "paid")
+    total_expenses = sum(exp.get("amount", 0) for exp in expenses if exp.get("status") in ["approved", "paid"])
+    profit = total_revenue - total_expenses
+    
+    # Invoice stats
+    paid_invoices = [inv for inv in invoices if inv.get("status") == "paid"]
+    pending_invoices = [inv for inv in invoices if inv.get("status") in ["sent", "draft"]]
+    
+    return {
+        "period": {
+            "start_date": start_dt.isoformat(),
+            "end_date": end_dt.isoformat()
+        },
+        "financial_summary": {
+            "total_revenue": total_revenue,
+            "total_expenses": total_expenses,
+            "net_profit": profit,
+            "profit_margin": (profit / total_revenue * 100) if total_revenue > 0 else 0
+        },
+        "invoice_summary": {
+            "total_invoices": len(invoices),
+            "paid_invoices": len(paid_invoices),
+            "pending_invoices": len(pending_invoices),
+            "average_invoice_value": total_revenue / len(paid_invoices) if paid_invoices else 0
+        },
+        "expense_summary": {
+            "total_expenses_count": len(expenses),
+            "approved_expenses": len([e for e in expenses if e.get("status") == "approved"]),
+            "paid_expenses": len([e for e in expenses if e.get("status") == "paid"])
+        },
+        "export_date": datetime.now(timezone.utc).isoformat()
+    }
+
 # File upload for expenses
 @api_router.post("/expenses/{expense_id}/upload-receipt")
 async def upload_expense_receipt(
