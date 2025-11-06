@@ -113,7 +113,6 @@ const ExportPage = () => {
 
     try {
       let endpoint = '';
-      let filename = '';
       let params = {};
 
       // Build params
@@ -122,8 +121,14 @@ const ExportPage = () => {
       
       switch (exportType) {
         case 'expenses':
-          endpoint = '/export/expenses';
-          filename = `depenses_${filters.start_date}_${filters.end_date}`;
+          if (format === 'pdf') {
+            endpoint = '/export/expenses-pdf';
+          } else if (format === 'excel') {
+            endpoint = '/export/expenses-excel';
+          } else {
+            endpoint = '/export/expenses';
+          }
+          
           if (filters.employee_id && filters.employee_id !== 'all') {
             params.employee_id = filters.employee_id;
           }
@@ -134,12 +139,10 @@ const ExportPage = () => {
         
         case 'quotes':
           endpoint = '/export/pending-quotes';
-          filename = `soumissions_en_cours_${new Date().toISOString().split('T')[0]}`;
           break;
         
         case 'invoices':
           endpoint = '/export/invoices';
-          filename = `factures_${filters.start_date}_${filters.end_date}`;
           if (filters.status && filters.status !== 'all') {
             params.status = filters.status;
           }
@@ -147,36 +150,53 @@ const ExportPage = () => {
         
         case 'tax-report':
           endpoint = '/export/tax-report';
-          filename = `rapport_tps_tvq_${filters.start_date}_${filters.end_date}`;
           break;
         
         case 'business-summary':
           endpoint = '/export/business-summary';
-          filename = `bilan_entreprise_${filters.start_date}_${filters.end_date}`;
           break;
         
         default:
           throw new Error('Type d\'export non reconnu');
       }
 
-      const response = await axios.get(`${API}${endpoint}`, { params });
-      
-      // Add file extension
-      const extensions = { json: '.json', csv: '.csv', excel: '.xls' };
-      filename += extensions[format] || '.json';
-      
-      // Download appropriate data
-      let exportData = response.data;
-      if (exportType === 'expenses') {
-        exportData = response.data.expenses;
-      } else if (exportType === 'quotes') {
-        exportData = response.data.quotes;
-      } else if (exportType === 'invoices') {
-        exportData = response.data.invoices;
+      if (format === 'pdf' || format === 'excel') {
+        // For file downloads (PDF, Excel)
+        const response = await axios.get(`${API}${endpoint}`, {
+          params,
+          responseType: 'blob'
+        });
+        
+        // Create download link
+        const blob = new Blob([response.data], { 
+          type: format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+        });
+        const link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
+        link.download = `${exportType}_${new Date().toISOString().split('T')[0]}.${format === 'excel' ? 'xlsx' : format}`;
+        link.click();
+        
+        setSuccess(`Export ${format.toUpperCase()} téléchargé avec succès`);
+      } else {
+        // For CSV and JSON
+        const response = await axios.get(`${API}${endpoint}`, { params });
+        
+        let exportData = response.data;
+        let filename = `${exportType}_${new Date().toISOString().split('T')[0]}`;
+        
+        // Extract the right data based on export type
+        if (exportType === 'expenses') {
+          exportData = response.data.expenses;
+        } else if (exportType === 'quotes') {
+          exportData = response.data.quotes;
+        } else if (exportType === 'invoices') {
+          exportData = response.data.invoices;
+        }
+        
+        downloadFile(exportData, filename + (format === 'csv' ? '.csv' : '.json'), format);
+        setSuccess(`Export ${format.toUpperCase()} téléchargé avec succès`);
       }
       
-      downloadFile(exportData, filename, format);
-      setSuccess(`Export ${format.toUpperCase()} téléchargé avec succès`);
     } catch (error) {
       setError(error.response?.data?.detail || 'Erreur lors de l\'export');
     } finally {
