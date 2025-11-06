@@ -1443,6 +1443,12 @@ class BillingAPITester:
             print("❌ Login failed, stopping tests")
             return False
 
+        # URGENT: PDF Export Issue Test (CRITICAL - specific review request)
+        print("\n" + "=" * 60)
+        print("🚨 URGENT: Testing PDF Export Issue")
+        print("=" * 60)
+        self.test_pdf_export_issue()
+
         # Core functionality tests (HIGH priority)
         self.test_dashboard_stats()
         self.test_client_management()
