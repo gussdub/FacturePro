@@ -440,17 +440,19 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 1
-  run_ui: true
+  test_sequence: 2
+  run_ui: false
 
 test_plan:
   current_focus:
-    - "Forgot password button functionality"
+    - "Logo upload endpoint - POST /api/settings/company/upload-logo"
+    - "Logo file serving - GET /api/uploads/logos/{filename}"
+    - "Logo upload complete workflow"
   stuck_tasks:
     - "Product selection dropdown in invoice/quote forms"
     - "facturepro.ca CORS configuration issue"
   test_all: false
-  test_priority: "high_first"
+  test_priority: "urgent_first"
 
 agent_communication:
   - agent: "main"
