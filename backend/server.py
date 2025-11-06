@@ -1807,6 +1807,62 @@ async def get_expense_receipt(
     from fastapi.responses import FileResponse
     return FileResponse(file_path, filename=file_path.name)
 
+# Logo upload endpoint
+@api_router.post("/settings/company/upload-logo")
+async def upload_company_logo(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Validate file
+    if file.size > 5 * 1024 * 1024:  # 5 MB limit for logos
+        raise HTTPException(status_code=400, detail="Le fichier doit faire moins de 5 MB")
+    
+    # Validate file type (images only)
+    allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Format d'image non supporté. Utilisez JPG, PNG ou WebP")
+    
+    # Create uploads directory if it doesn't exist
+    upload_dir = Path("/app/uploads/logos")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    file_extension = '.' + file.filename.split('.')[-1].lower()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"logo_{current_user.id}_{timestamp}{file_extension}"
+    file_path = upload_dir / filename
+    
+    # Save file
+    try:
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # Update company settings with logo URL
+        logo_url = f"/uploads/logos/{filename}"
+        await db.company_settings.update_one(
+            {"user_id": current_user.id},
+            {"$set": {"logo_url": logo_url, "updated_at": datetime.now(timezone.utc)}}
+        )
+        
+        return {
+            "message": "Logo uploadé avec succès",
+            "logo_url": logo_url,
+            "filename": filename
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Erreur lors de la sauvegarde du logo")
+
+@api_router.get("/uploads/logos/{filename}")
+async def get_logo(filename: str, current_user: User = Depends(get_current_user)):
+    """Serve logo files"""
+    file_path = Path(f"/app/uploads/logos/{filename}")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Logo non trouvé")
+    
+    return FileResponse(file_path, filename=filename)
+
 # Export routes
 @api_router.get("/export/statistics")
 async def export_statistics(
