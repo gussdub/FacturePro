@@ -355,7 +355,7 @@ const ExportPage = () => {
                         size="sm"
                         onClick={() => exportData(card.type, 'excel')}
                         disabled={loading}
-                        className="flex-1"
+                        className="flex-1 text-green-600 border-green-200"
                       >
                         <FileSpreadsheet className="w-4 h-4 mr-1" />
                         Excel
@@ -363,23 +363,23 @@ const ExportPage = () => {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => exportData(card.type, 'csv')}
+                        onClick={() => exportData(card.type, 'pdf')}
                         disabled={loading}
-                        className="flex-1"
+                        className="flex-1 text-red-600 border-red-200"
                       >
-                        <BarChart3 className="w-4 h-4 mr-1" />
-                        CSV
+                        <Printer className="w-4 h-4 mr-1" />
+                        PDF
                       </Button>
                     </div>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => exportData(card.type, 'json')}
+                      onClick={() => exportData(card.type, 'csv')}
                       disabled={loading}
-                      className="w-full text-gray-600"
+                      className="w-full text-blue-600 border-blue-200"
                     >
-                      <Download className="w-4 h-4 mr-1" />
-                      JSON (Données brutes)
+                      <BarChart3 className="w-4 h-4 mr-1" />
+                      CSV
                     </Button>
                   </div>
                   
