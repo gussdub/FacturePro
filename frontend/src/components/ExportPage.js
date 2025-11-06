@@ -138,11 +138,19 @@ const ExportPage = () => {
           break;
         
         case 'quotes':
-          endpoint = '/export/pending-quotes';
+          if (format === 'pdf') {
+            endpoint = '/export/pending-quotes-pdf';
+          } else {
+            endpoint = '/export/pending-quotes';
+          }
           break;
         
         case 'invoices':
-          endpoint = '/export/invoices';
+          if (format === 'pdf') {
+            endpoint = '/export/invoices-pdf';
+          } else {
+            endpoint = '/export/invoices';
+          }
           if (filters.status && filters.status !== 'all') {
             params.status = filters.status;
           }
