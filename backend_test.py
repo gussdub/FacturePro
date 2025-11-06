@@ -1245,6 +1245,27 @@ class BillingAPITester:
         """Test PDF export functionality - URGENT issue reported by user"""
         print("\n🔄 URGENT: Testing PDF Export Issue (PDFs not opening after download)...")
         
+        # Create a fresh user with active trial for this test
+        import time
+        timestamp = str(int(time.time()))
+        pdf_test_user_data = {
+            "email": f"pdftest{timestamp}@facturepro.com",
+            "password": "testpass123",
+            "company_name": "PDF Test Company"
+        }
+        
+        success, response = self.make_request('POST', 'auth/register', pdf_test_user_data, 200)
+        if success and 'access_token' in response:
+            pdf_test_token = response['access_token']
+            self.log_test("PDF Export - Create Test User", True, f"Test user created for PDF testing")
+        else:
+            self.log_test("PDF Export - Create Test User", False, f"Failed to create test user: {response}")
+            return False
+        
+        # Store original token and switch to PDF test user
+        original_token = self.token
+        self.token = pdf_test_token
+        
         # Step 1: Create test employee
         employee_data = {
             "name": "Jean Dupont",
