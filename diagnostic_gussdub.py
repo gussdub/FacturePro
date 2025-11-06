@@ -127,7 +127,7 @@ async def diagnose_gussdub_account():
         print("📋 Step 6: Testing password hashing function...")
         test_hash = get_password_hash('testpass123')
         print(f"   Generated test hash length: {len(test_hash)}")
-        print(f"   Test hash format: {'VALID' if len(test_hash) == 192 else 'INVALID'}")
+        print(f"   Test hash format: {'VALID' if len(test_hash) == 128 else 'INVALID'}")
         
         # Verify the test hash works
         if verify_password('testpass123', test_hash):
