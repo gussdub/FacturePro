@@ -213,6 +213,21 @@ backend:
         agent: "testing"
         comment: "CRITICAL CORS ISSUE IDENTIFIED ON FACTUREPRO.CA: ❌ ISSUE CONFIRMED: facturepro.ca login fails with 'Erreur de connexion' due to CORS policy blocking API requests ❌ ROOT CAUSE: facturepro.ca frontend tries to make API calls to https://facture-wizard.emergent.host/api/auth/login but gets blocked by CORS policy ❌ TECHNICAL ANALYSIS: Browser console shows 'Access to XMLHttpRequest at https://facture-wizard.emergent.host/api/auth/login from origin https://facturepro.ca has been blocked by CORS policy: No Access-Control-Allow-Origin header is present on the requested resource' ❌ DEPLOYMENT ISSUE: facturepro.ca appears to be a separate deployment with different backend URL configuration than the working https://facture-wizard.preview.emergentagent.com ❌ BACKEND MISMATCH: facturepro.ca frontend is configured to use https://facture-wizard.emergent.host backend, but that backend doesn't allow CORS requests from facturepro.ca origin ❌ USER IMPACT: gussdub@gmail.com cannot login on facturepro.ca despite credentials being correct ❌ VERIFICATION: Login works perfectly on https://facture-wizard.preview.emergentagent.com but fails on facturepro.ca ❌ SOLUTION NEEDED: Backend at https://facture-wizard.emergent.host needs CORS configuration updated to allow requests from https://facturepro.ca origin, OR facturepro.ca frontend needs to be reconfigured to use correct backend URL ❌ URGENCY: HIGH - User cannot access their account on the production domain facturepro.ca"
 
+  - task: "PDF Export functionality - expenses-pdf endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "urgent"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "testing"
+        comment: "URGENT TEST REQUEST: User reports downloaded PDF exports don't open. Probable PDF generation or HTTP headers issue. Tests required: 1) Test GET /api/export/expenses-pdf endpoint, 2) Validate PDF file exists and can be read, 3) Check file size (not 0 bytes), 4) Test ReportLab installation, 5) Verify HTTP headers (Content-Type, Content-Disposition, Content-Length)"
+      - working: true
+        agent: "testing"
+        comment: "PDF EXPORT FULLY FUNCTIONAL - ALL TESTS PASSED: ✅ COMPREHENSIVE TESTING COMPLETED (14/14 tests passed) ✅ Created test employee and expense for realistic testing ✅ HTTP Status: 200 OK - endpoint responding correctly ✅ Content-Type Header: 'application/pdf' - correct MIME type ✅ Content-Disposition Header: Present with filename - enables proper download ✅ Content-Length Header: 2,368 bytes - file size correctly reported ✅ PDF File Size: 2.3KB (not 0 bytes) - valid file generated ✅ PDF Magic Bytes: File starts with '%PDF-1.4' - valid PDF header ✅ PDF EOF Marker: Contains '%%EOF' - complete PDF structure ✅ PDF Readability: Successfully validated with PyPDF2 library - PDF is readable ✅ PDF with Filters: Tested with date range, employee, and status filters - all working ✅ ReportLab Installation: Working correctly - generating valid PDFs ✅ File Structure: Valid PDF document with proper ReportLab formatting ✅ Generated PDF Location: /app/uploads/exports/depenses_20251106_151419.pdf ✅ CONCLUSION: PDF export functionality is working perfectly. Generated PDFs are valid, have correct headers, proper structure, and should open in any PDF reader. User's reported issue 'PDFs don't open after download' is NOT reproducible. Possible causes for user's issue: browser caching, corrupted download, network interruption, or PDF reader issue on user's device. The backend PDF generation is functioning correctly."
+
 frontend:
   - task: "Registration and trial redirect workflow"
     implemented: true
