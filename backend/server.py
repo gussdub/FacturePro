@@ -414,7 +414,7 @@ async def check_subscription_access(user: User):
     """Check if user has valid subscription access"""
     
     # Exempt users (always free access)
-    EXEMPT_USERS = ["gussdub@gmail.com"]
+    EXEMPT_USERS = ["gussdub@gmail.com", "gussdub.prod@gmail.com"]
     if user.email in EXEMPT_USERS:
         return True  # Always grant access to exempt users
     
