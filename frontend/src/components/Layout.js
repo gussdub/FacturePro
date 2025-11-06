@@ -240,7 +240,7 @@ const Layout = () => {
                   >
                     {settings?.logo_url ? (
                       <img 
-                        src={settings.logo_url} 
+                        src={`${process.env.REACT_APP_BACKEND_URL}${settings.logo_url}`}
                         alt="Logo entreprise" 
                         className="w-full h-full object-contain bg-white rounded-full"
                       />
