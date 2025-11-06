@@ -146,25 +146,25 @@ const SettingsPage = () => {
     setError('');
 
     try {
-      // Convertir le fichier en base64 pour l'aperçu immédiat
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setSettings(prev => ({
-          ...prev,
-          logo_url: e.target.result
-        }));
-      };
-      reader.readAsDataURL(file);
+      // Upload file to server
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await axios.post(`${API}/settings/company/upload-logo`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        }
+      });
+      
+      // Update settings with server logo URL
+      setSettings(prev => ({
+        ...prev,
+        logo_url: response.data.logo_url
+      }));
 
-      // Note: Dans un vrai projet, vous uploaderiez le fichier vers un serveur
-      // const formData = new FormData();
-      // formData.append('logo', file);
-      // const response = await axios.post(`${API}/upload/logo`, formData);
-      // setSettings(prev => ({ ...prev, logo_url: response.data.url }));
-
-      setSuccess('Logo uploadé avec succès');
+      setSuccess('Logo uploadé et sauvegardé avec succès');
     } catch (error) {
-      setError('Erreur lors de l\'upload du logo');
+      setError(error.response?.data?.detail || 'Erreur lors de l\'upload du logo');
     } finally {
       setUploadingLogo(false);
     }
