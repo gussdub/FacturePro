@@ -339,7 +339,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "facturepro.ca CORS configuration issue"
+    - "PDF Export functionality - expenses-pdf endpoint"
   stuck_tasks:
     - "Product selection dropdown in invoice/quote forms"
     - "facturepro.ca CORS configuration issue"
