@@ -59,16 +59,23 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
 
   const fetchData = async () => {
     try {
+      console.log('Fetching data for VisualInvoiceForm...');
       const [clientsRes, productsRes, settingsRes] = await Promise.all([
         axios.get(`${API}/clients`),
         axios.get(`${API}/products`),
         axios.get(`${API}/settings/company`)
       ]);
+      console.log('Clients loaded:', clientsRes.data.length);
+      console.log('Products loaded:', productsRes.data.length);
+      console.log('Settings loaded:', settingsRes.data);
+      console.log('Logo URL from settings:', settingsRes.data?.logo_url);
+      
       setClients(clientsRes.data);
       setProducts(productsRes.data);
       setSettings(settingsRes.data);
     } catch (error) {
       console.error('Erreur lors du chargement des données:', error);
+      console.error('Détails de l\'erreur settings:', error.response?.data);
     }
   };
 
