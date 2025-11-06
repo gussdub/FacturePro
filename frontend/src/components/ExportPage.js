@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
@@ -19,7 +19,8 @@ import {
   CreditCard,
   DollarSign,
   Calculator,
-  Building
+  Building,
+  Printer
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -29,150 +30,212 @@ const ExportPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [employees, setEmployees] = useState([]);
   const [filters, setFilters] = useState({
     period: 'month',
-    start_date: '',
-    end_date: '',
+    start_date: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+    end_date: new Date().toISOString().split('T')[0],
     status: 'all',
     employee_id: 'all'
   });
 
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('fr-CA', {
-      style: 'currency',
-      currency: 'CAD'
-    }).format(amount || 0);
-  };
+  useEffect(() => {
+    fetchEmployees();
+  }, []);
 
-  const exportStatistics = async () => {
+  const fetchEmployees = async () => {
     try {
-      setLoading(true);
-      setError('');
-      
-      const params = new URLSearchParams();
-      if (filters.start_date) params.append('start_date', filters.start_date);
-      if (filters.end_date) params.append('end_date', filters.end_date);
-      params.append('period', filters.period);
-      
-      const response = await axios.get(`${API}/export/statistics?${params}`);
-      setStatisticsData(response.data);
-      setSuccess('Statistiques générées avec succès');
+      const response = await axios.get(`${API}/employees`);
+      setEmployees(response.data);
     } catch (error) {
-      setError('Erreur lors de l\'export des statistiques');
-      console.error(error);
-    } finally {
-      setLoading(false);
+      console.error('Erreur chargement employés:', error);
     }
   };
 
-  const exportInvoicesCSV = async () => {
-    try {
-      setLoading(true);
-      setError('');
-      
-      const params = new URLSearchParams();
-      if (filters.start_date) params.append('start_date', filters.start_date);
-      if (filters.end_date) params.append('end_date', filters.end_date);
-      if (filters.status !== 'all') params.append('status', filters.status);
-      
-      const response = await axios.get(`${API}/export/invoices?${params}`);
-      
+  const downloadFile = (data, filename, type = 'json') => {
+    let blob;
+    let mimeType;
+    
+    if (type === 'csv') {
       // Convert to CSV
-      const invoices = response.data.invoices;
-      if (invoices.length === 0) {
-        setError('Aucune facture à exporter pour cette période');
-        return;
-      }
-      
-      const headers = [
-        'Numéro facture',
-        'Client',
-        'Email client',
-        'Date émission',
-        'Date échéance',
-        'Statut',
-        'Sous-total',
-        'TPS',
-        'TVQ/PST',
-        'HST',
-        'Total',
-        'Méthode paiement',
-        'Date paiement',
-        'Notes'
-      ];
-      
-      let csvContent = headers.join(',') + '\n';
-      
-      invoices.forEach(invoice => {
-        const row = [
-          `"${invoice.invoice_number}"`,
-          `"${invoice.client_name}"`,
-          `"${invoice.client_email}"`,
-          `"${new Date(invoice.issue_date).toLocaleDateString('fr-CA')}"`,
-          `"${new Date(invoice.due_date).toLocaleDateString('fr-CA')}"`,
-          `"${invoice.status}"`,
-          invoice.subtotal,
-          invoice.gst_amount,
-          invoice.pst_amount,
-          invoice.hst_amount,
-          invoice.total,
-          `"${invoice.payment_method || ''}"`,
-          invoice.payment_date ? `"${new Date(invoice.payment_date).toLocaleDateString('fr-CA')}"` : '""',
-          `"${invoice.notes || ''}"`
-        ];
-        csvContent += row.join(',') + '\n';
-      });
-      
-      // Download file
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const link = document.createElement('a');
+      const csv = convertToCSV(data);
+      blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      mimeType = 'text/csv';
+    } else if (type === 'excel') {
+      // For Excel, we'll use CSV format (simple approach)
+      const csv = convertToCSV(data);
+      blob = new Blob([csv], { type: 'application/vnd.ms-excel' });
+      mimeType = 'application/vnd.ms-excel';
+      filename = filename.replace('.csv', '.xls');
+    } else {
+      // JSON
+      blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      mimeType = 'application/json';
+    }
+
+    const link = document.createElement('a');
+    if (link.download !== undefined) {
       const url = URL.createObjectURL(blob);
       link.setAttribute('href', url);
-      link.setAttribute('download', `factures_${new Date().toISOString().split('T')[0]}.csv`);
+      link.setAttribute('download', filename);
       link.style.visibility = 'hidden';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+    }
+  };
+
+  const convertToCSV = (data) => {
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      return '';
+    }
+
+    const headers = Object.keys(data[0]);
+    const csvContent = [
+      headers.join(','),
+      ...data.map(row => 
+        headers.map(header => {
+          const value = row[header];
+          // Escape commas and quotes in CSV
+          return typeof value === 'string' && (value.includes(',') || value.includes('"')) 
+            ? `"${value.replace(/"/g, '""')}"` 
+            : value;
+        }).join(',')
+      )
+    ].join('\n');
+
+    return csvContent;
+  };
+
+  const exportData = async (exportType, format = 'json') => {
+    setLoading(true);
+    setError('');
+
+    try {
+      let endpoint = '';
+      let filename = '';
+      let params = {};
+
+      // Build params
+      if (filters.start_date) params.start_date = filters.start_date;
+      if (filters.end_date) params.end_date = filters.end_date;
       
-      setSuccess('Export CSV téléchargé avec succès');
+      switch (exportType) {
+        case 'expenses':
+          endpoint = '/export/expenses';
+          filename = `depenses_${filters.start_date}_${filters.end_date}`;
+          if (filters.employee_id && filters.employee_id !== 'all') {
+            params.employee_id = filters.employee_id;
+          }
+          if (filters.status && filters.status !== 'all') {
+            params.status = filters.status;
+          }
+          break;
+        
+        case 'quotes':
+          endpoint = '/export/pending-quotes';
+          filename = `soumissions_en_cours_${new Date().toISOString().split('T')[0]}`;
+          break;
+        
+        case 'invoices':
+          endpoint = '/export/invoices';
+          filename = `factures_${filters.start_date}_${filters.end_date}`;
+          if (filters.status && filters.status !== 'all') {
+            params.status = filters.status;
+          }
+          break;
+        
+        case 'tax-report':
+          endpoint = '/export/tax-report';
+          filename = `rapport_tps_tvq_${filters.start_date}_${filters.end_date}`;
+          break;
+        
+        case 'business-summary':
+          endpoint = '/export/business-summary';
+          filename = `bilan_entreprise_${filters.start_date}_${filters.end_date}`;
+          break;
+        
+        default:
+          throw new Error('Type d\'export non reconnu');
+      }
+
+      const response = await axios.get(`${API}${endpoint}`, { params });
+      
+      // Add file extension
+      const extensions = { json: '.json', csv: '.csv', excel: '.xls' };
+      filename += extensions[format] || '.json';
+      
+      // Download appropriate data
+      let exportData = response.data;
+      if (exportType === 'expenses') {
+        exportData = response.data.expenses;
+      } else if (exportType === 'quotes') {
+        exportData = response.data.quotes;
+      } else if (exportType === 'invoices') {
+        exportData = response.data.invoices;
+      }
+      
+      downloadFile(exportData, filename, format);
+      setSuccess(`Export ${format.toUpperCase()} téléchargé avec succès`);
     } catch (error) {
-      setError('Erreur lors de l\'export CSV');
-      console.error(error);
+      setError(error.response?.data?.detail || 'Erreur lors de l\'export');
     } finally {
       setLoading(false);
     }
   };
 
-  const downloadStatisticsJSON = () => {
-    if (!statisticsData) return;
-    
-    const dataStr = JSON.stringify(statisticsData, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `statistiques_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    setSuccess('Statistiques JSON téléchargées');
-  };
+  const exportCards = [
+    {
+      title: 'Dépenses',
+      description: 'Export des dépenses avec filtres par employé et statut',
+      icon: CreditCard,
+      type: 'expenses',
+      color: 'text-green-600',
+      filters: ['dates', 'employee', 'status']
+    },
+    {
+      title: 'Soumissions en Cours',
+      description: 'Toutes les soumissions non converties en factures',
+      icon: ScrollText,
+      type: 'quotes',
+      color: 'text-blue-600',
+      filters: []
+    },
+    {
+      title: 'Factures',
+      description: 'Export des factures avec filtres par période et statut',
+      icon: Receipt,
+      type: 'invoices',
+      color: 'text-indigo-600',
+      filters: ['dates', 'status']
+    },
+    {
+      title: 'Rapport TPS/TVQ',
+      description: 'Rapport fiscal pour déclarations de taxes',
+      icon: Calculator,
+      type: 'tax-report',
+      color: 'text-red-600',
+      filters: ['dates']
+    },
+    {
+      title: 'Bilan Entreprise',
+      description: 'Résumé financier complet (revenus, dépenses, profits)',
+      icon: TrendingUp,
+      type: 'business-summary',
+      color: 'text-purple-600',
+      filters: ['dates']
+    }
+  ];
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Exports et Statistiques</h1>
-        <p className="text-gray-600">Exportez vos données pour la comptabilité et l'analyse</p>
+    <div className="space-y-6">
+      <div className="flex items-center">
+        <BarChart3 className="w-8 h-8 text-indigo-600 mr-3" />
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Exports et Rapports</h1>
+          <p className="text-gray-600">Exportez vos données en différents formats</p>
+        </div>
       </div>
-
-      {/* Success/Error messages */}
-      {success && (
-        <Alert className="border-green-200 bg-green-50">
-          <AlertDescription className="text-green-800">{success}</AlertDescription>
-        </Alert>
-      )}
 
       {error && (
         <Alert className="border-red-200 bg-red-50">
@@ -180,25 +243,16 @@ const ExportPage = () => {
         </Alert>
       )}
 
-      {/* Filters */}
-      <Card className="p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Filtres d'export</h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Période
-            </label>
-            <select 
-              value={filters.period}
-              onChange={(e) => setFilters(prev => ({ ...prev, period: e.target.value }))}
-              className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-            >
-              <option value="week">Semaine</option>
-              <option value="month">Mois</option>
-              <option value="year">Année</option>
-            </select>
-          </div>
+      {success && (
+        <Alert className="border-green-200 bg-green-50">
+          <AlertDescription className="text-green-800">{success}</AlertDescription>
+        </Alert>
+      )}
 
+      {/* Global Filters */}
+      <Card className="p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Filtres généraux</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Date de début
@@ -209,7 +263,7 @@ const ExportPage = () => {
               onChange={(e) => setFilters(prev => ({ ...prev, start_date: e.target.value }))}
             />
           </div>
-
+          
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Date de fin
@@ -220,162 +274,153 @@ const ExportPage = () => {
               onChange={(e) => setFilters(prev => ({ ...prev, end_date: e.target.value }))}
             />
           </div>
-
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Employé
+            </label>
+            <select
+              value={filters.employee_id}
+              onChange={(e) => setFilters(prev => ({ ...prev, employee_id: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">Tous les employés</option>
+              {employees.map(employee => (
+                <option key={employee.id} value={employee.id}>
+                  {employee.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Statut
             </label>
-            <select 
+            <select
               value={filters.status}
               onChange={(e) => setFilters(prev => ({ ...prev, status: e.target.value }))}
-              className="w-full h-10 px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="all">Tous</option>
+              <option value="pending">En attente</option>
+              <option value="approved">Approuvé</option>
+              <option value="paid">Payé</option>
+              <option value="sent">Envoyé</option>
               <option value="draft">Brouillon</option>
-              <option value="sent">Envoyées</option>
-              <option value="paid">Payées</option>
-              <option value="overdue">En retard</option>
             </select>
           </div>
         </div>
       </Card>
 
-      {/* Export Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card className="p-6 card-hover">
-          <div className="flex items-center mb-4">
-            <TrendingUp className="w-8 h-8 text-blue-600 mr-3" />
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">Statistiques détaillées</h3>
-              <p className="text-gray-600">Analyse complète de votre activité</p>
-            </div>
-          </div>
-          <Button 
-            onClick={exportStatistics}
-            disabled={loading}
-            className="w-full"
-          >
-            <BarChart3 className="w-4 h-4 mr-2" />
-            Générer les statistiques
-          </Button>
-        </Card>
-
-        <Card className="p-6 card-hover">
-          <div className="flex items-center mb-4">
-            <FileSpreadsheet className="w-8 h-8 text-green-600 mr-3" />
-            <div>
-              <h3 className="text-lg font-semibold text-gray-900">Export CSV</h3>
-              <p className="text-gray-600">Données pour Excel/comptabilité</p>
-            </div>
-          </div>
-          <Button 
-            onClick={exportInvoicesCSV}
-            disabled={loading}
-            className="w-full bg-green-600 hover:bg-green-700"
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Télécharger CSV
-          </Button>
-        </Card>
+      {/* Export Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {exportCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <Card key={card.type} className="p-6 card-hover">
+              <div className="flex items-start space-x-4">
+                <div className={`p-3 rounded-lg bg-gray-50 ${card.color}`}>
+                  <Icon className="w-6 h-6" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-gray-900 mb-1">{card.title}</h3>
+                  <p className="text-sm text-gray-600 mb-4">{card.description}</p>
+                  
+                  {/* Format Buttons */}
+                  <div className="space-y-2">
+                    <div className="flex space-x-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => exportData(card.type, 'excel')}
+                        disabled={loading}
+                        className="flex-1"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 mr-1" />
+                        Excel
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => exportData(card.type, 'csv')}
+                        disabled={loading}
+                        className="flex-1"
+                      >
+                        <BarChart3 className="w-4 h-4 mr-1" />
+                        CSV
+                      </Button>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => exportData(card.type, 'json')}
+                      disabled={loading}
+                      className="w-full text-gray-600"
+                    >
+                      <Download className="w-4 h-4 mr-1" />
+                      JSON (Données brutes)
+                    </Button>
+                  </div>
+                  
+                  {/* Applicable Filters */}
+                  {card.filters.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <p className="text-xs text-gray-500 mb-1">Filtres appliqués :</p>
+                      <div className="flex flex-wrap gap-1">
+                        {card.filters.includes('dates') && (
+                          <Badge variant="outline" className="text-xs">Dates</Badge>
+                        )}
+                        {card.filters.includes('employee') && filters.employee_id !== 'all' && (
+                          <Badge variant="outline" className="text-xs">Employé</Badge>
+                        )}
+                        {card.filters.includes('status') && filters.status !== 'all' && (
+                          <Badge variant="outline" className="text-xs">Statut</Badge>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
       </div>
 
-      {/* Statistics Display */}
-      {statisticsData && (
-        <div className="space-y-6">
-          <div className="flex justify-between items-center">
-            <h3 className="text-lg font-semibold text-gray-900">Résultats des statistiques</h3>
-            <Button 
-              onClick={downloadStatisticsJSON}
-              variant="outline"
-              size="sm"
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Télécharger JSON
-            </Button>
-          </div>
-
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <Card className="p-4 text-center">
-              <div className="text-2xl font-bold text-blue-600">{statisticsData.summary.total_invoices}</div>
-              <div className="text-sm text-gray-600">Total factures</div>
-            </Card>
-
-            <Card className="p-4 text-center">
-              <div className="text-2xl font-bold text-green-600">{statisticsData.summary.paid_invoices}</div>
-              <div className="text-sm text-gray-600">Factures payées</div>
-            </Card>
-
-            <Card className="p-4 text-center">
-              <div className="text-2xl font-bold text-orange-600">{statisticsData.summary.pending_invoices}</div>
-              <div className="text-sm text-gray-600">En attente</div>
-            </Card>
-
-            <Card className="p-4 text-center">
-              <div className="text-2xl font-bold text-purple-600">{statisticsData.summary.collection_rate.toFixed(1)}%</div>
-              <div className="text-sm text-gray-600">Taux de recouvrement</div>
-            </Card>
-          </div>
-
-          {/* Financial Summary */}
+      {/* Loading State */}
+      {loading && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <Card className="p-6">
-            <h4 className="text-lg font-semibold text-gray-900 mb-4">Résumé financier</h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="text-center">
-                <div className="text-3xl font-bold text-green-600 mb-2">
-                  {formatCurrency(statisticsData.summary.total_revenue)}
-                </div>
-                <div className="text-sm text-gray-600">Revenus encaissés</div>
-              </div>
-
-              <div className="text-center">
-                <div className="text-3xl font-bold text-orange-600 mb-2">
-                  {formatCurrency(statisticsData.summary.pending_amount)}
-                </div>
-                <div className="text-sm text-gray-600">En attente de paiement</div>
-              </div>
-
-              <div className="text-center">
-                <div className="text-3xl font-bold text-red-600 mb-2">
-                  {formatCurrency(statisticsData.summary.overdue_amount)}
-                </div>
-                <div className="text-sm text-gray-600">Factures en retard</div>
-              </div>
+            <div className="flex items-center space-x-3">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-500"></div>
+              <span className="text-lg">Génération de l'export en cours...</span>
             </div>
           </Card>
-
-          {/* Period Breakdown */}
-          {statisticsData.period_breakdown.length > 0 && (
-            <Card className="p-6">
-              <h4 className="text-lg font-semibold text-gray-900 mb-4">Évolution par période</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full table-auto">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-2">Période</th>
-                      <th className="text-center py-2">Factures</th>
-                      <th className="text-center py-2">Payées</th>
-                      <th className="text-right py-2">Montant total</th>
-                      <th className="text-right py-2">Revenus</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {statisticsData.period_breakdown.map((period, index) => (
-                      <tr key={index} className="border-b">
-                        <td className="py-2 font-medium">{period.period}</td>
-                        <td className="py-2 text-center">{period.total_invoices}</td>
-                        <td className="py-2 text-center">{period.paid_count}</td>
-                        <td className="py-2 text-right">{formatCurrency(period.total_amount)}</td>
-                        <td className="py-2 text-right">{formatCurrency(period.paid_amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
         </div>
       )}
+
+      {/* Quick Stats */}
+      <Card className="p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Aperçu rapide</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-indigo-600">📊</div>
+            <p className="text-sm text-gray-600">Données temps réel</p>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-green-600">💼</div>
+            <p className="text-sm text-gray-600">Multi-formats</p>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-blue-600">📈</div>
+            <p className="text-sm text-gray-600">Rapports fiscaux</p>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-purple-600">🎯</div>
+            <p className="text-sm text-gray-600">Analyses business</p>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 };
