@@ -1452,6 +1452,273 @@ class BillingAPITester:
             else:
                 print(f"⚠️ Failed to clean up test client: {self.test_client_id}")
 
+
+    def test_logo_upload_issue(self):
+        """Test logo upload functionality - URGENT issue reported by user"""
+        print("\n🔄 URGENT: Testing Logo Upload Issue (Logo not displaying after upload)...")
+        
+        # Create a fresh user with active trial for this test
+        import time
+        import os
+        import tempfile
+        from PIL import Image
+        
+        timestamp = str(int(time.time()))
+        logo_test_user_data = {
+            "email": f"logotest{timestamp}@facturepro.com",
+            "password": "testpass123",
+            "company_name": "Logo Test Company"
+        }
+        
+        success, response = self.make_request('POST', 'auth/register', logo_test_user_data, 200)
+        if success and 'access_token' in response:
+            logo_test_token = response['access_token']
+            logo_test_user_id = response['user']['id']
+            self.log_test("Logo Upload - Create Test User", True, f"Test user created for logo testing")
+        else:
+            self.log_test("Logo Upload - Create Test User", False, f"Failed to create test user: {response}")
+            return False
+        
+        # Store original token and switch to logo test user
+        original_token = self.token
+        self.token = logo_test_token
+        
+        # Step 1: Check if /app/uploads/logos/ directory exists
+        try:
+            import subprocess
+            result = subprocess.run(['ls', '-la', '/app/uploads/logos/'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                self.log_test("Logo Upload - Directory Exists", True, f"/app/uploads/logos/ directory exists")
+            else:
+                self.log_test("Logo Upload - Directory Exists", False, f"/app/uploads/logos/ directory does not exist: {result.stderr}")
+        except Exception as e:
+            self.log_test("Logo Upload - Directory Check", False, f"Failed to check directory: {str(e)}")
+        
+        # Step 2: Create a test image file
+        try:
+            # Create a simple test image (100x100 red square)
+            img = Image.new('RGB', (100, 100), color='red')
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            img.save(temp_file.name, 'PNG')
+            temp_file.close()
+            
+            test_image_path = temp_file.name
+            self.log_test("Logo Upload - Create Test Image", True, f"Test image created at {test_image_path}")
+        except Exception as e:
+            self.log_test("Logo Upload - Create Test Image", False, f"Failed to create test image: {str(e)}")
+            self.token = original_token
+            return False
+        
+        # Step 3: Test POST /api/settings/company/upload-logo
+        try:
+            url = f"{self.api_url}/settings/company/upload-logo"
+            headers = {'Authorization': f'Bearer {self.token}'}
+            
+            with open(test_image_path, 'rb') as f:
+                files = {'file': ('test_logo.png', f, 'image/png')}
+                response = requests.post(url, files=files, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                if 'logo_url' in response_data and 'filename' in response_data:
+                    uploaded_logo_url = response_data['logo_url']
+                    uploaded_filename = response_data['filename']
+                    self.log_test("Logo Upload - POST /api/settings/company/upload-logo", True, 
+                                f"Logo uploaded successfully: {uploaded_logo_url}")
+                else:
+                    self.log_test("Logo Upload - POST /api/settings/company/upload-logo", False, 
+                                f"Response missing logo_url or filename: {response_data}")
+                    uploaded_logo_url = None
+                    uploaded_filename = None
+            else:
+                self.log_test("Logo Upload - POST /api/settings/company/upload-logo", False, 
+                            f"Upload failed with status {response.status_code}: {response.text}")
+                uploaded_logo_url = None
+                uploaded_filename = None
+        except Exception as e:
+            self.log_test("Logo Upload - POST /api/settings/company/upload-logo", False, f"Upload request failed: {str(e)}")
+            uploaded_logo_url = None
+            uploaded_filename = None
+        
+        # Step 4: Verify logo_url is saved in company_settings
+        success, response = self.make_request('GET', 'settings/company', expected_status=200)
+        if success and 'logo_url' in response:
+            if response['logo_url'] == uploaded_logo_url:
+                self.log_test("Logo Upload - Verify logo_url in company_settings", True, 
+                            f"logo_url correctly saved in database: {response['logo_url']}")
+            else:
+                self.log_test("Logo Upload - Verify logo_url in company_settings", False, 
+                            f"logo_url mismatch: expected {uploaded_logo_url}, got {response.get('logo_url')}")
+        else:
+            self.log_test("Logo Upload - Verify logo_url in company_settings", False, 
+                        f"logo_url not found in company_settings: {response}")
+        
+        # Step 5: Test GET /api/uploads/logos/{filename} - verify file is accessible
+        if uploaded_filename:
+            try:
+                # Extract filename from logo_url (format: /uploads/logos/filename.png)
+                filename_from_url = uploaded_logo_url.split('/')[-1] if uploaded_logo_url else uploaded_filename
+                
+                url = f"{self.api_url}/uploads/logos/{filename_from_url}"
+                headers = {'Authorization': f'Bearer {self.token}'}
+                response = requests.get(url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    # Check if response is actually an image
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'image' in content_type or len(response.content) > 0:
+                        self.log_test("Logo Upload - GET /api/uploads/logos/{filename}", True, 
+                                    f"Logo file accessible, size: {len(response.content)} bytes, type: {content_type}")
+                    else:
+                        self.log_test("Logo Upload - GET /api/uploads/logos/{filename}", False, 
+                                    f"Response not an image: {content_type}")
+                else:
+                    self.log_test("Logo Upload - GET /api/uploads/logos/{filename}", False, 
+                                f"Failed to retrieve logo: status {response.status_code}, {response.text}")
+            except Exception as e:
+                self.log_test("Logo Upload - GET /api/uploads/logos/{filename}", False, 
+                            f"Failed to retrieve logo: {str(e)}")
+        
+        # Step 6: Check file permissions on /app/uploads/logos/
+        try:
+            result = subprocess.run(['ls', '-la', '/app/uploads/logos/'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Check if uploaded file exists
+                if uploaded_filename and uploaded_filename in result.stdout:
+                    self.log_test("Logo Upload - File Exists on Disk", True, 
+                                f"Uploaded file {uploaded_filename} exists in /app/uploads/logos/")
+                else:
+                    self.log_test("Logo Upload - File Exists on Disk", False, 
+                                f"Uploaded file {uploaded_filename} not found in directory listing")
+                
+                # Check permissions
+                self.log_test("Logo Upload - Directory Permissions", True, 
+                            f"Directory listing:\n{result.stdout}")
+            else:
+                self.log_test("Logo Upload - Directory Permissions", False, 
+                            f"Failed to list directory: {result.stderr}")
+        except Exception as e:
+            self.log_test("Logo Upload - Directory Permissions", False, f"Failed to check permissions: {str(e)}")
+        
+        # Step 7: Test complete workflow - Upload → Save → Retrieve
+        try:
+            # Create another test image
+            img2 = Image.new('RGB', (150, 150), color='blue')
+            temp_file2 = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+            img2.save(temp_file2.name, 'JPEG')
+            temp_file2.close()
+            
+            # Upload second logo
+            url = f"{self.api_url}/settings/company/upload-logo"
+            headers = {'Authorization': f'Bearer {self.token}'}
+            
+            with open(temp_file2.name, 'rb') as f:
+                files = {'file': ('test_logo2.jpg', f, 'image/jpeg')}
+                response = requests.post(url, files=files, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                response_data = response.json()
+                logo_url_2 = response_data.get('logo_url')
+                
+                # Verify it's saved in settings
+                success, settings_response = self.make_request('GET', 'settings/company', expected_status=200)
+                if success and settings_response.get('logo_url') == logo_url_2:
+                    # Try to retrieve it
+                    filename_2 = logo_url_2.split('/')[-1]
+                    url = f"{self.api_url}/uploads/logos/{filename_2}"
+                    headers = {'Authorization': f'Bearer {self.token}'}
+                    retrieve_response = requests.get(url, headers=headers, timeout=10)
+                    
+                    if retrieve_response.status_code == 200 and len(retrieve_response.content) > 0:
+                        self.log_test("Logo Upload - Complete Workflow Test", True, 
+                                    "Complete workflow (Upload → Save → Retrieve) working correctly")
+                    else:
+                        self.log_test("Logo Upload - Complete Workflow Test", False, 
+                                    f"Failed to retrieve second logo: {retrieve_response.status_code}")
+                else:
+                    self.log_test("Logo Upload - Complete Workflow Test", False, 
+                                f"Second logo not saved in settings correctly")
+            else:
+                self.log_test("Logo Upload - Complete Workflow Test", False, 
+                            f"Failed to upload second logo: {response.status_code}")
+            
+            # Cleanup temp file
+            os.unlink(temp_file2.name)
+        except Exception as e:
+            self.log_test("Logo Upload - Complete Workflow Test", False, f"Workflow test failed: {str(e)}")
+        
+        # Step 8: Test with invalid file types
+        try:
+            # Create a text file (should be rejected)
+            temp_txt = tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w')
+            temp_txt.write("This is not an image")
+            temp_txt.close()
+            
+            url = f"{self.api_url}/settings/company/upload-logo"
+            headers = {'Authorization': f'Bearer {self.token}'}
+            
+            with open(temp_txt.name, 'rb') as f:
+                files = {'file': ('test.txt', f, 'text/plain')}
+                response = requests.post(url, files=files, headers=headers, timeout=10)
+            
+            if response.status_code == 400:
+                self.log_test("Logo Upload - Invalid File Type Validation", True, 
+                            "Invalid file type correctly rejected with 400 error")
+            else:
+                self.log_test("Logo Upload - Invalid File Type Validation", False, 
+                            f"Invalid file type not rejected: status {response.status_code}")
+            
+            # Cleanup
+            os.unlink(temp_txt.name)
+        except Exception as e:
+            self.log_test("Logo Upload - Invalid File Type Validation", False, f"Validation test failed: {str(e)}")
+        
+        # Step 9: Test with oversized file (>5MB)
+        try:
+            # Create a large image (should be rejected)
+            large_img = Image.new('RGB', (5000, 5000), color='green')
+            temp_large = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            large_img.save(temp_large.name, 'PNG')
+            temp_large.close()
+            
+            # Check file size
+            file_size = os.path.getsize(temp_large.name)
+            
+            if file_size > 5 * 1024 * 1024:  # If larger than 5MB
+                url = f"{self.api_url}/settings/company/upload-logo"
+                headers = {'Authorization': f'Bearer {self.token}'}
+                
+                with open(temp_large.name, 'rb') as f:
+                    files = {'file': ('large_logo.png', f, 'image/png')}
+                    response = requests.post(url, files=files, headers=headers, timeout=10)
+                
+                if response.status_code == 400:
+                    self.log_test("Logo Upload - File Size Validation", True, 
+                                "Oversized file correctly rejected with 400 error")
+                else:
+                    self.log_test("Logo Upload - File Size Validation", False, 
+                                f"Oversized file not rejected: status {response.status_code}")
+            else:
+                self.log_test("Logo Upload - File Size Validation", True, 
+                            f"Test image not large enough ({file_size} bytes), skipping size validation test")
+            
+            # Cleanup
+            os.unlink(temp_large.name)
+        except Exception as e:
+            self.log_test("Logo Upload - File Size Validation", False, f"Size validation test failed: {str(e)}")
+        
+        # Cleanup test image
+        try:
+            os.unlink(test_image_path)
+        except:
+            pass
+        
+        # Restore original token
+        self.token = original_token
+        
+        print("\n✅ Logo Upload Testing Complete")
+        return True
+
     def run_all_tests(self):
         """Run all API tests"""
         print("🚀 Starting FacturePro Backend API Tests...")
