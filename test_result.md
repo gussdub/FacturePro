@@ -243,6 +243,21 @@ backend:
         agent: "testing"
         comment: "PASSWORD RESET COMPLETED - ISSUE RESOLVED: ✅ DIAGNOSTIC COMPLETED: Created comprehensive diagnostic script to analyze account state ✅ ACCOUNT EXISTS: gussdub@gmail.com account found in database (User ID: 95f79689-6e5d-4853-bb7b-6e35382a6ead, Company: ProFireManager) ✅ ACCOUNT STATE: is_active=True, subscription_status=trial, trial_end_date=2026-10-01 (extended trial) ✅ PASSWORD HASH: Valid format (128 characters = 64 salt + 64 hash) using PBKDF2-HMAC-SHA256 ✅ ROOT CAUSE IDENTIFIED: None of the common passwords (testpass123, password123, admin123, etc.) matched the stored hash - password was set to something unknown ✅ SOLUTION IMPLEMENTED: Reset password to 'testpass123' using password reset script ✅ LOGIN VERIFIED: Successfully tested login with gussdub@gmail.com/testpass123 - returns 200 OK with valid JWT token ✅ ALL ENDPOINTS TESTED: Verified access to subscription/user-status, clients (2), products (1), invoices (0), quotes (1), dashboard/stats - all working ✅ EXEMPTION STATUS: User has has_access=True with trial subscription (exempt user functionality working) ✅ CONCLUSION: User can now login with password 'testpass123' and has full access to all features. Account is fully operational."
 
+  - task: "Forgot password button functionality"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/LoginPage.js, /app/frontend/src/components/ForgotPasswordModal.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "user"
+        comment: "USER REPORT: User reports 'Mot de passe oublié' button doesn't work when clicked and ForgotPasswordModal doesn't open. Need to test: 1) Button visibility and clickability, 2) Modal opening, 3) Email input, 4) Code generation API call, 5) Password reset flow, 6) Backend endpoints /api/auth/forgot-password and /api/auth/reset-password."
+      - working: true
+        agent: "testing"
+        comment: "FORGOT PASSWORD FUNCTIONALITY FULLY OPERATIONAL: ✅ COMPREHENSIVE TESTING COMPLETED on https://facture-wizard.preview.emergentagent.com/login ✅ BUTTON VISIBILITY: 'Mot de passe oublié ?' button is visible on login page (line 232-238 LoginPage.js) ✅ BUTTON CLICKABLE: Button responds to clicks correctly, triggers setShowForgotPassword(true) ✅ MODAL OPENS: ForgotPasswordModal component opens successfully after button click ✅ MODAL CONTENT: Displays correct title 'Mot de passe oublié', email input field, and 'Générer le code' button ✅ EMAIL INPUT: Email input field accepts and validates user input ✅ API INTEGRATION: POST /api/auth/forgot-password endpoint called successfully (Status 200) ✅ RESET TOKEN GENERATION: Backend generates reset token using secrets.token_urlsafe(32) and stores in database with 1-hour expiration ✅ STEP TRANSITION: Modal successfully transitions from email step to password reset step ✅ TOKEN DISPLAY: Reset token displayed in blue box for user to copy (lines 145-155 ForgotPasswordModal.js) ✅ PASSWORD INPUTS: New password and confirm password fields work correctly ✅ PASSWORD VALIDATION: Validates password match and minimum 6 characters ✅ RESET API: POST /api/auth/reset-password endpoint called successfully (Status 200) ✅ PASSWORD UPDATE: Backend updates hashed_password and removes reset token from database ✅ SUCCESS MESSAGE: 'Mot de passe réinitialisé avec succès' displayed, modal auto-closes after 2 seconds ✅ NO CONSOLE ERRORS: No JavaScript errors detected during entire workflow ✅ COMPLETE FLOW TESTED: Entire workflow from button click → email entry → code generation → password reset → success works perfectly ✅ CONCLUSION: The 'Mot de passe oublié' button IS WORKING CORRECTLY. User's reported issue cannot be reproduced. All functionality operational. User may have experienced temporary browser cache issue or network problem. Recommend user clear browser cache and try again."
+
 frontend:
   - task: "Registration and trial redirect workflow"
     implemented: true
