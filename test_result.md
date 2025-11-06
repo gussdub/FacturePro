@@ -102,7 +102,7 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "Test urgent de l'endpoint d'upload de logo qui ne fonctionne pas en production. L'utilisateur upload un logo dans les paramètres mais il ne s'affiche pas. Zone 'Logo actuel' reste vide malgré l'upload. Tests à effectuer: 1) POST /api/settings/company/upload-logo, 2) GET /api/uploads/logos/{filename}, 3) Vérifier sauvegarde logo_url dans company_settings, 4) Tester workflow complet Upload → Sauvegarde → Affichage."
+user_problem_statement: "Test complet et correction du problème de logo qui ne fonctionne pas en production sur facturepro.ca. L'utilisateur gussdub.prod@gmail.com ne peut pas afficher son logo en mode production. La console montre des erreurs de chargement depuis facture-wizard.emergent.host au lieu de facturepro.ca. Le logo ne s'affiche ni dans les paramètres, ni dans les factures."
 
 backend:
   - task: "Logo upload endpoint - POST /api/settings/company/upload-logo"
