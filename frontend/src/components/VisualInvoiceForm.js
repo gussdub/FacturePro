@@ -36,6 +36,11 @@ const VisualInvoiceForm = ({ invoiceData, onSave, onCancel, isQuote = false }) =
   }, []);
 
   useEffect(() => {
+    console.log('VisualInvoiceForm settings loaded:', settings);
+    console.log('Logo URL:', settings?.logo_url);
+  }, [settings]);
+
+  useEffect(() => {
     if (invoiceData) {
       setFormData({
         ...invoiceData,
