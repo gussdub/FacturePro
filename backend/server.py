@@ -404,6 +404,67 @@ async def upload_company_logo(
         "logo_url": logo_url
     }
 
+# Password Reset Models and Endpoints
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+# In-memory token storage (temporary)
+reset_tokens_db = {}
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    # Find user
+    user = await db.users.find_one({"email": request.email})
+    if not user:
+        return {"message": "Si cette adresse email existe, un code de récupération a été généré"}
+    
+    # Generate reset token
+    import secrets
+    reset_token = secrets.token_urlsafe(32)
+    
+    # Store token with expiration
+    reset_tokens_db[reset_token] = {
+        "user_id": user["id"],
+        "email": user["email"], 
+        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
+    }
+    
+    return {
+        "message": "Code de récupération généré",
+        "reset_token": reset_token,
+        "expires_in": "1 heure"
+    }
+
+@api_router.post("/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    # Check token
+    token_data = reset_tokens_db.get(request.token)
+    if not token_data:
+        raise HTTPException(400, "Code de récupération invalide")
+    
+    # Check expiration
+    if datetime.now(timezone.utc) > token_data["expires_at"]:
+        del reset_tokens_db[request.token]
+        raise HTTPException(400, "Code de récupération expiré")
+    
+    # Update password
+    user_id = token_data["user_id"]
+    new_hashed = get_password_hash(request.new_password)
+    
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"hashed_password": new_hashed}}
+    )
+    
+    # Remove used token
+    del reset_tokens_db[request.token]
+    
+    return {"message": "Mot de passe réinitialisé avec succès"}
+
 # Helper functions for calculations
 def calculate_invoice_totals(items, gst_rate, pst_rate, hst_rate, apply_gst, apply_pst, apply_hst):
     """Calculate invoice totals with Canadian taxes"""
