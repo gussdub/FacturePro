@@ -115,6 +115,7 @@ def create_access_token(data: dict):
     return encoded_jwt
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current authenticated user from JWT token"""
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
@@ -128,17 +129,30 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="User not found")
     return User(**user)
 
-# Exemption system for gussdub@gmail.com
-async def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    user = await get_current_user(credentials)
+async def check_subscription_access(user: User):
+    """Check if user has valid subscription access"""
     
     # Exempt users (always free access)
     EXEMPT_USERS = ["gussdub@gmail.com"]
     if user.email in EXEMPT_USERS:
-        return True
-
+        return True  # Always grant access to exempt users
+    
     # Simple check - everyone has trial access for now
     return True
+
+async def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Get current user and check subscription access"""
+    user = await get_current_user(credentials)
+    
+    # Check subscription access
+    has_access = await check_subscription_access(user)
+    if not has_access:
+        raise HTTPException(
+            status_code=403, 
+            detail="Votre abonnement a expiré. Veuillez renouveler votre abonnement pour continuer à utiliser FacturePro."
+        )
+    
+    return user
 
 # Routes
 @api_router.get("/health")
