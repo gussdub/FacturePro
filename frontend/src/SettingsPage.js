@@ -52,25 +52,23 @@ const SettingsPage = () => {
     }
   };
 
-  const handleLogoUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const handleLogoUpload = async () => {
+    if (!settings.logo_url) {
+      setMessage('❌ Veuillez entrer une URL de logo');
+      return;
+    }
 
     setUploading(true);
     setMessage('');
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+      const response = await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+        logo_url: settings.logo_url
       });
 
-      setSettings(prev => ({ ...prev, logo_url: response.data.logo_url }));
-      setMessage('✅ Logo uploadé avec succès');
+      setMessage('✅ Logo sauvegardé avec succès');
     } catch (error) {
-      setMessage('❌ Erreur lors de l\'upload du logo');
+      setMessage('❌ Erreur lors de la sauvegarde du logo');
     } finally {
       setUploading(false);
     }
