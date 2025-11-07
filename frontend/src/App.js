@@ -2393,13 +2393,286 @@ const ExpensesPage = () => (
   </div>
 );
 
-const SettingsPage = () => (
-  <div style={{ textAlign: 'center', padding: '60px' }}>
-    <div style={{ fontSize: '80px', marginBottom: '24px' }}>⚙️</div>
-    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Paramètres</h2>
-    <p style={{ color: '#6b7280', fontSize: '18px' }}>Configuration de votre entreprise</p>
-  </div>
-);
+const SettingsPage = () => {
+  const [settings, setSettings] = useState({
+    company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
+    logo_url: '', primary_color: '#3B82F6', secondary_color: '#1F2937',
+    gst_number: '', pst_number: '', hst_number: '', default_due_days: 30
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/settings/company`);
+      setSettings({ ...settings, ...response.data });
+    } catch (error) {
+      setError('Erreur lors du chargement des paramètres');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(''); setSuccess('');
+
+    try {
+      await axios.put(`${BACKEND_URL}/api/settings/company`, settings);
+      setSuccess('Paramètres sauvegardés avec succès');
+    } catch (error) {
+      setError('Erreur lors de la sauvegarde');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleLogoSave = async () => {
+    if (!settings.logo_url) {
+      setError('Veuillez entrer une URL de logo');
+      return;
+    }
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+        logo_url: settings.logo_url
+      });
+      setSuccess('Logo sauvegardé avec succès');
+    } catch (error) {
+      setError('Erreur lors de la sauvegarde du logo');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+        <p>Chargement des paramètres...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>⚙️</div>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Paramètres</h1>
+        </div>
+        <p style={{ color: '#6b7280', margin: 0 }}>Configuration de votre entreprise</p>
+      </div>
+
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{error}</div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{success}</div>
+      )}
+
+      <form onSubmit={handleSubmit}>
+        {/* Logo Section */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>🖼️ Logo de l'entreprise</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '16px', alignItems: 'end' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>URL du logo</label>
+              <input
+                type="url"
+                value={settings.logo_url || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, logo_url: e.target.value }))}
+                placeholder="https://exemple.com/votre-logo.png"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleLogoSave}
+              style={{
+                background: '#3b82f6', color: 'white', border: 'none',
+                padding: '12px 20px', borderRadius: '8px', cursor: 'pointer',
+                fontWeight: '600'
+              }}
+            >
+              💾 Sauvegarder logo
+            </button>
+          </div>
+          
+          {settings.logo_url && (
+            <div style={{ marginTop: '16px', textAlign: 'center' }}>
+              <img
+                src={settings.logo_url}
+                alt="Logo aperçu"
+                style={{
+                  maxWidth: '120px', maxHeight: '120px', objectFit: 'contain',
+                  border: '1px solid #e5e7eb', borderRadius: '8px'
+                }}
+                onError={() => setError('Impossible de charger l\\'image à cette URL')}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Company Info */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>🏢 Informations de l'entreprise</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Nom de l'entreprise *</label>
+              <input
+                type="text"
+                value={settings.company_name}
+                onChange={(e) => setSettings(prev => ({ ...prev, company_name: e.target.value }))}
+                required
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Email *</label>
+              <input
+                type="email"
+                value={settings.email}
+                onChange={(e) => setSettings(prev => ({ ...prev, email: e.target.value }))}
+                required
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Téléphone</label>
+              <input
+                type="tel"
+                value={settings.phone || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, phone: e.target.value }))}
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Ville</label>
+              <input
+                type="text"
+                value={settings.city || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, city: e.target.value }))}
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Tax Numbers */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>📊 Numéros de taxes canadiens</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>TPS (Fédéral)</label>
+              <input
+                type="text"
+                value={settings.gst_number || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, gst_number: e.target.value }))}
+                placeholder="123456789 RT0001"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                Ex: 123456789 RT0001
+              </p>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>TVQ (Québec)</label>
+              <input
+                type="text"
+                value={settings.pst_number || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, pst_number: e.target.value }))}
+                placeholder="1234567890 TQ0001"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                Ex: 1234567890 TQ0001
+              </p>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>HST (Ontario)</label>
+              <input
+                type="text"
+                value={settings.hst_number || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, hst_number: e.target.value }))}
+                placeholder="123456789 RT0001"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                Ex: 123456789 RT0001
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Save Button */}
+        <div style={{ textAlign: 'center' }}>
+          <button
+            type="submit"
+            disabled={saving}
+            style={{
+              background: saving ? '#9ca3af' : 'linear-gradient(135deg, #10b981, #047857)',
+              color: 'white', border: 'none', padding: '16px 32px',
+              borderRadius: '12px', cursor: saving ? 'not-allowed' : 'pointer',
+              fontSize: '16px', fontWeight: '700'
+            }}
+          >
+            {saving ? 'Sauvegarde...' : '💾 Sauvegarder tous les paramètres'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
 
 const ExportPage = () => (
   <div style={{ textAlign: 'center', padding: '60px' }}>
