@@ -228,6 +228,75 @@ async def get_stats(current_user: User = Depends(get_current_user)):
         "pending_invoices": 0
     }
 
+# Password Reset Models
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+# Password reset storage (in production, use database with expiration)
+reset_tokens = {}
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    # Find user
+    user = None
+    for u in users_db.values():
+        if isinstance(u, User) and u.email == request.email:
+            user = u
+            break
+    
+    if not user:
+        # Don't reveal if email exists for security
+        return {"message": "Si cette adresse email existe, un code de récupération a été généré"}
+    
+    # Generate reset token
+    import secrets
+    reset_token = secrets.token_urlsafe(32)
+    
+    # Store token (expires in 1 hour)
+    reset_tokens[reset_token] = {
+        "user_id": user.id,
+        "email": user.email,
+        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
+    }
+    
+    # In production, this would be sent by email
+    # For now, return it directly for demo
+    return {
+        "message": "Code de récupération généré",
+        "reset_token": reset_token,
+        "expires_in": "1 heure"
+    }
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    # Check if token exists and is valid
+    token_data = reset_tokens.get(request.token)
+    if not token_data:
+        raise HTTPException(400, "Code de récupération invalide")
+    
+    # Check if token has expired
+    if datetime.now(timezone.utc) > token_data["expires_at"]:
+        del reset_tokens[request.token]  # Clean up expired token
+        raise HTTPException(400, "Code de récupération expiré")
+    
+    # Find user
+    user_id = token_data["user_id"]
+    if user_id not in users_db:
+        raise HTTPException(400, "Utilisateur non trouvé")
+    
+    # Update password
+    new_hashed_password = hash_password(request.new_password)
+    users_db[f"{user_id}_password"] = new_hashed_password
+    
+    # Remove used token
+    del reset_tokens[request.token]
+    
+    return {"message": "Mot de passe réinitialisé avec succès"}
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
