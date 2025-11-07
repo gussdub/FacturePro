@@ -556,7 +556,10 @@ async def create_quote(quote_data: dict, current_user: User = Depends(get_curren
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        await db.quotes.insert_one(new_quote)
+        result = await db.quotes.insert_one(new_quote)
+        # Remove MongoDB _id before returning
+        if "_id" in new_quote:
+            del new_quote["_id"]
         return new_quote
         
     except Exception as e:
