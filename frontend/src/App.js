@@ -2639,7 +2639,7 @@ const SettingsPage = () => {
                   maxWidth: '120px', maxHeight: '120px', objectFit: 'contain',
                   border: '1px solid #e5e7eb', borderRadius: '8px'
                 }}
-                onError={() => setError('Impossible de charger l\\'image à cette URL')}
+                onError={() => setError('Impossible de charger l\'image à cette URL')}
               />
             </div>
           )}
