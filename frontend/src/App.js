@@ -7,57 +7,298 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
-// Forgot Password Modal
+// Forgot Password Modal - Complete workflow
 const ForgotPasswordModal = ({ onClose }) => {
+  const [step, setStep] = useState('email'); // 'email' or 'reset'
   const [email, setEmail] = useState('');
-  const [message, setMessage] = useState('');
+  const [resetData, setResetData] = useState({
+    token: '',
+    new_password: '',
+    confirm_password: ''
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
-  const handleSubmit = async (e) => {
+  const handleSendCode = async (e) => {
     e.preventDefault();
-    setMessage('Un email de récupération sera envoyé (fonctionnalité en développement)');
-    setTimeout(onClose, 2000);
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/forgot-password`, { email });
+      
+      if (response.data.reset_token) {
+        setResetData(prev => ({ ...prev, token: response.data.reset_token }));
+        setSuccess('Code de récupération généré ! Utilisez-le ci-dessous.');
+        setStep('reset');
+      } else {
+        setSuccess(response.data.message);
+      }
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la génération du code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    
+    if (resetData.new_password !== resetData.confirm_password) {
+      setError('Les mots de passe ne correspondent pas');
+      return;
+    }
+
+    if (resetData.new_password.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/reset-password`, {
+        token: resetData.token,
+        new_password: resetData.new_password
+      });
+
+      setSuccess('Mot de passe réinitialisé avec succès ! Vous pouvez maintenant vous connecter.');
+      
+      // Auto-close after success
+      setTimeout(() => {
+        onClose();
+      }, 2000);
+      
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la réinitialisation');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div style={{
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-      background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', 
-      justifyContent: 'center', zIndex: 1000
+      background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', 
+      justifyContent: 'center', zIndex: 1000, padding: '20px'
     }}>
       <div style={{
-        background: 'white', padding: '30px', borderRadius: '12px',
-        maxWidth: '400px', width: '90%'
+        background: 'white', padding: '32px', borderRadius: '16px',
+        maxWidth: '480px', width: '100%', position: 'relative'
       }}>
-        <h3 style={{ margin: '0 0 15px 0' }}>🔑 Mot de passe oublié</h3>
-        {message ? (
-          <div style={{ color: '#059669', marginBottom: '15px' }}>{message}</div>
+        <button
+          onClick={onClose}
+          style={{
+            position: 'absolute', top: '16px', right: '16px',
+            background: 'none', border: 'none', fontSize: '28px',
+            cursor: 'pointer', color: '#6b7280'
+          }}
+        >
+          ×
+        </button>
+
+        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: '64px', height: '64px',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            borderRadius: '16px', marginBottom: '16px'
+          }}>
+            <div style={{ fontSize: '28px', color: 'white' }}>🔑</div>
+          </div>
+          <h2 style={{ margin: 0, color: '#1f2937', fontSize: '24px' }}>
+            {step === 'email' ? 'Récupération de compte' : 'Nouveau mot de passe'}
+          </h2>
+        </div>
+
+        {success && (
+          <div style={{
+            background: '#d1fae5', border: '1px solid #6ee7b7',
+            borderRadius: '8px', padding: '12px', marginBottom: '20px',
+            color: '#065f46', fontSize: '14px', textAlign: 'center'
+          }}>
+            {success}
+          </div>
+        )}
+
+        {error && (
+          <div style={{
+            background: '#fee2e2', border: '1px solid #fecaca',
+            borderRadius: '8px', padding: '12px', marginBottom: '20px',
+            color: '#b91c1c', fontSize: '14px', textAlign: 'center'
+          }}>
+            {error}
+          </div>
+        )}
+
+        {step === 'email' ? (
+          <form onSubmit={handleSendCode}>
+            <p style={{ color: '#6b7280', marginBottom: '20px', textAlign: 'center' }}>
+              Entrez votre adresse email pour recevoir un code de récupération
+            </p>
+            
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{
+                display: 'block', fontSize: '14px', fontWeight: '600',
+                color: '#374151', marginBottom: '8px'
+              }}>
+                Adresse email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="votre@email.com"
+                required
+                style={{
+                  width: '100%', height: '48px', fontSize: '16px',
+                  padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '500',
+                  background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                  borderRadius: '8px', cursor: 'pointer'
+                }}
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={loading || !email}
+                style={{
+                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '600',
+                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white', border: 'none', borderRadius: '8px',
+                  cursor: loading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {loading ? 'Génération...' : 'Générer le code'}
+              </button>
+            </div>
+          </form>
         ) : (
-          <form onSubmit={handleSubmit}>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="votre@email.com"
-              required
-              style={{
-                width: '100%', padding: '10px', border: '1px solid #ddd',
-                borderRadius: '6px', marginBottom: '15px', boxSizing: 'border-box'
-              }}
-            />
-            <button type="submit" style={{
-              width: '100%', padding: '10px', background: '#667eea',
-              color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer'
+          <form onSubmit={handleResetPassword}>
+            <div style={{
+              background: '#eff6ff', border: '1px solid #3b82f6',
+              borderRadius: '8px', padding: '16px', marginBottom: '20px'
             }}>
-              Envoyer
-            </button>
+              <p style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: '600', color: '#1e40af' }}>
+                Code de récupération :
+              </p>
+              <div style={{
+                background: 'white', border: '1px solid #3b82f6',
+                borderRadius: '6px', padding: '12px', fontFamily: 'monospace',
+                fontSize: '14px', wordBreak: 'break-all', color: '#1e40af'
+              }}>
+                {resetData.token}
+              </div>
+              <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#3730a3' }}>
+                Copiez ce code et collez-le ci-dessous
+              </p>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{
+                display: 'block', fontSize: '14px', fontWeight: '600',
+                color: '#374151', marginBottom: '8px'
+              }}>
+                Code de récupération
+              </label>
+              <input
+                type="text"
+                value={resetData.token}
+                onChange={(e) => setResetData(prev => ({ ...prev, token: e.target.value }))}
+                placeholder="Collez le code ici"
+                required
+                style={{
+                  width: '100%', height: '48px', fontSize: '14px',
+                  padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', fontFamily: 'monospace',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{
+                display: 'block', fontSize: '14px', fontWeight: '600',
+                color: '#374151', marginBottom: '8px'
+              }}>
+                Nouveau mot de passe
+              </label>
+              <input
+                type="password"
+                value={resetData.new_password}
+                onChange={(e) => setResetData(prev => ({ ...prev, new_password: e.target.value }))}
+                placeholder="Nouveau mot de passe (min. 6 caractères)"
+                required
+                style={{
+                  width: '100%', height: '48px', fontSize: '16px',
+                  padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{
+                display: 'block', fontSize: '14px', fontWeight: '600',
+                color: '#374151', marginBottom: '8px'
+              }}>
+                Confirmer le mot de passe
+              </label>
+              <input
+                type="password"
+                value={resetData.confirm_password}
+                onChange={(e) => setResetData(prev => ({ ...prev, confirm_password: e.target.value }))}
+                placeholder="Confirmez le nouveau mot de passe"
+                required
+                style={{
+                  width: '100%', height: '48px', fontSize: '16px',
+                  padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button
+                type="button"
+                onClick={() => setStep('email')}
+                style={{
+                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '500',
+                  background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                  borderRadius: '8px', cursor: 'pointer'
+                }}
+              >
+                ← Retour
+              </button>
+              <button
+                type="submit"
+                disabled={loading || !resetData.token || !resetData.new_password || !resetData.confirm_password}
+                style={{
+                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '600',
+                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white', border: 'none', borderRadius: '8px',
+                  cursor: loading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {loading ? 'Réinitialisation...' : 'Changer le mot de passe'}
+              </button>
+            </div>
           </form>
         )}
-        <button onClick={onClose} style={{
-          width: '100%', padding: '8px', background: '#f3f4f6',
-          border: 'none', borderRadius: '6px', marginTop: '10px', cursor: 'pointer'
-        }}>
-          Fermer
-        </button>
       </div>
     </div>
   );
