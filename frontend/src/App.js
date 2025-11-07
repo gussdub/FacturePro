@@ -103,8 +103,8 @@ const Navigation = ({ currentPage, onPageChange }) => {
   );
 };
 
-// Dashboard Component
-const Dashboard = () => {
+// Enhanced Dashboard with stats
+const Dashboard = ({ onPageChange }) => {
   const { user } = useAuth();
   const [stats, setStats] = useState({ loading: true });
 
@@ -114,90 +114,138 @@ const Dashboard = () => {
 
   const fetchStats = async () => {
     try {
-      const response = await axios.get(`${BACKEND_URL}/api/health`);
+      const response = await axios.get(`${BACKEND_URL}/api/dashboard/stats`);
       setStats({ loading: false, data: response.data });
     } catch (error) {
       setStats({ loading: false, error: error.message });
     }
   };
 
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
   return (
     <div style={{ padding: '30px' }}>
       <h2 style={{ marginBottom: '30px', color: '#333' }}>📊 Tableau de bord</h2>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '25px' }}>
-        <div style={{
-          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-          color: 'white',
-          padding: '25px',
-          borderRadius: '12px',
-          textAlign: 'center',
-          boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)'
-        }}>
-          <div style={{ fontSize: '36px', marginBottom: '10px' }}>🎉</div>
-          <h3 style={{ margin: '0 0 10px 0', fontSize: '20px' }}>Migration Réussie</h3>
-          <p style={{ margin: 0, opacity: 0.9 }}>FacturePro déployé sur Vercel + Render</p>
-        </div>
+      {stats.loading ? (
+        <div>Chargement des statistiques...</div>
+      ) : stats.error ? (
+        <div style={{ color: '#dc2626' }}>Erreur : {stats.error}</div>
+      ) : (
+        <>
+          {/* Stats Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
+            <div style={{
+              background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+              color: 'white',
+              padding: '20px',
+              borderRadius: '12px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>👥</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{stats.data?.total_clients || 0}</div>
+              <div style={{ fontSize: '14px', opacity: 0.9 }}>Clients</div>
+            </div>
 
-        <div style={{
-          background: 'white',
-          border: '1px solid #e2e8f0',
-          padding: '25px',
-          borderRadius: '12px',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.05)'
-        }}>
-          <div style={{ fontSize: '32px', marginBottom: '15px' }}>👤</div>
-          <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Utilisateur</h3>
-          <p style={{ margin: '0 0 5px 0', color: '#666', fontWeight: '600' }}>{user?.company_name}</p>
-          <p style={{ margin: 0, color: '#666', fontSize: '14px' }}>{user?.email}</p>
-        </div>
+            <div style={{
+              background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+              color: 'white',
+              padding: '20px',
+              borderRadius: '12px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>📄</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{stats.data?.total_invoices || 0}</div>
+              <div style={{ fontSize: '14px', opacity: 0.9 }}>Factures</div>
+            </div>
 
-        <div style={{
-          background: 'white',
-          border: '1px solid #e2e8f0',
-          padding: '25px',
-          borderRadius: '12px',
-          boxShadow: '0 2px 10px rgba(0,0,0,0.05)'
-        }}>
-          <div style={{ fontSize: '32px', marginBottom: '15px' }}>🔗</div>
-          <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>API Status</h3>
-          {stats.loading ? (
-            <p style={{ color: '#6b7280' }}>Vérification...</p>
-          ) : stats.error ? (
-            <p style={{ color: '#dc2626' }}>❌ {stats.error}</p>
-          ) : (
-            <p style={{ color: '#059669', fontWeight: '600' }}>✅ Backend Connecté</p>
-          )}
-        </div>
-      </div>
+            <div style={{
+              background: 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)',
+              color: 'white',
+              padding: '20px',
+              borderRadius: '12px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>📝</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{stats.data?.total_quotes || 0}</div>
+              <div style={{ fontSize: '14px', opacity: 0.9 }}>Soumissions</div>
+            </div>
 
-      <div style={{
-        background: 'white',
-        border: '1px solid #e2e8f0',
-        borderRadius: '12px',
-        padding: '25px',
-        marginTop: '25px',
-        textAlign: 'center'
-      }}>
-        <h3 style={{ color: '#333', marginBottom: '15px' }}>🚀 Prochaines Étapes</h3>
-        <p style={{ color: '#6b7280', marginBottom: '15px' }}>
-          Base FacturePro déployée avec succès ! Toutes les fonctionnalités seront ajoutées progressivement.
-        </p>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '15px', flexWrap: 'wrap' }}>
-          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
-            📄 Factures
-          </span>
-          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
-            📝 Soumissions
-          </span>
-          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
-            💼 Employés
-          </span>
-          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
-            💳 Dépenses
-          </span>
-        </div>
-      </div>
+            <div style={{
+              background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+              color: 'white',
+              padding: '20px',
+              borderRadius: '12px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '32px', marginBottom: '8px' }}>💰</div>
+              <div style={{ fontSize: '18px', fontWeight: 'bold' }}>{formatCurrency(stats.data?.total_revenue || 0)}</div>
+              <div style={{ fontSize: '14px', opacity: 0.9 }}>Revenus</div>
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div style={{
+            background: 'white',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            padding: '25px'
+          }}>
+            <h3 style={{ marginTop: 0, marginBottom: '20px', color: '#333' }}>🚀 Actions rapides</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' }}>
+              <button
+                onClick={() => onPageChange('clients')}
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'center'
+                }}
+              >
+                <div style={{ fontSize: '24px', marginBottom: '8px' }}>👥</div>
+                <div style={{ fontWeight: '600', color: '#374151' }}>Gérer les clients</div>
+              </button>
+
+              <button
+                onClick={() => onPageChange('invoices')}
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'center'
+                }}
+              >
+                <div style={{ fontSize: '24px', marginBottom: '8px' }}>📄</div>
+                <div style={{ fontWeight: '600', color: '#374151' }}>Créer une facture</div>
+              </button>
+
+              <button
+                onClick={() => onPageChange('products')}
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'center'
+                }}
+              >
+                <div style={{ fontSize: '24px', marginBottom: '8px' }}>📦</div>
+                <div style={{ fontWeight: '600', color: '#374151' }}>Gérer les produits</div>
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
