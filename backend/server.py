@@ -214,6 +214,17 @@ async def register(user: UserCreate):
     company_settings = CompanySettings(
         user_id=new_user.id,
         company_name=user.company_name,
+        email=user.email,
+        default_due_days=30,
+        next_invoice_number=1,
+        next_quote_number=1
+    )
+    await db.company_settings.insert_one(company_settings.dict())
+    
+    # Create default company settings
+    company_settings = CompanySettings(
+        user_id=new_user.id,
+        company_name=user.company_name,
         email=user.email
     )
     await db.company_settings.insert_one(company_settings.dict())
