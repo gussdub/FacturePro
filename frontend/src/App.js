@@ -101,14 +101,19 @@ const ForgotPasswordModal = ({ onClose }) => {
         </button>
 
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: '64px', height: '64px',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            borderRadius: '16px', marginBottom: '16px'
-          }}>
-            <div style={{ fontSize: '28px', color: 'white' }}>🔑</div>
-          </div>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: '64px', height: '64px',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              borderRadius: '16px', marginBottom: '16px'
+            }}>
+              {/* Key SVG Icon for forgot password */}
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="6"/>
+                <path d="m13 13 6 6"/>
+                <path d="M13 13v4a2 2 0 0 1-2 2h-3"/>
+              </svg>
+            </div>
           <h2 style={{ margin: 0, color: '#1f2937', fontSize: '24px' }}>
             {step === 'email' ? 'Récupération de compte' : 'Nouveau mot de passe'}
           </h2>
