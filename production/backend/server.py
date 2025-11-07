@@ -17,7 +17,7 @@ import asyncio
 from bson import ObjectId
 import hashlib
 import secrets
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+import stripe
 from fastapi import Request
 import openpyxl
 from reportlab.lib.pagesizes import A4
