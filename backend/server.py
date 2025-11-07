@@ -423,7 +423,6 @@ async def forgot_password(request: ForgotPasswordRequest):
         return {"message": "Si cette adresse email existe, un code de récupération a été généré"}
     
     # Generate reset token
-    import secrets
     reset_token = secrets.token_urlsafe(32)
     
     # Store token with expiration
