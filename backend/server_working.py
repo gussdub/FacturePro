@@ -216,6 +216,68 @@ async def upload_logo(logo_data: dict, current_user: User = Depends(get_current_
         settings_db[current_user.id].logo_url = logo_data.get("logo_url")
     return {"message": "Logo saved", "logo_url": logo_data.get("logo_url")}
 
+# Password Reset 
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+# Password reset storage
+reset_tokens = {}
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    # Find user
+    user = None
+    for u in users_db.values():
+        if isinstance(u, User) and u.email == request.email:
+            user = u
+            break
+    
+    if not user:
+        return {"message": "Si cette adresse email existe, un code de récupération a été généré"}
+    
+    # Generate reset token
+    import secrets
+    reset_token = secrets.token_urlsafe(32)
+    
+    # Store token (expires in 1 hour)
+    reset_tokens[reset_token] = {
+        "user_id": user.id,
+        "email": user.email,
+        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
+    }
+    
+    return {
+        "message": "Code de récupération généré", 
+        "reset_token": reset_token,
+        "expires_in": "1 heure"
+    }
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    # Check token
+    token_data = reset_tokens.get(request.token)
+    if not token_data:
+        raise HTTPException(400, "Code de récupération invalide")
+    
+    # Check expiration
+    if datetime.now(timezone.utc) > token_data["expires_at"]:
+        del reset_tokens[request.token]
+        raise HTTPException(400, "Code de récupération expiré")
+    
+    # Update password
+    user_id = token_data["user_id"]
+    new_hashed_password = hash_password(request.new_password)
+    users_db[f"{user_id}_password"] = new_hashed_password
+    
+    # Remove used token
+    del reset_tokens[request.token]
+    
+    return {"message": "Mot de passe réinitialisé avec succès"}
+
 @app.get("/api/dashboard/stats")
 async def get_stats(current_user: User = Depends(get_current_user)):
     user_clients = len([c for c in clients_db.values() if isinstance(c, Client) and c.user_id == current_user.id])
