@@ -395,6 +395,9 @@ async def update_settings(settings_data: dict, current_user: User = Depends(get_
         )
         
         updated_settings = await db.company_settings.find_one({"user_id": current_user.id})
+        # Remove MongoDB _id before returning
+        if updated_settings and "_id" in updated_settings:
+            del updated_settings["_id"]
         return updated_settings
     except Exception as e:
         print(f"Update settings error: {e}")
