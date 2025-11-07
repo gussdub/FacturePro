@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import jwt
 import bcrypt
@@ -11,24 +12,25 @@ from typing import Optional, List
 import uuid
 from enum import Enum
 import secrets
+from dotenv import load_dotenv
+
+# Load environment
+load_dotenv()
 
 # FastAPI app
 app = FastAPI(title="FacturePro API", version="2.0.0")
 
 # Configuration
+MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017/facturepro')
+DB_NAME = os.environ.get('DB_NAME', 'facturepro')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'default-secret')
-security = HTTPBearer()
 
-# In-memory storage (production would use MongoDB)
-users_db = {}
-clients_db = {}
-settings_db = {}
-products_db = {}
-invoices_db = {}
-quotes_db = {}
-employees_db = {}
-expenses_db = {}
-reset_tokens = {}
+# MongoDB connection
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
+
+# Security
+security = HTTPBearer()
 
 # Enums
 class InvoiceStatus(str, Enum):
