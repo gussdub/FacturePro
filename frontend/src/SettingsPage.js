@@ -110,8 +110,42 @@ const SettingsPage = () => {
         }}>
           <h3 style={{ marginTop: 0, color: '#333' }}>🖼️ Logo de l'entreprise</h3>
           
+          <div style={{ marginBottom: '15px' }}>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>URL du logo</label>
+            <input
+              type="url"
+              value={settings.logo_url || ''}
+              onChange={(e) => handleChange('logo_url', e.target.value)}
+              placeholder="https://exemple.com/votre-logo.png"
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '6px',
+                boxSizing: 'border-box',
+                marginBottom: '10px'
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleLogoUpload}
+              disabled={uploading}
+              style={{
+                background: uploading ? '#9ca3af' : '#3b82f6',
+                color: 'white',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '6px',
+                cursor: uploading ? 'not-allowed' : 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              {uploading ? 'Sauvegarde...' : 'Sauvegarder logo'}
+            </button>
+          </div>
+          
           {settings.logo_url && (
-            <div style={{ marginBottom: '15px', textAlign: 'center' }}>
+            <div style={{ textAlign: 'center' }}>
               <img
                 src={settings.logo_url}
                 alt="Logo entreprise"
@@ -122,17 +156,13 @@ const SettingsPage = () => {
                   border: '1px solid #ddd',
                   borderRadius: '8px'
                 }}
+                onError={(e) => {
+                  e.target.style.display = 'none';
+                  setMessage('❌ Impossible de charger l\'image à cette URL');
+                }}
               />
             </div>
           )}
-          
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleLogoUpload}
-            style={{ marginBottom: '10px' }}
-          />
-          {uploading && <p style={{ color: '#3b82f6' }}>Upload en cours...</p>}
         </div>
 
         {/* Company Info */}
