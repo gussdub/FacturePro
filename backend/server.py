@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
 from enum import Enum
-import hashlib
+import bcrypt
 import secrets
 from dotenv import load_dotenv
 
