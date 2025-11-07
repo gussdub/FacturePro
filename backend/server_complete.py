@@ -266,14 +266,15 @@ async def health():
 # Auth Routes
 @app.post("/api/auth/register", response_model=Token)
 async def register(user_data: UserCreate):
-    # Check if exists
-    for user in users_db.values():
-        if isinstance(user, User) and user.email == user_data.email:
-            raise HTTPException(400, "Email already registered")
+    # Check if user exists
+    existing_user = await db.users.find_one({"email": user_data.email})
+    if existing_user:
+        raise HTTPException(400, "Email already registered")
     
     # Create user with 14-day trial
     user_id = str(uuid.uuid4())
     trial_end = datetime.now(timezone.utc) + timedelta(days=14)
+    hashed_pwd = hash_password(user_data.password)
     
     new_user = User(
         id=user_id,
@@ -284,39 +285,41 @@ async def register(user_data: UserCreate):
         trial_end_date=trial_end
     )
     
-    users_db[user_id] = new_user
-    users_db[f"{user_id}_password"] = hash_password(user_data.password)
+    # Save user to MongoDB
+    await db.users.insert_one(new_user.dict())
+    
+    # Create password separately (for security)
+    await db.user_passwords.insert_one({
+        "user_id": user_id,
+        "hashed_password": hashed_pwd
+    })
     
     # Create default settings
-    settings_db[user_id] = CompanySettings(
+    settings = CompanySettings(
         id=str(uuid.uuid4()),
         user_id=user_id,
         company_name=user_data.company_name,
         email=user_data.email
-    ).__dict__
+    )
+    await db.company_settings.insert_one(settings.dict())
     
     token = create_token(user_id)
     return Token(access_token=token, token_type="bearer", user=new_user)
 
 @app.post("/api/auth/login", response_model=Token)
 async def login(credentials: UserLogin):
-    user = None
-    user_id = None
-    for uid, u in users_db.items():
-        if isinstance(u, User) and u.email == credentials.email:
-            user = u
-            user_id = uid
-            break
-    
+    # Find user
+    user = await db.users.find_one({"email": credentials.email})
     if not user:
         raise HTTPException(401, "Incorrect email or password")
     
-    stored_password = users_db.get(f"{user_id}_password")
-    if not stored_password or not verify_password(credentials.password, stored_password):
+    # Check password
+    password_doc = await db.user_passwords.find_one({"user_id": user["id"]})
+    if not password_doc or not verify_password(credentials.password, password_doc["hashed_password"]):
         raise HTTPException(401, "Incorrect email or password")
     
-    token = create_token(user_id)
-    return Token(access_token=token, token_type="bearer", user=user)
+    token = create_token(user["id"])
+    return Token(access_token=token, token_type="bearer", user=User(**user))
 
 # Password Reset
 @app.post("/api/auth/forgot-password")
