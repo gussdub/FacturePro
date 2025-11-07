@@ -236,15 +236,54 @@ async def login(user_credentials: UserLogin):
     return Token(access_token=access_token, user=user_response)
 
 @api_router.get("/clients", response_model=List[Client])
-async def get_clients(current_user: User = Depends(get_current_user_with_access)):
+async def get_clients(current_user: User = Depends(get_current_user_with_subscription)):
     clients = await db.clients.find({"user_id": current_user.id}).to_list(1000)
     return [Client(**client) for client in clients]
 
 @api_router.post("/clients", response_model=Client)
-async def create_client(client: ClientCreate, current_user: User = Depends(get_current_user_with_access)):
+async def create_client(client: ClientCreate, current_user: User = Depends(get_current_user_with_subscription)):
     new_client = Client(**client.dict(), user_id=current_user.id)
     await db.clients.insert_one(new_client.dict())
     return new_client
+
+@api_router.get("/clients/{client_id}", response_model=Client)
+async def get_client(client_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+    client = await db.clients.find_one({"id": client_id, "user_id": current_user.id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return Client(**client)
+
+@api_router.put("/clients/{client_id}", response_model=Client)
+async def update_client(client_id: str, client_update: ClientCreate, current_user: User = Depends(get_current_user_with_subscription)):
+    client = await db.clients.find_one({"id": client_id, "user_id": current_user.id})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    updated_data = client_update.dict()
+    await db.clients.update_one({"id": client_id}, {"$set": updated_data})
+    
+    updated_client = await db.clients.find_one({"id": client_id})
+    return Client(**updated_client)
+
+@api_router.delete("/clients/{client_id}")
+async def delete_client(client_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+    result = await db.clients.delete_one({"id": client_id, "user_id": current_user.id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return {"message": "Client deleted successfully"}
+
+@api_router.put("/settings/company", response_model=CompanySettings)
+async def update_company_settings(settings_update: CompanySettingsUpdate, current_user: User = Depends(get_current_user_with_subscription)):
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    if not settings:
+        raise HTTPException(status_code=404, detail="Company settings not found")
+    
+    update_data = {k: v for k, v in settings_update.dict().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    
+    await db.company_settings.update_one({"user_id": current_user.id}, {"$set": update_data})
+    updated_settings = await db.company_settings.find_one({"user_id": current_user.id})
+    return CompanySettings(**updated_settings)
 
 @api_router.get("/settings/company", response_model=CompanySettings)
 async def get_company_settings(current_user: User = Depends(get_current_user_with_access)):
