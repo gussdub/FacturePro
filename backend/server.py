@@ -337,7 +337,7 @@ async def get_clients(current_user: User = Depends(get_current_user_with_access)
     return [Client(**client) for client in clients]
 
 @api_router.post("/clients", response_model=Client)
-async def create_client(client: ClientCreate, current_user: User = Depends(get_current_user_with_subscription)):
+async def create_client(client: ClientCreate, current_user: User = Depends(get_current_user_with_access)):
     new_client = Client(**client.dict(), user_id=current_user.id)
     await db.clients.insert_one(new_client.dict())
     return new_client
