@@ -550,7 +550,7 @@ const AuthProvider = ({ children }) => {
 // Main App
 function App() {
   const { token } = useAuth();
-  return token ? <Dashboard /> : <LoginPage />;
+  return token ? <AppContent /> : <LoginPage />;
 }
 
 // App with Provider
