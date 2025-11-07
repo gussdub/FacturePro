@@ -1672,21 +1672,317 @@ const ClientsPage = () => {
 };
 
 // Pages placeholders (seront développées)
-const ProductsPage = () => (
-  <div style={{ textAlign: 'center', padding: '60px' }}>
-    <div style={{ fontSize: '80px', marginBottom: '24px' }}>📦</div>
-    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Produits & Services</h2>
-    <p style={{ color: '#6b7280', fontSize: '18px' }}>Gérez votre catalogue de produits et services</p>
-    <div style={{
-      background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-      color: 'white', padding: '20px', borderRadius: '12px',
-      display: 'inline-block', marginTop: '20px'
-    }}>
-      <div style={{ fontSize: '24px', marginBottom: '8px' }}>🚧</div>
-      <div style={{ fontWeight: '600' }}>En cours de développement</div>
+// Products Page (FONCTIONNELLE COMPLETE)
+const ProductsPage = () => {
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    name: '', description: '', unit_price: '', unit: 'unité', category: ''
+  });
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
+  const fetchProducts = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/products`);
+      setProducts(response.data);
+    } catch (error) {
+      setError('Erreur lors du chargement des produits');
+      console.error('Error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/products`, {
+        ...formData,
+        unit_price: parseFloat(formData.unit_price)
+      });
+      
+      setSuccess('Produit créé avec succès');
+      setShowForm(false);
+      setFormData({ name: '', description: '', unit_price: '', unit: 'unité', category: '' });
+      fetchProducts();
+    } catch (error) {
+      setError('Erreur lors de la création du produit');
+    }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>📦</div>
+          <div>
+            <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Produits & Services</h1>
+            <p style={{ color: '#6b7280', margin: 0 }}>Gérez votre catalogue de produits et services</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            background: 'linear-gradient(135deg, #10b981, #047857)',
+            color: 'white', border: 'none', padding: '14px 28px',
+            borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
+            fontSize: '14px', boxShadow: '0 4px 12px rgba(16,185,129,0.4)'
+          }}
+        >
+          ➕ Nouveau Produit
+        </button>
+      </div>
+
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>
+          {success}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '60px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+          <p>Chargement des produits...</p>
+        </div>
+      ) : products.length === 0 ? (
+        <div style={{
+          background: 'white', border: '2px dashed #d1d5db',
+          borderRadius: '16px', padding: '64px', textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '24px' }}>📦</div>
+          <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>
+            Aucun produit créé
+          </h3>
+          <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>
+            Créez vos produits et services pour faciliter la facturation
+          </p>
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              background: '#10b981', color: 'white', border: 'none',
+              padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
+              fontWeight: '700', fontSize: '16px'
+            }}
+          >
+            🚀 Créer mon premier produit
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+          {products.map(product => (
+            <div key={product.id} style={{
+              background: 'white', border: '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937', margin: 0 }}>
+                  {product.name}
+                </h3>
+                {product.category && (
+                  <span style={{
+                    background: '#f3f4f6', color: '#374151',
+                    padding: '4px 8px', borderRadius: '6px', fontSize: '12px'
+                  }}>
+                    {product.category}
+                  </span>
+                )}
+              </div>
+              
+              <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '16px' }}>
+                {product.description}
+              </p>
+              
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                paddingTop: '16px', borderTop: '1px solid #e5e7eb'
+              }}>
+                <div>
+                  <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>
+                    {formatCurrency(product.unit_price)}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                    par {product.unit}
+                  </div>
+                </div>
+                
+                <button
+                  onClick={async () => {
+                    if (window.confirm('Supprimer ce produit ?')) {
+                      try {
+                        await axios.delete(`${BACKEND_URL}/api/products/${product.id}`);
+                        setSuccess('Produit supprimé');
+                        fetchProducts();
+                      } catch (error) {
+                        setError('Erreur suppression');
+                      }
+                    }
+                  }}
+                  style={{
+                    background: '#fef2f2', color: '#dc2626', border: 'none',
+                    padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  🗑️ Supprimer
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Product Form Modal */}
+      {showForm && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000, padding: '20px'
+        }}>
+          <div style={{
+            background: 'white', padding: '32px', borderRadius: '16px',
+            width: '100%', maxWidth: '500px'
+          }}>
+            <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>
+              📦 Nouveau Produit/Service
+            </h3>
+            
+            <form onSubmit={handleSubmit}>
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Nom *</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                  required
+                  placeholder="Consultation, Kilométrage, Formation..."
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #ddd',
+                    borderRadius: '8px', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Description</label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                  rows={3}
+                  placeholder="Description détaillée du service ou produit..."
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #ddd',
+                    borderRadius: '8px', resize: 'vertical', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '24px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Prix (CAD) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formData.unit_price}
+                    onChange={(e) => setFormData(prev => ({ ...prev, unit_price: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Unité</label>
+                  <select
+                    value={formData.unit}
+                    onChange={(e) => setFormData(prev => ({ ...prev, unit: e.target.value }))}
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="unité">Unité</option>
+                    <option value="heure">Heure</option>
+                    <option value="km">Kilomètre</option>
+                    <option value="jour">Jour</option>
+                    <option value="mois">Mois</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Catégorie</label>
+                  <input
+                    type="text"
+                    value={formData.category}
+                    onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value }))}
+                    placeholder="Services, Transport..."
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  style={{
+                    background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    background: '#10b981', color: 'white', border: 'none',
+                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  💾 Créer le produit
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
-  </div>
-);
+  );
+};
 
 const InvoicesPage = () => (
   <div style={{ textAlign: 'center', padding: '60px' }}>
