@@ -2,6 +2,8 @@ import React, { useState, createContext, useContext, useEffect } from 'react';
 import axios from 'axios';
 import ClientsPage from './ClientsPage';
 import SettingsPage from './SettingsPage';
+import InvoicesPage from './InvoicesPage';
+import ProductsPage from './ProductsPage';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api.onrender.com';
 
