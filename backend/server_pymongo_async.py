@@ -525,6 +525,9 @@ async def get_quotes(current_user: User = Depends(get_current_user_with_access))
         cursor = db.quotes.find({"user_id": current_user.id})
         quotes = []
         async for quote in cursor:
+            # Remove MongoDB _id field
+            if "_id" in quote:
+                del quote["_id"]
             quotes.append(quote)
         return quotes
     except Exception as e:
