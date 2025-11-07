@@ -321,6 +321,9 @@ async def get_products(current_user: User = Depends(get_current_user_with_access
         cursor = db.products.find({"user_id": current_user.id, "is_active": True})
         products = []
         async for product in cursor:
+            # Remove MongoDB _id field
+            if "_id" in product:
+                del product["_id"]
             products.append(product)
         return products
     except Exception as e:
