@@ -235,12 +235,24 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
         user_id = payload.get("sub")
         
-        if user_id in users_db:
-            return users_db[user_id]
-        else:
+        user = await db.users.find_one({"id": user_id})
+        if not user:
             raise HTTPException(401, "User not found")
+        return User(**user)
     except:
         raise HTTPException(401, "Invalid token")
+
+# Exemption for gussdub@gmail.com
+async def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    user = await get_current_user(credentials)
+    
+    # Exempt users (always free access)
+    EXEMPT_USERS = ["gussdub@gmail.com"]
+    if user.email in EXEMPT_USERS:
+        return user
+    
+    # For now, everyone has access
+    return user
 
 # Routes
 @app.get("/")
