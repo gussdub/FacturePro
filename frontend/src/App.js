@@ -453,7 +453,12 @@ const LoginPage = () => {
               borderRadius: '24px', marginBottom: '24px',
               boxShadow: '0 20px 40px rgba(67,56,202,0.4)'
             }}>
-              <div style={{ fontSize: '44px', color: 'white' }}>🧾</div>
+              {/* Beautiful Receipt SVG Icon */}
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
+                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
+                <path d="M12 18V6"/>
+              </svg>
             </div>
 
             <h1 style={{
