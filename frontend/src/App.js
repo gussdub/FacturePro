@@ -462,7 +462,10 @@ const AppContent = () => {
       case 'invoices':
         return <InvoicesPage />;
       case 'quotes':
-        return <div style={{ padding: '30px' }}><h2>Soumissions - En développement</h2></div>;
+        return <div style={{ padding: '30px', textAlign: 'center' }}>
+          <h2>📝 Soumissions</h2>
+          <p>En cours de développement...</p>
+        </div>;
       case 'settings':
         return <SettingsPage />;
       default:
