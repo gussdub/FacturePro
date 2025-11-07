@@ -430,6 +430,181 @@ async def upload_company_logo(
     except Exception as e:
         raise HTTPException(status_code=500, detail="Error uploading logo")
 
+# Helper functions for calculations
+def calculate_invoice_totals(items, gst_rate, pst_rate, hst_rate, apply_gst, apply_pst, apply_hst):
+    """Calculate invoice totals with Canadian taxes"""
+    subtotal = sum(item.quantity * item.unit_price for item in items)
+    
+    gst_amount = subtotal * (gst_rate / 100) if apply_gst else 0
+    pst_amount = subtotal * (pst_rate / 100) if apply_pst else 0
+    hst_amount = subtotal * (hst_rate / 100) if apply_hst else 0
+    
+    total_tax = gst_amount + pst_amount + hst_amount
+    total = subtotal + total_tax
+    
+    return subtotal, gst_amount, pst_amount, hst_amount, total_tax, total
+
+async def generate_invoice_number(user_id: str):
+    """Generate next invoice number"""
+    settings = await db.company_settings.find_one({"user_id": user_id})
+    if settings:
+        next_num = settings.get("next_invoice_number", 1)
+        await db.company_settings.update_one(
+            {"user_id": user_id},
+            {"$set": {"next_invoice_number": next_num + 1}}
+        )
+        return f"INV-{next_num:04d}"
+    return "INV-0001"
+
+async def generate_quote_number(user_id: str):
+    """Generate next quote number"""
+    settings = await db.company_settings.find_one({"user_id": user_id})
+    if settings:
+        next_num = settings.get("next_quote_number", 1)
+        await db.company_settings.update_one(
+            {"user_id": user_id},
+            {"$set": {"next_quote_number": next_num + 1}}
+        )
+        return f"QUO-{next_num:04d}"
+    return "QUO-0001"
+
+# Invoice routes
+@api_router.get("/invoices", response_model=List[Invoice])
+async def get_invoices(current_user: User = Depends(get_current_user_with_subscription)):
+    invoices = await db.invoices.find({"user_id": current_user.id}).to_list(1000)
+    return [Invoice(**invoice) for invoice in invoices]
+
+@api_router.post("/invoices", response_model=Invoice)
+async def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_subscription)):
+    # Generate invoice number
+    invoice_number = await generate_invoice_number(current_user.id)
+    
+    # Calculate totals
+    items = [InvoiceItem(**item) for item in invoice_data.get("items", [])]
+    subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
+        items,
+        invoice_data.get("gst_rate", 5.0),
+        invoice_data.get("pst_rate", 9.975),
+        invoice_data.get("hst_rate", 0.0),
+        invoice_data.get("apply_gst", True),
+        invoice_data.get("apply_pst", True),
+        invoice_data.get("apply_hst", False)
+    )
+    
+    new_invoice = Invoice(
+        user_id=current_user.id,
+        client_id=invoice_data["client_id"],
+        invoice_number=invoice_number,
+        due_date=datetime.fromisoformat(invoice_data["due_date"].replace('Z', '+00:00')),
+        items=[item.dict() for item in items],
+        subtotal=subtotal,
+        gst_amount=gst_amount,
+        pst_amount=pst_amount,
+        hst_amount=hst_amount,
+        total_tax=total_tax,
+        total=total,
+        gst_rate=invoice_data.get("gst_rate", 5.0),
+        pst_rate=invoice_data.get("pst_rate", 9.975),
+        hst_rate=invoice_data.get("hst_rate", 0.0),
+        apply_gst=invoice_data.get("apply_gst", True),
+        apply_pst=invoice_data.get("apply_pst", True),
+        apply_hst=invoice_data.get("apply_hst", False),
+        province=invoice_data.get("province", "QC"),
+        notes=invoice_data.get("notes", "")
+    )
+    
+    await db.invoices.insert_one(new_invoice.dict())
+    return new_invoice
+
+# Product routes
+@api_router.get("/products", response_model=List[Product])
+async def get_products(current_user: User = Depends(get_current_user_with_subscription)):
+    products = await db.products.find({"user_id": current_user.id, "is_active": True}).to_list(1000)
+    return [Product(**product) for product in products]
+
+@api_router.post("/products", response_model=Product)
+async def create_product(product_data: dict, current_user: User = Depends(get_current_user_with_subscription)):
+    new_product = Product(**product_data, user_id=current_user.id)
+    await db.products.insert_one(new_product.dict())
+    return new_product
+
+# Quote routes
+@api_router.get("/quotes", response_model=List[Quote])
+async def get_quotes(current_user: User = Depends(get_current_user_with_subscription)):
+    quotes = await db.quotes.find({"user_id": current_user.id}).to_list(1000)
+    return [Quote(**quote) for quote in quotes]
+
+@api_router.post("/quotes", response_model=Quote)
+async def create_quote(quote_data: dict, current_user: User = Depends(get_current_user_with_subscription)):
+    # Generate quote number
+    quote_number = await generate_quote_number(current_user.id)
+    
+    # Calculate totals (same logic as invoices)
+    items = [InvoiceItem(**item) for item in quote_data.get("items", [])]
+    subtotal, gst_amount, pst_amount, hst_amount, total_tax, total = calculate_invoice_totals(
+        items,
+        quote_data.get("gst_rate", 5.0),
+        quote_data.get("pst_rate", 9.975),
+        quote_data.get("hst_rate", 0.0),
+        quote_data.get("apply_gst", True),
+        quote_data.get("apply_pst", True),
+        quote_data.get("apply_hst", False)
+    )
+    
+    new_quote = Quote(
+        user_id=current_user.id,
+        client_id=quote_data["client_id"],
+        quote_number=quote_number,
+        valid_until=datetime.fromisoformat(quote_data["valid_until"].replace('Z', '+00:00')),
+        items=[item.dict() for item in items],
+        subtotal=subtotal,
+        gst_amount=gst_amount,
+        pst_amount=pst_amount,
+        hst_amount=hst_amount,
+        total_tax=total_tax,
+        total=total,
+        gst_rate=quote_data.get("gst_rate", 5.0),
+        pst_rate=quote_data.get("pst_rate", 9.975),
+        hst_rate=quote_data.get("hst_rate", 0.0),
+        apply_gst=quote_data.get("apply_gst", True),
+        apply_pst=quote_data.get("apply_pst", True),
+        apply_hst=quote_data.get("apply_hst", False),
+        province=quote_data.get("province", "QC"),
+        notes=quote_data.get("notes", "")
+    )
+    
+    await db.quotes.insert_one(new_quote.dict())
+    return new_quote
+
+# Dashboard stats
+@api_router.get("/dashboard/stats")
+async def get_dashboard_stats(current_user: User = Depends(get_current_user_with_subscription)):
+    # Get counts
+    total_clients = await db.clients.count_documents({"user_id": current_user.id})
+    total_invoices = await db.invoices.count_documents({"user_id": current_user.id})
+    total_quotes = await db.quotes.count_documents({"user_id": current_user.id})
+    total_products = await db.products.count_documents({"user_id": current_user.id, "is_active": True})
+    
+    # Calculate revenue from paid invoices
+    paid_invoices = await db.invoices.find({
+        "user_id": current_user.id,
+        "status": "paid"
+    }).to_list(1000)
+    
+    total_revenue = sum(invoice.get("total", 0) for invoice in paid_invoices)
+    
+    return {
+        "total_clients": total_clients,
+        "total_invoices": total_invoices,
+        "total_quotes": total_quotes,
+        "total_products": total_products,
+        "total_revenue": total_revenue,
+        "pending_invoices": await db.invoices.count_documents({
+            "user_id": current_user.id,
+            "status": {"$in": ["sent", "overdue"]}
+        })
+    }
+
 @api_router.get("/settings/company", response_model=CompanySettings)
 async def get_company_settings(current_user: User = Depends(get_current_user_with_access)):
     settings = await db.company_settings.find_one({"user_id": current_user.id})
