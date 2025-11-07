@@ -1,5 +1,7 @@
 import React, { useState, createContext, useContext, useEffect } from 'react';
 import axios from 'axios';
+import ClientsPage from './ClientsPage';
+import SettingsPage from './SettingsPage';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api.onrender.com';
 
@@ -7,7 +9,178 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
-// Login Page
+// Navigation Component
+const Navigation = ({ currentPage, onPageChange }) => {
+  const { logout } = useAuth();
+
+  const navStyle = {
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    color: 'white',
+    padding: '15px 30px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
+  };
+
+  const menuStyle = {
+    display: 'flex',
+    gap: '25px'
+  };
+
+  const linkStyle = (active) => ({
+    background: active ? 'rgba(255,255,255,0.25)' : 'transparent',
+    padding: '10px 18px',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontWeight: active ? '600' : '400',
+    transition: 'all 0.3s ease',
+    border: active ? '1px solid rgba(255,255,255,0.3)' : '1px solid transparent'
+  });
+
+  return (
+    <nav style={navStyle}>
+      <h1 style={{ margin: 0, fontSize: '26px', fontWeight: 'bold' }}>🧾 FacturePro</h1>
+      
+      <div style={menuStyle}>
+        <div 
+          style={linkStyle(currentPage === 'dashboard')}
+          onClick={() => onPageChange('dashboard')}
+        >
+          📊 Dashboard
+        </div>
+        <div 
+          style={linkStyle(currentPage === 'clients')}
+          onClick={() => onPageChange('clients')}
+        >
+          👥 Clients
+        </div>
+        <div 
+          style={linkStyle(currentPage === 'settings')}
+          onClick={() => onPageChange('settings')}
+        >
+          ⚙️ Paramètres
+        </div>
+      </div>
+
+      <button
+        onClick={logout}
+        style={{
+          background: '#ef4444',
+          color: 'white',
+          border: 'none',
+          padding: '10px 18px',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          fontWeight: '500'
+        }}
+      >
+        🚪 Déconnexion
+      </button>
+    </nav>
+  );
+};
+
+// Dashboard Component
+const Dashboard = () => {
+  const { user } = useAuth();
+  const [stats, setStats] = useState({ loading: true });
+
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  const fetchStats = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/health`);
+      setStats({ loading: false, data: response.data });
+    } catch (error) {
+      setStats({ loading: false, error: error.message });
+    }
+  };
+
+  return (
+    <div style={{ padding: '30px' }}>
+      <h2 style={{ marginBottom: '30px', color: '#333' }}>📊 Tableau de bord</h2>
+      
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '25px' }}>
+        <div style={{
+          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+          color: 'white',
+          padding: '25px',
+          borderRadius: '12px',
+          textAlign: 'center',
+          boxShadow: '0 4px 15px rgba(16, 185, 129, 0.3)'
+        }}>
+          <div style={{ fontSize: '36px', marginBottom: '10px' }}>🎉</div>
+          <h3 style={{ margin: '0 0 10px 0', fontSize: '20px' }}>Migration Réussie</h3>
+          <p style={{ margin: 0, opacity: 0.9 }}>FacturePro déployé sur Vercel + Render</p>
+        </div>
+
+        <div style={{
+          background: 'white',
+          border: '1px solid #e2e8f0',
+          padding: '25px',
+          borderRadius: '12px',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.05)'
+        }}>
+          <div style={{ fontSize: '32px', marginBottom: '15px' }}>👤</div>
+          <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>Utilisateur</h3>
+          <p style={{ margin: '0 0 5px 0', color: '#666', fontWeight: '600' }}>{user?.company_name}</p>
+          <p style={{ margin: 0, color: '#666', fontSize: '14px' }}>{user?.email}</p>
+        </div>
+
+        <div style={{
+          background: 'white',
+          border: '1px solid #e2e8f0',
+          padding: '25px',
+          borderRadius: '12px',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.05)'
+        }}>
+          <div style={{ fontSize: '32px', marginBottom: '15px' }}>🔗</div>
+          <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>API Status</h3>
+          {stats.loading ? (
+            <p style={{ color: '#6b7280' }}>Vérification...</p>
+          ) : stats.error ? (
+            <p style={{ color: '#dc2626' }}>❌ {stats.error}</p>
+          ) : (
+            <p style={{ color: '#059669', fontWeight: '600' }}>✅ Backend Connecté</p>
+          )}
+        </div>
+      </div>
+
+      <div style={{
+        background: 'white',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+        padding: '25px',
+        marginTop: '25px',
+        textAlign: 'center'
+      }}>
+        <h3 style={{ color: '#333', marginBottom: '15px' }}>🚀 Prochaines Étapes</h3>
+        <p style={{ color: '#6b7280', marginBottom: '15px' }}>
+          Base FacturePro déployée avec succès ! Toutes les fonctionnalités seront ajoutées progressivement.
+        </p>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '15px', flexWrap: 'wrap' }}>
+          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
+            📄 Factures
+          </span>
+          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
+            📝 Soumissions
+          </span>
+          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
+            💼 Employés
+          </span>
+          <span style={{ background: '#f3f4f6', padding: '6px 12px', borderRadius: '6px', fontSize: '14px' }}>
+            💳 Dépenses
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Login Component (unchanged but improved styling)
 const LoginPage = () => {
   const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
   const [isLogin, setIsLogin] = useState(true);
@@ -54,13 +227,18 @@ const LoginPage = () => {
         borderRadius: '12px',
         boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
         width: '100%',
-        maxWidth: '400px'
+        maxWidth: '420px'
       }}>
-        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '35px' }}>
           <div style={{
-            fontSize: '48px',
+            display: 'inline-block',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            padding: '15px',
+            borderRadius: '12px',
             marginBottom: '15px'
-          }}>🧾</div>
+          }}>
+            <div style={{ fontSize: '32px' }}>🧾</div>
+          </div>
           <h1 style={{
             fontSize: '28px',
             fontWeight: 'bold',
@@ -69,8 +247,8 @@ const LoginPage = () => {
           }}>
             FacturePro
           </h1>
-          <p style={{ color: '#666', margin: '5px 0 0 0' }}>
-            {isLogin ? 'Connexion' : 'Inscription'}
+          <p style={{ color: '#666', margin: '8px 0 0 0' }}>
+            {isLogin ? 'Connexion à votre espace' : 'Créez votre compte'}
           </p>
         </div>
 
@@ -81,8 +259,9 @@ const LoginPage = () => {
             color: '#dc2626',
             padding: '12px',
             borderRadius: '6px',
-            marginBottom: '20px',
-            textAlign: 'center'
+            marginBottom: '25px',
+            textAlign: 'center',
+            fontSize: '14px'
           }}>
             {error}
           </div>
@@ -91,8 +270,8 @@ const LoginPage = () => {
         <form onSubmit={handleSubmit}>
           {!isLogin && (
             <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '5px' }}>
-                Entreprise
+              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
+                Nom de l'entreprise *
               </label>
               <input
                 type="text"
@@ -102,20 +281,20 @@ const LoginPage = () => {
                 style={{
                   width: '100%',
                   padding: '12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid #d1d5db',
                   borderRadius: '6px',
                   fontSize: '16px',
-                  marginTop: '5px',
-                  boxSizing: 'border-box'
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s'
                 }}
-                placeholder="Mon Entreprise"
+                placeholder="Mon Entreprise Inc."
               />
             </div>
           )}
 
           <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '5px' }}>
-              Email
+            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
+              Adresse email *
             </label>
             <input
               type="email"
@@ -125,10 +304,9 @@ const LoginPage = () => {
               style={{
                 width: '100%',
                 padding: '12px',
-                border: '1px solid #ddd',
+                border: '1px solid #d1d5db',
                 borderRadius: '6px',
                 fontSize: '16px',
-                marginTop: '5px',
                 boxSizing: 'border-box'
               }}
               placeholder="votre@email.com"
@@ -136,8 +314,8 @@ const LoginPage = () => {
           </div>
 
           <div style={{ marginBottom: '30px' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '5px' }}>
-              Mot de passe
+            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
+              Mot de passe *
             </label>
             <input
               type="password"
@@ -147,13 +325,12 @@ const LoginPage = () => {
               style={{
                 width: '100%',
                 padding: '12px',
-                border: '1px solid #ddd',
+                border: '1px solid #d1d5db',
                 borderRadius: '6px',
                 fontSize: '16px',
-                marginTop: '5px',
                 boxSizing: 'border-box'
               }}
-              placeholder="Mot de passe"
+              placeholder="Mot de passe sécurisé"
             />
           </div>
 
@@ -163,16 +340,17 @@ const LoginPage = () => {
             style={{
               width: '100%',
               padding: '14px',
-              background: loading ? '#999' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
               fontSize: '16px',
               fontWeight: '600',
-              cursor: loading ? 'not-allowed' : 'pointer'
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transition: 'all 0.3s ease'
             }}
           >
-            {loading ? 'Chargement...' : (isLogin ? 'Se connecter' : 'Créer compte')}
+            {loading ? '⏳ Connexion...' : (isLogin ? '🔐 Se connecter' : '✨ Créer mon compte')}
           </button>
         </form>
 
@@ -188,10 +366,11 @@ const LoginPage = () => {
               border: 'none',
               color: '#667eea',
               cursor: 'pointer',
-              textDecoration: 'underline'
+              textDecoration: 'underline',
+              fontSize: '14px'
             }}
           >
-            {isLogin ? "Pas de compte ? S'inscrire" : "Déjà un compte ? Connexion"}
+            {isLogin ? "Nouveau sur FacturePro ? S'inscrire" : "Déjà client ? Se connecter"}
           </button>
         </div>
       </div>
@@ -199,94 +378,31 @@ const LoginPage = () => {
   );
 };
 
-// Dashboard
-const Dashboard = () => {
-  const { user, logout } = useAuth();
-  const [apiStatus, setApiStatus] = useState('Connexion...');
+// Main App Content
+const AppContent = () => {
+  const { user } = useAuth();
+  const [currentPage, setCurrentPage] = useState('dashboard');
 
-  useEffect(() => {
-    testAPI();
-  }, []);
-
-  const testAPI = async () => {
-    try {
-      const response = await axios.get(`${BACKEND_URL}/api/health`);
-      setApiStatus('✅ API Connectée - ' + JSON.stringify(response.data));
-    } catch (error) {
-      setApiStatus('❌ Erreur API - ' + error.message);
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'clients':
+        return <ClientsPage />;
+      case 'settings':
+        return <SettingsPage />;
+      default:
+        return <Dashboard />;
     }
   };
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
-      padding: '20px',
-      fontFamily: 'Arial, sans-serif'
-    }}>
-      <div style={{
-        background: 'white',
-        padding: '30px',
-        borderRadius: '12px',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-        maxWidth: '800px',
-        margin: '0 auto'
-      }}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '30px',
-          paddingBottom: '20px',
-          borderBottom: '2px solid #e5e7eb'
-        }}>
-          <div>
-            <h1 style={{ margin: 0, color: '#1f2937' }}>🎉 FacturePro</h1>
-            <p style={{ margin: '5px 0 0 0', color: '#6b7280' }}>
-              Bienvenue, {user?.company_name || user?.email}
-            </p>
-          </div>
-          <button
-            onClick={logout}
-            style={{
-              padding: '10px 20px',
-              background: '#ef4444',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer'
-            }}
-          >
-            Déconnexion
-          </button>
-        </div>
-
-        <div style={{ textAlign: 'center' }}>
-          <div style={{
-            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-            color: 'white',
-            padding: '20px',
-            borderRadius: '8px',
-            marginBottom: '20px'
-          }}>
-            <h2 style={{ margin: '0 0 10px 0' }}>Migration Réussie !</h2>
-            <p style={{ margin: 0 }}>FacturePro fonctionne sur Vercel + Render</p>
-          </div>
-
-          <div style={{
-            background: '#f3f4f6',
-            padding: '15px',
-            borderRadius: '8px',
-            fontSize: '14px',
-            color: '#374151'
-          }}>
-            <strong>API Status :</strong><br/>
-            {apiStatus}
-          </div>
-        </div>
-      </div>
+    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <Navigation currentPage={currentPage} onPageChange={setCurrentPage} />
+      <main>
+        {renderPage()}
+      </main>
     </div>
   );
+};
 };
 
 // Auth Provider
