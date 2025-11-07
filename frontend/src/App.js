@@ -1352,6 +1352,10 @@ const AuthProvider = ({ children }) => {
   );
 };
 
+// AppContent Component  
+const AppContent = () => {
+  const [currentPage, setCurrentPage] = useState('dashboard');
+
   const renderPage = () => {
     switch (currentPage) {
       case 'invoices':
@@ -1360,6 +1364,71 @@ const AuthProvider = ({ children }) => {
         return <Dashboard onPageChange={setCurrentPage} />;
     }
   };
+
+  return (
+    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <nav style={{
+        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
+        color: 'white', padding: '16px 32px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+      }}>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
+          </svg>
+          FacturePro
+        </h1>
+        
+        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+          <button
+            onClick={() => setCurrentPage('dashboard')}
+            style={{
+              background: currentPage === 'dashboard' ? 'rgba(255,255,255,0.2)' : 'transparent',
+              color: 'white', border: 'none', padding: '8px 16px',
+              borderRadius: '6px', cursor: 'pointer'
+            }}
+          >
+            📊 Dashboard
+          </button>
+          <button
+            onClick={() => setCurrentPage('invoices')}
+            style={{
+              background: currentPage === 'invoices' ? 'rgba(255,255,255,0.2)' : 'transparent',
+              color: 'white', border: 'none', padding: '8px 16px',
+              borderRadius: '6px', cursor: 'pointer'
+            }}
+          >
+            📄 Factures
+          </button>
+        </div>
+
+        <button
+          onClick={() => {
+            localStorage.removeItem('token');
+            window.location.reload();
+          }}
+          style={{
+            background: '#ef4444', color: 'white', border: 'none',
+            padding: '8px 16px', borderRadius: '6px', cursor: 'pointer'
+          }}
+        >
+          Déconnexion
+        </button>
+      </nav>
+
+      <main>
+        {renderPage()}
+      </main>
+    </div>
+  );
+};
+
+// Main App
+function App() {
+  const { token } = useAuth();
+  return token ? <AppContent /> : <LoginPage />;
+}
 
 // App with Provider
 function AppWithAuth() {
