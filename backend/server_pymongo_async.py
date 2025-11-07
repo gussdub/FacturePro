@@ -508,7 +508,10 @@ async def create_invoice(invoice_data: dict, current_user: User = Depends(get_cu
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        await db.invoices.insert_one(new_invoice)
+        result = await db.invoices.insert_one(new_invoice)
+        # Remove MongoDB _id before returning
+        if "_id" in new_invoice:
+            del new_invoice["_id"]
         return new_invoice
         
     except Exception as e:
