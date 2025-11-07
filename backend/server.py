@@ -15,7 +15,6 @@ from enum import Enum
 import bcrypt
 import secrets
 from dotenv import load_dotenv
-from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
