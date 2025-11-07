@@ -448,6 +448,9 @@ async def get_invoices(current_user: User = Depends(get_current_user_with_access
         cursor = db.invoices.find({"user_id": current_user.id})
         invoices = []
         async for invoice in cursor:
+            # Remove MongoDB _id field
+            if "_id" in invoice:
+                del invoice["_id"]
             invoices.append(invoice)
         return invoices
     except Exception as e:
