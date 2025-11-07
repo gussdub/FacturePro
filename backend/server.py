@@ -332,7 +332,7 @@ async def login(user_credentials: UserLogin):
     return Token(access_token=access_token, user=user_response)
 
 @api_router.get("/clients", response_model=List[Client])
-async def get_clients(current_user: User = Depends(get_current_user_with_subscription)):
+async def get_clients(current_user: User = Depends(get_current_user_with_access)):
     clients = await db.clients.find({"user_id": current_user.id}).to_list(1000)
     return [Client(**client) for client in clients]
 
