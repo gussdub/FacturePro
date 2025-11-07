@@ -26,6 +26,13 @@ MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017/facturepro')
 DB_NAME = os.environ.get('DB_NAME', 'facturepro')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'your-jwt-secret-here')
 
+# Configure Cloudinary (for file uploads)
+cloudinary.config(
+    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME', 'demo'),
+    api_key=os.environ.get('CLOUDINARY_API_KEY', 'demo'),
+    api_secret=os.environ.get('CLOUDINARY_API_SECRET', 'demo')
+)
+
 # MongoDB connection
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
