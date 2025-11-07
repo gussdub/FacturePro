@@ -79,6 +79,9 @@ class Client(BaseModel):
     email: str
     phone: Optional[str] = None
     address: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ClientCreate(BaseModel):
@@ -86,14 +89,45 @@ class ClientCreate(BaseModel):
     email: str
     phone: Optional[str] = None
     address: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
 
 class CompanySettings(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     company_name: str
     email: str
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
     logo_url: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    primary_color: str = "#3B82F6"
+    secondary_color: str = "#1F2937"
+    default_due_days: int = 30
+    next_invoice_number: int = 1
+    next_quote_number: int = 1
+    gst_number: Optional[str] = None
+    pst_number: Optional[str] = None
+    hst_number: Optional[str] = None
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class CompanySettingsUpdate(BaseModel):
+    company_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    primary_color: Optional[str] = None
+    secondary_color: Optional[str] = None
+    default_due_days: Optional[int] = None
+    gst_number: Optional[str] = None
+    pst_number: Optional[str] = None
+    hst_number: Optional[str] = None
 
 # Utility functions
 def get_password_hash(password: str) -> str:
