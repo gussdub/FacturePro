@@ -343,14 +343,14 @@ async def create_client(client: ClientCreate, current_user: User = Depends(get_c
     return new_client
 
 @api_router.get("/clients/{client_id}", response_model=Client)
-async def get_client(client_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+async def get_client(client_id: str, current_user: User = Depends(get_current_user_with_access)):
     client = await db.clients.find_one({"id": client_id, "user_id": current_user.id})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     return Client(**client)
 
 @api_router.put("/clients/{client_id}", response_model=Client)
-async def update_client(client_id: str, client_update: ClientCreate, current_user: User = Depends(get_current_user_with_subscription)):
+async def update_client(client_id: str, client_update: ClientCreate, current_user: User = Depends(get_current_user_with_access)):
     client = await db.clients.find_one({"id": client_id, "user_id": current_user.id})
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -362,14 +362,14 @@ async def update_client(client_id: str, client_update: ClientCreate, current_use
     return Client(**updated_client)
 
 @api_router.delete("/clients/{client_id}")
-async def delete_client(client_id: str, current_user: User = Depends(get_current_user_with_subscription)):
+async def delete_client(client_id: str, current_user: User = Depends(get_current_user_with_access)):
     result = await db.clients.delete_one({"id": client_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Client not found")
     return {"message": "Client deleted successfully"}
 
 @api_router.put("/settings/company", response_model=CompanySettings)
-async def update_company_settings(settings_update: CompanySettingsUpdate, current_user: User = Depends(get_current_user_with_subscription)):
+async def update_company_settings(settings_update: CompanySettingsUpdate, current_user: User = Depends(get_current_user_with_access)):
     settings = await db.company_settings.find_one({"user_id": current_user.id})
     if not settings:
         raise HTTPException(status_code=404, detail="Company settings not found")
@@ -384,7 +384,7 @@ async def update_company_settings(settings_update: CompanySettingsUpdate, curren
 @api_router.post("/settings/company/upload-logo")
 async def upload_company_logo(
     logo_data: dict,
-    current_user: User = Depends(get_current_user_with_subscription)
+    current_user: User = Depends(get_current_user_with_access)
 ):
     # For now, accept logo URL instead of file upload
     # This simplifies deployment without Cloudinary
@@ -504,12 +504,12 @@ async def generate_quote_number(user_id: str):
 
 # Invoice routes
 @api_router.get("/invoices", response_model=List[Invoice])
-async def get_invoices(current_user: User = Depends(get_current_user_with_subscription)):
+async def get_invoices(current_user: User = Depends(get_current_user_with_access)):
     invoices = await db.invoices.find({"user_id": current_user.id}).to_list(1000)
     return [Invoice(**invoice) for invoice in invoices]
 
 @api_router.post("/invoices", response_model=Invoice)
-async def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_subscription)):
+async def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_access)):
     # Generate invoice number
     invoice_number = await generate_invoice_number(current_user.id)
     
@@ -552,24 +552,24 @@ async def create_invoice(invoice_data: dict, current_user: User = Depends(get_cu
 
 # Product routes
 @api_router.get("/products", response_model=List[Product])
-async def get_products(current_user: User = Depends(get_current_user_with_subscription)):
+async def get_products(current_user: User = Depends(get_current_user_with_access)):
     products = await db.products.find({"user_id": current_user.id, "is_active": True}).to_list(1000)
     return [Product(**product) for product in products]
 
 @api_router.post("/products", response_model=Product)
-async def create_product(product_data: dict, current_user: User = Depends(get_current_user_with_subscription)):
+async def create_product(product_data: dict, current_user: User = Depends(get_current_user_with_access)):
     new_product = Product(**product_data, user_id=current_user.id)
     await db.products.insert_one(new_product.dict())
     return new_product
 
 # Quote routes
 @api_router.get("/quotes", response_model=List[Quote])
-async def get_quotes(current_user: User = Depends(get_current_user_with_subscription)):
+async def get_quotes(current_user: User = Depends(get_current_user_with_access)):
     quotes = await db.quotes.find({"user_id": current_user.id}).to_list(1000)
     return [Quote(**quote) for quote in quotes]
 
 @api_router.post("/quotes", response_model=Quote)
-async def create_quote(quote_data: dict, current_user: User = Depends(get_current_user_with_subscription)):
+async def create_quote(quote_data: dict, current_user: User = Depends(get_current_user_with_access)):
     # Generate quote number
     quote_number = await generate_quote_number(current_user.id)
     
@@ -612,7 +612,7 @@ async def create_quote(quote_data: dict, current_user: User = Depends(get_curren
 
 # Dashboard stats
 @api_router.get("/dashboard/stats")
-async def get_dashboard_stats(current_user: User = Depends(get_current_user_with_subscription)):
+async def get_dashboard_stats(current_user: User = Depends(get_current_user_with_access)):
     # Get counts
     total_clients = await db.clients.count_documents({"user_id": current_user.id})
     total_invoices = await db.invoices.count_documents({"user_id": current_user.id})
