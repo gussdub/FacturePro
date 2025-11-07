@@ -1352,11 +1352,14 @@ const AuthProvider = ({ children }) => {
   );
 };
 
-// Main App
-function App() {
-  const { token } = useAuth();
-  return token ? <Dashboard /> : <LoginPage />;
-}
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'invoices':
+        return <InvoicesPage />;
+      default:
+        return <Dashboard onPageChange={setCurrentPage} />;
+    }
+  };
 
 // App with Provider
 function AppWithAuth() {
