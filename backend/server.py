@@ -14,6 +14,8 @@ import jwt
 from enum import Enum
 import bcrypt
 import secrets
+import cloudinary
+import cloudinary.uploader
 from dotenv import load_dotenv
 
 # Load environment variables
