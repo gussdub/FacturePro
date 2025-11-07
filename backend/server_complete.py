@@ -364,41 +364,39 @@ async def reset_password(request: dict):
 
 # Client Routes
 @app.get("/api/clients")
-async def get_clients(current_user: User = Depends(get_current_user)):
-    return [client for client in clients_db.values() 
-            if isinstance(client, dict) and client.get("user_id") == current_user.id]
+async def get_clients(current_user: User = Depends(get_current_user_with_access)):
+    clients = await db.clients.find({"user_id": current_user.id}).to_list(1000)
+    return [Client(**client) for client in clients]
 
 @app.post("/api/clients")
-async def create_client(client_data: dict, current_user: User = Depends(get_current_user)):
+async def create_client(client_data: dict, current_user: User = Depends(get_current_user_with_access)):
     client_id = str(uuid.uuid4())
-    new_client = {
-        "id": client_id,
-        "user_id": current_user.id,
-        "name": client_data["name"],
-        "email": client_data["email"],
-        "phone": client_data.get("phone", ""),
-        "address": client_data.get("address", ""),
-        "city": client_data.get("city", ""),
-        "postal_code": client_data.get("postal_code", ""),
-        "country": client_data.get("country", ""),
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    clients_db[client_id] = new_client
+    new_client = Client(
+        id=client_id,
+        user_id=current_user.id,
+        **client_data
+    )
+    await db.clients.insert_one(new_client.dict())
     return new_client
 
 @app.put("/api/clients/{client_id}")
-async def update_client(client_id: str, client_data: dict, current_user: User = Depends(get_current_user)):
-    if client_id in clients_db and clients_db[client_id]["user_id"] == current_user.id:
-        clients_db[client_id].update(client_data)
-        return clients_db[client_id]
-    raise HTTPException(404, "Client not found")
+async def update_client(client_id: str, client_data: dict, current_user: User = Depends(get_current_user_with_access)):
+    result = await db.clients.update_one(
+        {"id": client_id, "user_id": current_user.id},
+        {"$set": client_data}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(404, "Client not found")
+    
+    updated_client = await db.clients.find_one({"id": client_id})
+    return Client(**updated_client)
 
 @app.delete("/api/clients/{client_id}")
-async def delete_client(client_id: str, current_user: User = Depends(get_current_user)):
-    if client_id in clients_db and clients_db[client_id]["user_id"] == current_user.id:
-        del clients_db[client_id]
-        return {"message": "Client deleted"}
-    raise HTTPException(404, "Client not found")
+async def delete_client(client_id: str, current_user: User = Depends(get_current_user_with_access)):
+    result = await db.clients.delete_one({"id": client_id, "user_id": current_user.id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Client not found")
+    return {"message": "Client deleted"}
 
 # Product Routes  
 @app.get("/api/products")
