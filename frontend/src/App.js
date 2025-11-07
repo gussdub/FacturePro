@@ -457,10 +457,16 @@ const AppContent = () => {
     switch (currentPage) {
       case 'clients':
         return <ClientsPage />;
+      case 'products':
+        return <ProductsPage />;
+      case 'invoices':
+        return <InvoicesPage />;
+      case 'quotes':
+        return <div style={{ padding: '30px' }}><h2>Soumissions - En développement</h2></div>;
       case 'settings':
         return <SettingsPage />;
       default:
-        return <Dashboard />;
+        return <Dashboard onPageChange={setCurrentPage} />;
     }
   };
 
@@ -472,7 +478,6 @@ const AppContent = () => {
       </main>
     </div>
   );
-};
 };
 
 // Auth Provider
