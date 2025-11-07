@@ -98,15 +98,14 @@ class CompanySettings(BaseModel):
 
 # Utility functions
 def get_password_hash(password: str) -> str:
-    salt = secrets.token_hex(32)
-    password_hash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), 100000)
-    return salt + password_hash.hex()
+    """Hash password using bcrypt"""
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    salt = hashed_password[:64]
-    stored_hash = hashed_password[64:]
-    password_hash = hashlib.pbkdf2_hmac('sha256', plain_password.encode('utf-8'), salt.encode('utf-8'), 100000)
-    return password_hash.hex() == stored_hash
+    """Verify password using bcrypt"""
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def create_access_token(data: dict):
     to_encode = data.copy()
