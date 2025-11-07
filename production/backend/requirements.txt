@@ -93,7 +93,7 @@ pyphen==0.17.2
 pytest==8.4.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.0
-python-jose==3.5.0
+python-jose[cryptography]==3.3.0
 python-multipart==0.0.20
 pytokens==0.1.10
 pytz==2025.2
