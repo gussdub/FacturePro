@@ -203,6 +203,141 @@ async def reset_password(request: ResetPasswordRequest):
     
     return {"message": "Mot de passe réinitialisé avec succès"}
 
+# Invoice Models and Endpoints
+class InvoiceStatus(str, Enum):
+    DRAFT = "draft"
+    SENT = "sent" 
+    PAID = "paid"
+    OVERDUE = "overdue"
+
+class InvoiceItem(BaseModel):
+    description: str
+    quantity: float = 1.0
+    unit_price: float
+    total: float
+
+class Invoice(BaseModel):
+    id: str
+    user_id: str
+    client_id: str
+    invoice_number: str
+    issue_date: str
+    due_date: str
+    items: List[InvoiceItem] = []
+    subtotal: float = 0
+    gst_rate: float = 5.0
+    pst_rate: float = 9.975
+    hst_rate: float = 13.0
+    gst_amount: float = 0
+    pst_amount: float = 0
+    hst_amount: float = 0
+    total_tax: float = 0
+    total: float = 0
+    apply_gst: bool = True
+    apply_pst: bool = True
+    apply_hst: bool = False
+    province: str = "QC"
+    status: str = "draft"
+    notes: str = ""
+
+# In-memory storage for invoices
+invoices_db = {}
+
+def calculate_taxes(subtotal, province):
+    """Calculate Canadian taxes based on province"""
+    if province == "QC":  # Quebec
+        gst = subtotal * 0.05    # 5% GST
+        pst = subtotal * 0.09975 # 9.975% PST (TVQ)
+        hst = 0
+        apply_gst, apply_pst, apply_hst = True, True, False
+    elif province == "ON":  # Ontario
+        gst = 0
+        pst = 0
+        hst = subtotal * 0.13    # 13% HST
+        apply_gst, apply_pst, apply_hst = False, False, True
+    else:  # Other provinces - just GST for now
+        gst = subtotal * 0.05
+        pst = 0
+        hst = 0
+        apply_gst, apply_pst, apply_hst = True, False, False
+    
+    total_tax = gst + pst + hst
+    return gst, pst, hst, total_tax, apply_gst, apply_pst, apply_hst
+
+def generate_invoice_number():
+    """Generate next invoice number"""
+    existing_numbers = []
+    for invoice in invoices_db.values():
+        if isinstance(invoice, dict) and "invoice_number" in invoice:
+            try:
+                num = int(invoice["invoice_number"].replace("INV-", ""))
+                existing_numbers.append(num)
+            except:
+                pass
+    
+    next_num = max(existing_numbers) + 1 if existing_numbers else 1
+    return f"INV-{next_num:04d}"
+
+@app.get("/api/invoices")
+async def get_invoices(current_user: User = Depends(get_current_user)):
+    user_invoices = []
+    for inv in invoices_db.values():
+        if isinstance(inv, dict) and inv.get("user_id") == current_user.id:
+            user_invoices.append(inv)
+    return user_invoices
+
+@app.post("/api/invoices")
+async def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user)):
+    # Calculate totals
+    items = invoice_data.get("items", [])
+    subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
+    
+    province = invoice_data.get("province", "QC")
+    gst, pst, hst, total_tax, apply_gst, apply_pst, apply_hst = calculate_taxes(subtotal, province)
+    
+    total = subtotal + total_tax
+    
+    # Generate invoice number
+    invoice_number = generate_invoice_number()
+    
+    # Create invoice
+    invoice_id = str(uuid.uuid4())
+    new_invoice = {
+        "id": invoice_id,
+        "user_id": current_user.id,
+        "client_id": invoice_data["client_id"],
+        "invoice_number": invoice_number,
+        "issue_date": datetime.now(timezone.utc).isoformat(),
+        "due_date": invoice_data["due_date"],
+        "items": items,
+        "subtotal": round(subtotal, 2),
+        "gst_rate": 5.0 if province == "QC" else 0,
+        "pst_rate": 9.975 if province == "QC" else 0,
+        "hst_rate": 13.0 if province == "ON" else 0,
+        "gst_amount": round(gst, 2),
+        "pst_amount": round(pst, 2), 
+        "hst_amount": round(hst, 2),
+        "total_tax": round(total_tax, 2),
+        "total": round(total, 2),
+        "apply_gst": apply_gst,
+        "apply_pst": apply_pst,
+        "apply_hst": apply_hst,
+        "province": province,
+        "status": invoice_data.get("status", "draft"),
+        "notes": invoice_data.get("notes", ""),
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    invoices_db[invoice_id] = new_invoice
+    return new_invoice
+
+@app.delete("/api/invoices/{invoice_id}")
+async def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user)):
+    if invoice_id in invoices_db and invoices_db[invoice_id].get("user_id") == current_user.id:
+        del invoices_db[invoice_id]
+        return {"message": "Facture supprimée avec succès"}
+    raise HTTPException(404, "Facture non trouvée")
+
 # Protected routes
 @app.get("/api/user/me")
 async def get_me(current_user: User = Depends(get_current_user)):
