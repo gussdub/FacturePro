@@ -691,7 +691,542 @@ const LoginPage = () => {
   );
 };
 
-// Simple Dashboard
+// Invoices Page Component
+const InvoicesPage = () => {
+  const [invoices, setInvoices] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [formData, setFormData] = useState({
+    client_id: '',
+    due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], // 30 days from now
+    items: [{ description: '', quantity: 1, unit_price: 0 }],
+    province: 'QC',
+    notes: ''
+  });
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const [invoicesRes, clientsRes, productsRes] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/invoices`),
+        axios.get(`${BACKEND_URL}/api/clients`),
+        axios.get(`${BACKEND_URL}/api/dashboard/stats`) // For products, we'll use stats for now
+      ]);
+      setInvoices(invoicesRes.data);
+      setClients(clientsRes.data);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    try {
+      // Calculate totals for each item
+      const processedItems = formData.items.map(item => ({
+        ...item,
+        quantity: parseFloat(item.quantity) || 0,
+        unit_price: parseFloat(item.unit_price) || 0,
+        total: (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0)
+      }));
+
+      const invoiceData = {
+        ...formData,
+        items: processedItems
+      };
+
+      await axios.post(`${BACKEND_URL}/api/invoices`, invoiceData);
+      
+      setShowForm(false);
+      setFormData({
+        client_id: '',
+        due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+        items: [{ description: '', quantity: 1, unit_price: 0 }],
+        province: 'QC',
+        notes: ''
+      });
+      fetchData();
+    } catch (error) {
+      alert('Erreur lors de la création de la facture : ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const addItem = () => {
+    setFormData(prev => ({
+      ...prev,
+      items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }]
+    }));
+  };
+
+  const updateItem = (index, field, value) => {
+    const newItems = [...formData.items];
+    newItems[index] = { ...newItems[index], [field]: value };
+    setFormData(prev => ({ ...prev, items: newItems }));
+  };
+
+  const removeItem = (index) => {
+    if (formData.items.length > 1) {
+      setFormData(prev => ({
+        ...prev,
+        items: prev.items.filter((_, i) => i !== index)
+      }));
+    }
+  };
+
+  const getClientName = (clientId) => {
+    const client = clients.find(c => c.id === clientId);
+    return client ? client.name : 'Client inconnu';
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
+  const calculateItemSubtotal = () => {
+    return formData.items.reduce((sum, item) => {
+      return sum + ((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0));
+    }, 0);
+  };
+
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      draft: { label: 'Brouillon', bg: '#f3f4f6', color: '#374151' },
+      sent: { label: 'Envoyée', bg: '#fef3c7', color: '#92400e' },
+      paid: { label: 'Payée', bg: '#dcfce7', color: '#166534' },
+      overdue: { label: 'En retard', bg: '#fee2e2', color: '#b91c1c' }
+    };
+    
+    const config = statusConfig[status] || statusConfig.draft;
+    return (
+      <span style={{
+        background: config.bg,
+        color: config.color,
+        padding: '4px 8px',
+        borderRadius: '6px',
+        fontSize: '12px',
+        fontWeight: '500'
+      }}>
+        {config.label}
+      </span>
+    );
+  };
+
+  if (loading) {
+    return <div style={{ padding: '30px' }}>Chargement des factures...</div>;
+  }
+
+  return (
+    <div style={{ padding: '30px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+        <div>
+          <h2 style={{ margin: '0 0 8px 0', color: '#1f2937', fontSize: '28px' }}>📄 Factures</h2>
+          <p style={{ margin: 0, color: '#6b7280' }}>{invoices.length} facture{invoices.length > 1 ? 's' : ''} au total</p>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            color: 'white', border: 'none', padding: '14px 28px',
+            borderRadius: '10px', cursor: 'pointer', fontWeight: '600',
+            fontSize: '16px', boxShadow: '0 4px 12px rgba(59,130,246,0.3)'
+          }}
+        >
+          ✨ Nouvelle Facture
+        </button>
+      </div>
+
+      {/* Invoices List */}
+      {invoices.length === 0 ? (
+        <div style={{
+          background: 'white', border: '2px dashed #d1d5db',
+          borderRadius: '16px', padding: '60px 40px', textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '64px', marginBottom: '20px' }}>📄</div>
+          <h3 style={{ margin: '0 0 12px 0', color: '#374151', fontSize: '20px' }}>Aucune facture créée</h3>
+          <p style={{ margin: '0 0 24px 0', color: '#6b7280' }}>
+            Créez votre première facture pour commencer à facturer vos clients
+          </p>
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              background: '#3b82f6', color: 'white', border: 'none',
+              padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
+              fontWeight: '600'
+            }}
+          >
+            🚀 Créer ma première facture
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '16px' }}>
+          {invoices.map(invoice => (
+            <div key={invoice.id} style={{
+              background: 'white', border: '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                    <h3 style={{ margin: 0, color: '#1f2937', fontSize: '20px', fontWeight: '700' }}>
+                      {invoice.invoice_number}
+                    </h3>
+                    {getStatusBadge(invoice.status)}
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600', marginBottom: '4px' }}>CLIENT</div>
+                      <div style={{ color: '#374151', fontWeight: '500' }}>{getClientName(invoice.client_id)}</div>
+                    </div>
+                    
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600', marginBottom: '4px' }}>ÉCHÉANCE</div>
+                      <div style={{ color: '#374151' }}>{new Date(invoice.due_date).toLocaleDateString('fr-CA')}</div>
+                    </div>
+                    
+                    <div>
+                      <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600', marginBottom: '4px' }}>PROVINCE</div>
+                      <div style={{ color: '#374151' }}>{invoice.province === 'QC' ? 'Québec' : 'Ontario'}</div>
+                    </div>
+                  </div>
+
+                  {invoice.notes && (
+                    <div style={{ marginTop: '12px', padding: '8px', background: '#f8fafc', borderRadius: '6px' }}>
+                      <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>NOTES</div>
+                      <div style={{ fontSize: '14px', color: '#374151' }}>{invoice.notes}</div>
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{ textAlign: 'right', marginLeft: '24px' }}>
+                  <div style={{ marginBottom: '8px' }}>
+                    <div style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937' }}>
+                      {formatCurrency(invoice.total)}
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                      Sous-total: {formatCurrency(invoice.subtotal)}
+                    </div>
+                    {invoice.province === 'QC' && (
+                      <>
+                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                          TPS: {formatCurrency(invoice.gst_amount)}
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                          TVQ: {formatCurrency(invoice.pst_amount)}
+                        </div>
+                      </>
+                    )}
+                    {invoice.province === 'ON' && (
+                      <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                        HST: {formatCurrency(invoice.hst_amount)}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <button
+                    onClick={async () => {
+                      if (window.confirm('Supprimer cette facture ?')) {
+                        try {
+                          await axios.delete(`${BACKEND_URL}/api/invoices/${invoice.id}`);
+                          fetchData();
+                        } catch (error) {
+                          alert('Erreur lors de la suppression');
+                        }
+                      }
+                    }}
+                    style={{
+                      background: '#ef4444', color: 'white', border: 'none',
+                      padding: '6px 12px', borderRadius: '6px', cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    🗑️ Supprimer
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Invoice Form Modal */}
+      {showForm && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000, padding: '20px'
+        }}>
+          <div style={{
+            background: 'white', padding: '32px', borderRadius: '16px',
+            width: '95%', maxWidth: '900px', maxHeight: '90vh', overflow: 'auto'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+              <h3 style={{ margin: 0, fontSize: '24px', color: '#1f2937' }}>✨ Nouvelle Facture</h3>
+              <button
+                onClick={() => setShowForm(false)}
+                style={{
+                  background: '#f3f4f6', border: 'none', padding: '8px',
+                  borderRadius: '8px', cursor: 'pointer', fontSize: '20px'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <form onSubmit={handleSubmit}>
+              {/* Header Info */}
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
+                gap: '20px', 
+                marginBottom: '30px',
+                padding: '20px',
+                background: '#f8fafc',
+                borderRadius: '12px'
+              }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
+                    Client *
+                  </label>
+                  <select
+                    value={formData.client_id}
+                    onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="">Sélectionner un client</option>
+                    {clients.map(client => (
+                      <option key={client.id} value={client.id}>
+                        {client.name} ({client.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
+                    Date d'échéance *
+                  </label>
+                  <input
+                    type="date"
+                    value={formData.due_date}
+                    onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
+                    Province (taxes)
+                  </label>
+                  <select
+                    value={formData.province}
+                    onChange={(e) => setFormData(prev => ({ ...prev, province: e.target.value }))}
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="QC">🍁 Québec (TPS 5% + TVQ 9.975%)</option>
+                    <option value="ON">🍁 Ontario (HST 13%)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Items */}
+              <div style={{ marginBottom: '30px' }}>
+                <h4 style={{ margin: '0 0 16px 0', color: '#1f2937', fontSize: '18px' }}>
+                  📋 Articles et Services
+                </h4>
+                
+                {/* Items Header */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '2fr 100px 120px 120px 60px',
+                  gap: '12px',
+                  padding: '12px 16px',
+                  background: '#f1f5f9',
+                  borderRadius: '8px 8px 0 0',
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  color: '#374151',
+                  borderBottom: '2px solid #e2e8f0'
+                }}>
+                  <div>DESCRIPTION</div>
+                  <div style={{ textAlign: 'center' }}>QTÉ</div>
+                  <div style={{ textAlign: 'center' }}>PRIX UNIT.</div>
+                  <div style={{ textAlign: 'center' }}>TOTAL</div>
+                  <div></div>
+                </div>
+
+                {formData.items.map((item, index) => (
+                  <div key={index} style={{
+                    display: 'grid',
+                    gridTemplateColumns: '2fr 100px 120px 120px 60px',
+                    gap: '12px',
+                    padding: '16px',
+                    background: index % 2 === 0 ? 'white' : '#f8fafc',
+                    borderBottom: '1px solid #e5e7eb',
+                    alignItems: 'center'
+                  }}>
+                    <input
+                      type="text"
+                      value={item.description}
+                      onChange={(e) => updateItem(index, 'description', e.target.value)}
+                      placeholder="Description du service/produit"
+                      required
+                      style={{
+                        padding: '10px', border: '1px solid #d1d5db',
+                        borderRadius: '6px', fontSize: '14px', boxSizing: 'border-box'
+                      }}
+                    />
+                    
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={item.quantity}
+                      onChange={(e) => updateItem(index, 'quantity', e.target.value)}
+                      style={{
+                        padding: '10px', border: '1px solid #d1d5db',
+                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
+                      }}
+                    />
+                    
+                    <input
+                      type="number"
+                      step="0.01" 
+                      min="0"
+                      value={item.unit_price}
+                      onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
+                      style={{
+                        padding: '10px', border: '1px solid #d1d5db',
+                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
+                      }}
+                    />
+                    
+                    <div style={{
+                      padding: '10px', background: '#f1f5f9', borderRadius: '6px',
+                      textAlign: 'center', fontWeight: '600', color: '#374151'
+                    }}>
+                      {formatCurrency((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0))}
+                    </div>
+                    
+                    <button
+                      type="button"
+                      onClick={() => removeItem(index)}
+                      disabled={formData.items.length === 1}
+                      style={{
+                        background: formData.items.length === 1 ? '#f3f4f6' : '#ef4444',
+                        color: formData.items.length === 1 ? '#9ca3af' : 'white',
+                        border: 'none', padding: '8px', borderRadius: '6px',
+                        cursor: formData.items.length === 1 ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                ))}
+
+                {/* Add Item Button */}
+                <div style={{ padding: '16px', textAlign: 'center', borderTop: '2px solid #e2e8f0' }}>
+                  <button
+                    type="button"
+                    onClick={addItem}
+                    style={{
+                      background: '#10b981', color: 'white', border: 'none',
+                      padding: '10px 20px', borderRadius: '8px', cursor: 'pointer',
+                      fontWeight: '600'
+                    }}
+                  >
+                    ➕ Ajouter un article
+                  </button>
+                </div>
+
+                {/* Totals */}
+                <div style={{
+                  background: '#f8fafc', padding: '20px', borderRadius: '0 0 8px 8px',
+                  borderTop: '2px solid #3b82f6'
+                }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>
+                      Sous-total: {formatCurrency(calculateItemSubtotal())}
+                    </div>
+                    <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
+                      {formData.province === 'QC' ? 'TPS (5%) + TVQ (9.975%) ajoutées automatiquement' : 
+                       formData.province === 'ON' ? 'HST (13%) ajoutée automatiquement' : 
+                       'Taxes calculées selon la province'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div style={{ marginBottom: '30px' }}>
+                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#374151' }}>
+                  📝 Notes (optionnel)
+                </label>
+                <textarea
+                  value={formData.notes}
+                  onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                  rows={3}
+                  placeholder="Conditions de paiement, informations supplémentaires..."
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                    borderRadius: '8px', resize: 'vertical', fontSize: '14px',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  style={{
+                    background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', color: 'white',
+                    border: 'none', padding: '12px 24px', borderRadius: '8px',
+                    cursor: 'pointer', fontWeight: '600'
+                  }}
+                >
+                  💾 Créer la facture
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 const Dashboard = () => {
   const { user, logout } = useAuth();
 
