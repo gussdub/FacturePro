@@ -60,6 +60,24 @@ const Navigation = ({ currentPage, onPageChange }) => {
           👥 Clients
         </div>
         <div 
+          style={linkStyle(currentPage === 'products')}
+          onClick={() => onPageChange('products')}
+        >
+          📦 Produits
+        </div>
+        <div 
+          style={linkStyle(currentPage === 'invoices')}
+          onClick={() => onPageChange('invoices')}
+        >
+          📄 Factures
+        </div>
+        <div 
+          style={linkStyle(currentPage === 'quotes')}
+          onClick={() => onPageChange('quotes')}
+        >
+          📝 Soumissions
+        </div>
+        <div 
           style={linkStyle(currentPage === 'settings')}
           onClick={() => onPageChange('settings')}
         >
