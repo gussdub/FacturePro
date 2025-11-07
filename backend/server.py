@@ -132,13 +132,13 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 async def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
     user = await get_current_user(credentials)
     
-    # Exempt users get free access
+    # Exempt users (always free access)
     EXEMPT_USERS = ["gussdub@gmail.com"]
     if user.email in EXEMPT_USERS:
-        return user
-    
-    # For non-exempt users, always give access for now (simplified)
-    return user
+        return True
+
+    # Simple check - everyone has trial access for now
+    return True
 
 # Routes
 @api_router.get("/health")
