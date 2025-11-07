@@ -260,6 +260,7 @@ function App() {
 const Layout = ({ currentRoute, navigate, children }) => {
   const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settings, setSettings] = useState(null);
 
   // Load company settings for logo
