@@ -138,6 +138,91 @@ class CompanySettingsUpdate(BaseModel):
     pst_number: Optional[str] = None
     hst_number: Optional[str] = None
 
+# Invoice and Quote Models
+class InvoiceStatus(str, Enum):
+    DRAFT = "draft"
+    SENT = "sent"
+    PAID = "paid"
+    OVERDUE = "overdue"
+    CANCELLED = "cancelled"
+
+class InvoiceItem(BaseModel):
+    description: str
+    quantity: float = 1.0
+    unit_price: float
+    total: float
+
+class Invoice(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    client_id: str
+    invoice_number: str
+    issue_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    due_date: datetime
+    items: List[InvoiceItem] = []
+    subtotal: float = 0
+    gst_rate: float = 5.0
+    pst_rate: float = 9.975
+    hst_rate: float = 0.0
+    gst_amount: float = 0
+    pst_amount: float = 0
+    hst_amount: float = 0
+    total_tax: float = 0
+    total: float = 0
+    apply_gst: bool = True
+    apply_pst: bool = True
+    apply_hst: bool = False
+    province: str = "QC"
+    status: InvoiceStatus = InvoiceStatus.DRAFT
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Quote(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    client_id: str
+    quote_number: str
+    issue_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    valid_until: datetime
+    items: List[InvoiceItem] = []
+    subtotal: float = 0
+    gst_rate: float = 5.0
+    pst_rate: float = 9.975
+    hst_rate: float = 0.0
+    gst_amount: float = 0
+    pst_amount: float = 0
+    hst_amount: float = 0
+    total_tax: float = 0
+    total: float = 0
+    apply_gst: bool = True
+    apply_pst: bool = True
+    apply_hst: bool = False
+    province: str = "QC"
+    status: str = "pending"
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Product(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    name: str
+    description: str
+    unit_price: float
+    unit: str = "unité"
+    category: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Employee(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    name: str
+    email: str
+    phone: Optional[str] = None
+    department: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # Utility functions
 def get_password_hash(password: str) -> str:
     """Hash password using bcrypt"""
