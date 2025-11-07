@@ -305,6 +305,46 @@ async def update_company_settings(settings_update: CompanySettingsUpdate, curren
     updated_settings = await db.company_settings.find_one({"user_id": current_user.id})
     return CompanySettings(**updated_settings)
 
+@api_router.post("/settings/company/upload-logo")
+async def upload_company_logo(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_with_subscription)
+):
+    # Validate file
+    if file.size > 5 * 1024 * 1024:  # 5MB limit
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+    
+    # Validate file type
+    allowed_types = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="Invalid file type. Use JPG, PNG or WebP")
+    
+    try:
+        # Upload to Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            file.file,
+            folder="facturepro/logos",
+            public_id=f"logo_{current_user.id}_{int(datetime.now().timestamp())}",
+            overwrite=True,
+            resource_type="image"
+        )
+        
+        logo_url = upload_result.get('secure_url')
+        
+        # Update company settings
+        await db.company_settings.update_one(
+            {"user_id": current_user.id},
+            {"$set": {"logo_url": logo_url, "updated_at": datetime.now(timezone.utc)}}
+        )
+        
+        return {
+            "message": "Logo uploaded successfully",
+            "logo_url": logo_url
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error uploading logo")
+
 @api_router.get("/settings/company", response_model=CompanySettings)
 async def get_company_settings(current_user: User = Depends(get_current_user_with_access)):
     settings = await db.company_settings.find_one({"user_id": current_user.id})
