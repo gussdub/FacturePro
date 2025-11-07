@@ -142,7 +142,8 @@ async def initialize_database():
     except Exception as e:
         print(f"❌ Erreur: {e}")
     finally:
-        client.close()
+        if 'client' in locals():
+            client.close()
 
 if __name__ == "__main__":
     asyncio.run(initialize_database())
