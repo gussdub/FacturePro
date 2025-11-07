@@ -21,10 +21,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017/facturepro')
 DB_NAME = os.environ.get('DB_NAME', 'facturepro')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'your-jwt-secret-here')
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
 # MongoDB connection
 client = AsyncIOMotorClient(MONGO_URL)
