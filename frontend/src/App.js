@@ -27,7 +27,8 @@ const Navigation = ({ currentPage, onPageChange }) => {
 
   const menuStyle = {
     display: 'flex',
-    gap: '25px'
+    gap: '25px',
+    flexWrap: 'wrap'
   };
 
   const linkStyle = (active) => ({
@@ -37,7 +38,8 @@ const Navigation = ({ currentPage, onPageChange }) => {
     cursor: 'pointer',
     fontWeight: active ? '600' : '400',
     transition: 'all 0.3s ease',
-    border: active ? '1px solid rgba(255,255,255,0.3)' : '1px solid transparent'
+    border: active ? '1px solid rgba(255,255,255,0.3)' : '1px solid transparent',
+    fontSize: '14px'
   });
 
   return (
