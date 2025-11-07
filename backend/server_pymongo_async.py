@@ -346,7 +346,10 @@ async def create_product(product_data: dict, current_user: User = Depends(get_cu
             "created_at": datetime.now(timezone.utc)
         }
         
-        await db.products.insert_one(new_product)
+        result = await db.products.insert_one(new_product)
+        # Remove MongoDB _id before returning
+        if "_id" in new_product:
+            del new_product["_id"]
         return new_product
     except Exception as e:
         print(f"Create product error: {e}")
