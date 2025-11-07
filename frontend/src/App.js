@@ -416,6 +416,8 @@ const ForgotPasswordModal = ({ onClose }) => {
 const LoginPage = () => {
   const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
   const [isLogin, setIsLogin] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login, register } = useAuth();
@@ -437,175 +439,410 @@ const LoginPage = () => {
         setError(result.error);
       }
     } catch (err) {
-      setError('Erreur de connexion');
+      setError('Une erreur est survenue');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleChange = (e) => {
+    setFormData(prev => ({
+      ...prev,
+      [e.target.name]: e.target.value
+    }));
+  };
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    <div style={{ 
+      minHeight: '100vh', 
+      background: 'linear-gradient(to-br, #f8fafc, #e0e7ff, #c7d2fe)',
       display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontFamily: 'Arial, sans-serif',
-      padding: '20px'
+      fontFamily: 'system-ui, -apple-system, sans-serif'
     }}>
+      {/* Left side - Hero Section */}
       <div style={{
-        background: 'white',
-        padding: '40px',
-        borderRadius: '12px',
-        boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-        width: '100%',
-        maxWidth: '420px'
-      }}>
-        <div style={{ textAlign: 'center', marginBottom: '35px' }}>
-          <div style={{
-            display: 'inline-block',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            padding: '15px',
-            borderRadius: '12px',
-            marginBottom: '15px'
-          }}>
-            <div style={{ fontSize: '32px' }}>🧾</div>
+        display: 'none',
+        '@media (min-width: 1024px)': { display: 'flex' },
+        width: '50%',
+        background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        position: 'relative',
+        overflow: 'hidden'
+      }} className="hidden lg:flex lg:w-1/2">
+        <div style={{
+          position: 'absolute',
+          top: '80px',
+          left: '80px',
+          width: '288px',
+          height: '288px',
+          background: 'rgba(255,255,255,0.1)',
+          borderRadius: '50%',
+          filter: 'blur(64px)'
+        }}></div>
+        <div style={{
+          position: 'absolute',
+          bottom: '80px',
+          right: '80px',
+          width: '384px',
+          height: '384px',
+          background: 'rgba(59, 130, 246, 0.2)',
+          borderRadius: '50%',
+          filter: 'blur(64px)'
+        }}></div>
+        
+        <div style={{
+          position: 'relative',
+          zIndex: 10,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          padding: '0 48px',
+          color: 'white'
+        }}>
+          <div style={{ marginBottom: '32px' }}>
+            <div style={{
+              width: '64px',
+              height: '64px',
+              color: 'rgba(255,255,255,0.9)',
+              marginBottom: '24px',
+              fontSize: '64px'
+            }}>🧾</div>
+            <h1 style={{
+              fontSize: '48px',
+              fontWeight: 'bold',
+              marginBottom: '16px',
+              lineHeight: '1.2',
+              margin: 0
+            }}>
+              Simplifiez votre
+              <span style={{ display: 'block', color: '#bfdbfe' }}>facturation</span>
+            </h1>
+            <p style={{
+              fontSize: '20px',
+              color: 'rgba(255,255,255,0.8)',
+              lineHeight: '1.6',
+              margin: 0
+            }}>
+              Gérez vos factures, soumissions et clients en toute simplicité avec notre solution complète et intuitive.
+            </p>
           </div>
-          <h1 style={{
-            fontSize: '28px',
-            fontWeight: 'bold',
-            color: '#333',
-            margin: '0'
-          }}>
-            FacturePro
-          </h1>
-          <p style={{ color: '#666', margin: '8px 0 0 0' }}>
-            {isLogin ? 'Connexion à votre espace' : 'Créez votre compte'}
-          </p>
-        </div>
-
-        {error && (
-          <div style={{
-            background: '#fee2e2',
-            border: '1px solid #fca5a5',
-            color: '#dc2626',
-            padding: '12px',
-            borderRadius: '6px',
-            marginBottom: '25px',
-            textAlign: 'center',
-            fontSize: '14px'
-          }}>
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-          {!isLogin && (
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
-                Nom de l'entreprise *
-              </label>
-              <input
-                type="text"
-                value={formData.companyName}
-                onChange={(e) => setFormData(prev => ({ ...prev, companyName: e.target.value }))}
-                required={!isLogin}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '6px',
-                  fontSize: '16px',
-                  boxSizing: 'border-box',
-                  transition: 'border-color 0.2s'
-                }}
-                placeholder="Mon Entreprise Inc."
-              />
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: 'rgba(255,255,255,0.1)',
+              padding: '12px 20px',
+              borderRadius: '8px'
+            }}>
+              <div style={{ fontSize: '24px', marginRight: '12px' }}>⚡</div>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '16px' }}>Facturation instantanée</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Créez et envoyez vos factures en quelques clics</div>
+              </div>
             </div>
-          )}
-
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
-              Adresse email *
-            </label>
-            <input
-              type="email"
-              value={formData.email}
-              onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-              required
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: '1px solid #d1d5db',
-                borderRadius: '6px',
-                fontSize: '16px',
-                boxSizing: 'border-box'
-              }}
-              placeholder="votre@email.com"
-            />
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '20px' }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: 'rgba(255,255,255,0.1)',
+              padding: '12px 20px',
+              borderRadius: '8px'
+            }}>
+              <div style={{ fontSize: '24px', marginRight: '12px' }}>🔄</div>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '16px' }}>Récurrence automatique</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Programmez vos factures récurrentes</div>
+              </div>
+            </div>
           </div>
 
-          <div style={{ marginBottom: '30px' }}>
-            <label style={{ display: 'block', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>
-              Mot de passe *
-            </label>
-            <input
-              type="password"
-              value={formData.password}
-              onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-              required
-              style={{
-                width: '100%',
-                padding: '12px',
-                border: '1px solid #d1d5db',
-                borderRadius: '6px',
-                fontSize: '16px',
-                boxSizing: 'border-box'
-              }}
-              placeholder="Mot de passe sécurisé"
-            />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '20px' }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              background: 'rgba(255,255,255,0.1)',
+              padding: '12px 20px',
+              borderRadius: '8px'
+            }}>
+              <div style={{ fontSize: '24px', marginRight: '12px' }}>🛡️</div>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '16px' }}>Sécurisé et fiable</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Vos données sont protégées et sauvegardées</div>
+              </div>
+            </div>
           </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              width: '100%',
-              padding: '14px',
-              background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '16px',
-              fontWeight: '600',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              transition: 'all 0.3s ease'
-            }}
-          >
-            {loading ? '⏳ Connexion...' : (isLogin ? '🔐 Se connecter' : '✨ Créer mon compte')}
-          </button>
-        </form>
-
-        <div style={{ textAlign: 'center', marginTop: '25px' }}>
-          <button
-            onClick={() => {
-              setIsLogin(!isLogin);
-              setError('');
-              setFormData({ email: '', password: '', companyName: '' });
-            }}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#667eea',
-              cursor: 'pointer',
-              textDecoration: 'underline',
-              fontSize: '14px'
-            }}
-          >
-            {isLogin ? "Nouveau sur FacturePro ? S'inscrire" : "Déjà client ? Se connecter"}
-          </button>
         </div>
       </div>
+
+      {/* Right side - Login Form */}
+      <div style={{
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px'
+      }}>
+        <div style={{ width: '100%', maxWidth: '440px' }}>
+          {/* Logo and Title */}
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '80px',
+              height: '80px',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              borderRadius: '20px',
+              marginBottom: '20px',
+              boxShadow: '0 10px 25px rgba(102, 126, 234, 0.3)'
+            }}>
+              <div style={{ fontSize: '36px', color: 'white' }}>🧾</div>
+            </div>
+            <h1 style={{
+              fontSize: '32px',
+              fontWeight: 'bold',
+              color: '#1f2937',
+              margin: '0 0 8px 0'
+            }}>
+              FacturePro
+            </h1>
+            <h2 style={{
+              fontSize: '24px',
+              fontWeight: '600',
+              color: '#374151',
+              margin: '0 0 8px 0'
+            }}>
+              {isLogin ? 'Connexion' : 'Créer un compte'}
+            </h2>
+            <p style={{
+              color: '#6b7280',
+              margin: 0,
+              fontSize: '16px'
+            }}>
+              {isLogin 
+                ? 'Accédez à votre tableau de bord' 
+                : 'Démarrez votre essai gratuit aujourd\'hui'
+              }
+            </p>
+          </div>
+
+          <div style={{
+            background: 'white',
+            padding: '32px',
+            borderRadius: '16px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            border: 'none'
+          }}>
+            {error && (
+              <div style={{
+                background: '#fee2e2',
+                border: '1px solid #fecaca',
+                borderRadius: '8px',
+                padding: '12px',
+                marginBottom: '24px'
+              }}>
+                <div style={{ color: '#b91c1c', fontSize: '14px' }}>
+                  {error}
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {!isLogin && (
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '8px' }}>
+                    Nom de l'entreprise
+                  </label>
+                  <input
+                    type="text"
+                    name="companyName"
+                    value={formData.companyName}
+                    onChange={handleChange}
+                    placeholder="Mon Entreprise"
+                    required
+                    style={{
+                      width: '100%',
+                      height: '48px',
+                      fontSize: '16px',
+                      padding: '12px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      transition: 'all 0.2s',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '8px' }}>
+                  Adresse email
+                </label>
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  placeholder="votre@email.com"
+                  required
+                  style={{
+                    width: '100%',
+                    height: '48px',
+                    fontSize: '16px',
+                    padding: '12px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '8px',
+                    transition: 'all 0.2s',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '8px' }}>
+                  Mot de passe
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    placeholder="••••••••"
+                    required
+                    style={{
+                      width: '100%',
+                      height: '48px',
+                      fontSize: '16px',
+                      padding: '12px 48px 12px 12px',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      transition: 'all 0.2s',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: '#6b7280',
+                      fontSize: '18px'
+                    }}
+                  >
+                    {showPassword ? '🙈' : '👁️'}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  width: '100%',
+                  height: '48px',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  transform: loading ? 'none' : 'hover:scale-105',
+                  transition: 'all 0.3s ease',
+                  boxShadow: '0 4px 14px 0 rgba(102, 126, 234, 0.4)'
+                }}
+              >
+                {loading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{
+                      width: '20px',
+                      height: '20px',
+                      border: '2px solid transparent',
+                      borderTop: '2px solid white',
+                      borderRadius: '50%',
+                      animation: 'spin 1s linear infinite',
+                      marginRight: '8px'
+                    }}></div>
+                    Chargement...
+                  </div>
+                ) : (
+                  isLogin ? 'Se connecter' : 'Créer mon compte'
+                )}
+              </button>
+            </form>
+
+            {/* Forgot Password Link */}
+            {isLogin && (
+              <div style={{ marginTop: '16px', textAlign: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowForgotPassword(true)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#667eea',
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    textDecoration: 'underline'
+                  }}
+                >
+                  Mot de passe oublié ?
+                </button>
+              </div>
+            )}
+
+            <div style={{ marginTop: '24px', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLogin(!isLogin);
+                  setError('');
+                  setFormData({ email: '', password: '', companyName: '' });
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#667eea',
+                  fontSize: '16px',
+                  fontWeight: '500',
+                  cursor: 'pointer',
+                  transition: 'color 0.3s'
+                }}
+              >
+                {isLogin 
+                  ? "Pas encore de compte ? S'inscrire" 
+                  : "Déjà un compte ? Se connecter"
+                }
+              </button>
+            </div>
+          </div>
+
+          {!isLogin && (
+            <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#6b7280' }}>
+              En créant un compte, vous acceptez nos{' '}
+              <a href="#" style={{ color: '#667eea', textDecoration: 'none' }}>
+                conditions d'utilisation
+              </a>{' '}
+              et notre{' '}
+              <a href="#" style={{ color: '#667eea', textDecoration: 'none' }}>
+                politique de confidentialité
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Forgot Password Modal */}
+      {showForgotPassword && <ForgotPasswordModal onClose={() => setShowForgotPassword(false)} />}
     </div>
   );
 };
