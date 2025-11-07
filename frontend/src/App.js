@@ -7,15 +7,593 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
-// Forgot Password Modal - Complete workflow
+// Auth Provider
+const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('token'));
+
+  useEffect(() => {
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    }
+  }, [token]);
+
+  const login = async (email, password) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
+      const { access_token, user: userData } = response.data;
+      
+      setToken(access_token);
+      setUser(userData);
+      localStorage.setItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error.response?.data?.detail || 'Email ou mot de passe incorrect' 
+      };
+    }
+  };
+
+  const register = async (email, password, company_name) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/register`, { 
+        email, password, company_name 
+      });
+      const { access_token, user: userData } = response.data;
+      
+      setToken(access_token);
+      setUser(userData);
+      localStorage.setItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error.response?.data?.detail || 'Erreur lors de la création du compte' 
+      };
+    }
+  };
+
+  const logout = () => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('token');
+    delete axios.defaults.headers.common['Authorization'];
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, token, login, register, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+// Main App Router
+function App() {
+  const [currentRoute, setCurrentRoute] = useState(window.location.pathname);
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('token'));
+
+  // Simple routing
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentRoute(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigate = (path) => {
+    window.history.pushState({}, '', path);
+    setCurrentRoute(path);
+  };
+
+  useEffect(() => {
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      // Set user from token or fetch from API
+    }
+  }, [token]);
+
+  const login = async (email, password) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
+      const { access_token, user: userData } = response.data;
+      
+      setToken(access_token);
+      setUser(userData);
+      localStorage.setItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      navigate('/dashboard');
+      
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error.response?.data?.detail || 'Email ou mot de passe incorrect' 
+      };
+    }
+  };
+
+  const register = async (email, password, company_name) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/register`, { 
+        email, password, company_name 
+      });
+      const { access_token, user: userData } = response.data;
+      
+      setToken(access_token);
+      setUser(userData);
+      localStorage.setItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      navigate('/dashboard');
+      
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error.response?.data?.detail || 'Erreur lors de la création du compte' 
+      };
+    }
+  };
+
+  const logout = () => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('token');
+    delete axios.defaults.headers.common['Authorization'];
+    navigate('/login');
+  };
+
+  // Route components
+  const renderRoute = () => {
+    if (!token && currentRoute !== '/register') {
+      return <LoginPage onLogin={login} onRegister={register} navigate={navigate} />;
+    }
+
+    if (!token && currentRoute === '/register') {
+      return <RegisterPage onRegister={register} navigate={navigate} />;
+    }
+
+    // Protected routes
+    switch (currentRoute) {
+      case '/clients':
+        return <ClientsPage navigate={navigate} user={user} logout={logout} />;
+      case '/invoices':
+        return <InvoicesPage navigate={navigate} user={user} logout={logout} />;
+      case '/settings':
+        return <SettingsPage navigate={navigate} user={user} logout={logout} />;
+      case '/products':
+        return <ProductsPage navigate={navigate} user={user} logout={logout} />;
+      default:
+        return <Dashboard navigate={navigate} user={user} logout={logout} />;
+    }
+  };
+
+  return (
+    <div>
+      {renderRoute()}
+    </div>
+  );
+}
+
+// Login Page with Original Beautiful Design
+const LoginPage = ({ onLogin, onRegister, navigate }) => {
+  const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
+  const [isLogin, setIsLogin] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      let result;
+      if (isLogin) {
+        result = await onLogin(formData.email, formData.password);
+      } else {
+        result = await onRegister(formData.email, formData.password, formData.companyName);
+      }
+
+      if (!result.success) {
+        setError(result.error);
+      }
+    } catch (err) {
+      setError('Une erreur est survenue');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex" style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(to bottom right, #f8fafc, #dbeafe, #c7d2fe)',
+      display: 'flex',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      {/* Left Hero Section */}
+      <div style={{
+        display: window.innerWidth > 1024 ? 'flex' : 'none',
+        width: '50%',
+        background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+        position: 'relative',
+        overflow: 'hidden',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        padding: '48px'
+      }}>
+        {/* Decorative circles */}
+        <div style={{
+          position: 'absolute', top: '80px', left: '80px',
+          width: '288px', height: '288px',
+          background: 'rgba(255,255,255,0.1)',
+          borderRadius: '50%', filter: 'blur(48px)'
+        }}></div>
+        <div style={{
+          position: 'absolute', bottom: '80px', right: '80px',
+          width: '384px', height: '384px',
+          background: 'rgba(59,130,246,0.2)',
+          borderRadius: '50%', filter: 'blur(48px)'
+        }}></div>
+        
+        <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
+          <div style={{ marginBottom: '32px' }}>
+            {/* Beautiful Receipt Icon */}
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: '24px' }}>
+              <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
+              <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
+              <path d="M12 18V6"/>
+            </svg>
+            <h1 style={{
+              fontSize: '80px', fontWeight: 'bold', marginBottom: '16px',
+              lineHeight: '1.1', margin: 0
+            }}>
+              Simplifiez votre
+              <span style={{ display: 'block', color: '#bfdbfe' }}>facturation</span>
+            </h1>
+            <p style={{
+              fontSize: '20px', color: 'rgba(255,255,255,0.8)',
+              lineHeight: '1.6', margin: 0
+            }}>
+              Gérez vos factures, devis et clients en toute simplicité avec notre solution complète et intuitive.
+            </p>
+          </div>
+          
+          {/* Feature highlights */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              background: 'rgba(255,255,255,0.1)', padding: '12px 20px',
+              borderRadius: '12px', backdropFilter: 'blur(8px)'
+            }}>
+              <span style={{ fontSize: '24px', marginRight: '12px' }}>⚡</span>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '16px' }}>Facturation instantanée</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Créez et envoyez vos factures en quelques clics</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              background: 'rgba(255,255,255,0.1)', padding: '12px 20px',
+              borderRadius: '12px', backdropFilter: 'blur(8px)'
+            }}>
+              <span style={{ fontSize: '24px', marginRight: '12px' }}>🔄</span>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '16px' }}>Récurrence automatique</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Programmez vos factures récurrentes</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center',
+              background: 'rgba(255,255,255,0.1)', padding: '12px 20px',
+              borderRadius: '12px', backdropFilter: 'blur(8px)'
+            }}>
+              <span style={{ fontSize: '24px', marginRight: '12px' }}>🛡️</span>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '16px' }}>Sécurisé et fiable</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Vos données sont protégées et sauvegardées</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Right side - Login/Register Form */}
+      <div style={{
+        width: window.innerWidth > 1024 ? '50%' : '100%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '40px 20px'
+      }}>
+        <div style={{ width: '100%', maxWidth: '480px' }}>
+          {/* Logo and Title Section */}
+          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: '80px', height: '80px',
+              background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+              borderRadius: '20px', marginBottom: '20px',
+              boxShadow: '0 10px 25px rgba(79, 70, 229, 0.4)'
+            }}>
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
+                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
+                <path d="M12 18V6"/>
+              </svg>
+            </div>
+            <h1 style={{
+              fontSize: '32px', fontWeight: '800', color: '#1e293b',
+              margin: '0 0 8px 0', letterSpacing: '-0.025em'
+            }}>
+              FacturePro
+            </h1>
+            <h2 style={{
+              fontSize: '22px', fontWeight: '600', color: '#475569',
+              margin: '0 0 8px 0'
+            }}>
+              {isLogin ? 'Connexion' : 'Créer un compte'}
+            </h2>
+            <p style={{
+              color: '#64748b', margin: 0, fontSize: '16px'
+            }}>
+              {isLogin 
+                ? 'Accédez à votre tableau de bord' 
+                : 'Démarrez votre essai gratuit aujourd\'hui'
+              }
+            </p>
+          </div>
+
+          {/* Form Card */}
+          <div style={{
+            background: 'rgba(255,255,255,0.95)',
+            backdropFilter: 'blur(20px)',
+            padding: '32px', borderRadius: '20px',
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)',
+            border: 'none'
+          }}>
+            {error && (
+              <div style={{
+                background: '#fef2f2', border: '1px solid #fecaca',
+                borderRadius: '12px', padding: '16px', marginBottom: '24px',
+                color: '#b91c1c', fontSize: '14px', textAlign: 'center'
+              }}>
+                {error}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {!isLogin && (
+                <div>
+                  <label style={{
+                    display: 'block', fontSize: '14px', fontWeight: '600',
+                    color: '#374151', marginBottom: '8px'
+                  }}>
+                    Nom de l'entreprise *
+                  </label>
+                  <input
+                    type="text"
+                    name="companyName"
+                    value={formData.companyName}
+                    onChange={(e) => setFormData(prev => ({ ...prev, companyName: e.target.value }))}
+                    placeholder="Mon Entreprise"
+                    required
+                    style={{
+                      width: '100%', height: '48px', fontSize: '16px',
+                      padding: '12px 16px', border: '1px solid #d1d5db',
+                      borderRadius: '12px', boxSizing: 'border-box',
+                      transition: 'all 0.2s ease'
+                    }}
+                  />
+                </div>
+              )}
+
+              <div>
+                <label style={{
+                  display: 'block', fontSize: '14px', fontWeight: '600',
+                  color: '#374151', marginBottom: '8px'
+                }}>
+                  Adresse email *
+                </label>
+                <input
+                  type="email"
+                  name="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  placeholder="votre@email.com"
+                  required
+                  style={{
+                    width: '100%', height: '48px', fontSize: '16px',
+                    padding: '12px 16px', border: '1px solid #d1d5db',
+                    borderRadius: '12px', boxSizing: 'border-box',
+                    transition: 'all 0.2s ease'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{
+                  display: 'block', fontSize: '14px', fontWeight: '600',
+                  color: '#374151', marginBottom: '8px'
+                }}>
+                  Mot de passe *
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    name="password"
+                    value={formData.password}
+                    onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                    placeholder="••••••••"
+                    required
+                    style={{
+                      width: '100%', height: '48px', fontSize: '16px',
+                      padding: '12px 52px 12px 16px', border: '1px solid #d1d5db',
+                      borderRadius: '12px', boxSizing: 'border-box',
+                      transition: 'all 0.2s ease'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    style={{
+                      position: 'absolute', right: '12px', top: '50%',
+                      transform: 'translateY(-50%)', background: 'none',
+                      border: 'none', cursor: 'pointer', color: '#64748b',
+                      fontSize: '20px', padding: '4px'
+                    }}
+                  >
+                    {showPassword ? (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
+                        <path d="m15 12 5-5-5-5M9 12l-5 5 5 5"/>
+                        <path d="m2 2 20 20"/>
+                      </svg>
+                    ) : (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  width: '100%', height: '48px', fontSize: '16px', fontWeight: '700',
+                  background: loading 
+                    ? '#94a3b8' 
+                    : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+                  color: 'white', border: 'none', borderRadius: '12px',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 10px 25px rgba(79,70,229,0.4)',
+                  transform: 'translateY(0)', transition: 'all 0.3s ease'
+                }}
+              >
+                {loading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                    <div style={{
+                      width: '20px', height: '20px',
+                      border: '2px solid transparent', borderTop: '2px solid white',
+                      borderRadius: '50%', animation: 'spin 1s linear infinite'
+                    }}></div>
+                    Chargement...
+                  </div>
+                ) : (
+                  isLogin ? 'Se connecter' : 'Créer mon compte'
+                )}
+              </button>
+            </form>
+
+            {/* Forgot Password Link */}
+            {isLogin && (
+              <div style={{ marginTop: '16px', textAlign: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowForgotPassword(true)}
+                  style={{
+                    background: 'none', border: 'none', color: '#4f46e5',
+                    fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
+                  }}
+                >
+                  Mot de passe oublié ?
+                </button>
+              </div>
+            )}
+
+            <div style={{ marginTop: '24px', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLogin(!isLogin);
+                  setError('');
+                  setFormData({ email: '', password: '', companyName: '' });
+                }}
+                style={{
+                  background: 'none', border: 'none', color: '#4f46e5',
+                  fontSize: '16px', fontWeight: '600', cursor: 'pointer'
+                }}
+              >
+                {isLogin 
+                  ? "Pas encore de compte ? S'inscrire" 
+                  : "Déjà un compte ? Se connecter"
+                }
+              </button>
+            </div>
+          </div>
+
+          {!isLogin && (
+            <div style={{
+              marginTop: '24px', textAlign: 'center',
+              fontSize: '14px', color: '#64748b'
+            }}>
+              En créant un compte, vous acceptez nos{' '}
+              <a href="#" style={{ color: '#4f46e5', textDecoration: 'none' }}>
+                conditions d'utilisation
+              </a>{' '}
+              et notre{' '}
+              <a href="#" style={{ color: '#4f46e5', textDecoration: 'none' }}>
+                politique de confidentialité
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Forgot Password Modal */}
+      {showForgotPassword && <ForgotPasswordModal onClose={() => setShowForgotPassword(false)} />}
+
+      {/* CSS Animations */}
+      <style>
+        {`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          
+          input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+          }
+          
+          button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 28px rgba(79,70,229,0.5);
+          }
+        `}
+      </style>
+    </div>
+  );
+};
+
+// Register Page (if needed separately)
+const RegisterPage = ({ onRegister, navigate }) => {
+  // Same as login but registration focused
+  return navigate('/login'); // Redirect to login with register mode
+};
+
+// Forgot Password Modal
 const ForgotPasswordModal = ({ onClose }) => {
-  const [step, setStep] = useState('email'); // 'email' or 'reset'
+  const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
-  const [resetData, setResetData] = useState({
-    token: '',
-    new_password: '',
-    confirm_password: ''
-  });
+  const [resetData, setResetData] = useState({ token: '', new_password: '', confirm_password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -23,8 +601,7 @@ const ForgotPasswordModal = ({ onClose }) => {
   const handleSendCode = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
-    setSuccess('');
+    setError(''); setSuccess('');
 
     try {
       const response = await axios.post(`${BACKEND_URL}/api/auth/forgot-password`, { email });
@@ -56,21 +633,16 @@ const ForgotPasswordModal = ({ onClose }) => {
       return;
     }
 
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
 
     try {
-      const response = await axios.post(`${BACKEND_URL}/api/auth/reset-password`, {
+      await axios.post(`${BACKEND_URL}/api/auth/reset-password`, {
         token: resetData.token,
         new_password: resetData.new_password
       });
 
       setSuccess('Mot de passe réinitialisé avec succès ! Vous pouvez maintenant vous connecter.');
-      
-      // Auto-close after success
-      setTimeout(() => {
-        onClose();
-      }, 2000);
+      setTimeout(onClose, 2000);
       
     } catch (error) {
       setError(error.response?.data?.detail || 'Erreur lors de la réinitialisation');
@@ -93,28 +665,27 @@ const ForgotPasswordModal = ({ onClose }) => {
           onClick={onClose}
           style={{
             position: 'absolute', top: '16px', right: '16px',
-            background: 'none', border: 'none', fontSize: '28px',
-            cursor: 'pointer', color: '#6b7280'
+            background: 'none', border: 'none', fontSize: '24px',
+            cursor: 'pointer', color: '#64748b'
           }}
         >
           ×
         </button>
 
         <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: '64px', height: '64px',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              borderRadius: '16px', marginBottom: '16px'
-            }}>
-              {/* Key SVG Icon for forgot password */}
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="8" cy="8" r="6"/>
-                <path d="m13 13 6 6"/>
-                <path d="M13 13v4a2 2 0 0 1-2 2h-3"/>
-              </svg>
-            </div>
-          <h2 style={{ margin: 0, color: '#1f2937', fontSize: '24px' }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: '64px', height: '64px',
+            background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+            borderRadius: '16px', marginBottom: '16px'
+          }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+              <circle cx="8" cy="8" r="6"/>
+              <path d="m13 13 6 6"/>
+              <path d="M13 13v4a2 2 0 0 1-2 2h-3"/>
+            </svg>
+          </div>
+          <h2 style={{ margin: 0, color: '#1f2937', fontSize: '22px', fontWeight: '700' }}>
             {step === 'email' ? 'Récupération de compte' : 'Nouveau mot de passe'}
           </h2>
         </div>
@@ -141,7 +712,7 @@ const ForgotPasswordModal = ({ onClose }) => {
 
         {step === 'email' ? (
           <form onSubmit={handleSendCode}>
-            <p style={{ color: '#6b7280', marginBottom: '20px', textAlign: 'center' }}>
+            <p style={{ color: '#64748b', marginBottom: '20px', textAlign: 'center' }}>
               Entrez votre adresse email pour recevoir un code de récupération
             </p>
             
@@ -183,7 +754,7 @@ const ForgotPasswordModal = ({ onClose }) => {
                 disabled={loading || !email}
                 style={{
                   flex: 1, height: '48px', fontSize: '16px', fontWeight: '600',
-                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
                   color: 'white', border: 'none', borderRadius: '8px',
                   cursor: loading ? 'not-allowed' : 'pointer'
                 }}
@@ -294,12 +865,12 @@ const ForgotPasswordModal = ({ onClose }) => {
                 disabled={loading || !resetData.token || !resetData.new_password || !resetData.confirm_password}
                 style={{
                   flex: 1, height: '48px', fontSize: '16px', fontWeight: '600',
-                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
                   color: 'white', border: 'none', borderRadius: '8px',
                   cursor: loading ? 'not-allowed' : 'pointer'
                 }}
               >
-                {loading ? 'Réinitialisation...' : 'Changer le mot de passe'}
+                {loading ? 'Réinitialisation...' : 'Réinitialiser'}
               </button>
             </div>
           </form>
@@ -309,659 +880,352 @@ const ForgotPasswordModal = ({ onClose }) => {
   );
 };
 
-// Login Page with Beautiful Design
-const LoginPage = () => {
-  const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
-  const [isLogin, setIsLogin] = useState(true);
-  const [showPassword, setShowPassword] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const { login, register } = useAuth();
+// Modern Dashboard with Beautiful Layout
+const Dashboard = ({ navigate, user, logout }) => {
+  const [stats, setStats] = useState({ loading: true });
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
+  useEffect(() => {
+    fetchStats();
+  }, []);
 
+  const fetchStats = async () => {
     try {
-      let result;
-      if (isLogin) {
-        result = await login(formData.email, formData.password);
-      } else {
-        result = await register(formData.email, formData.password, formData.companyName);
-      }
-
-      if (!result.success) {
-        setError(result.error);
-      }
-    } catch (err) {
-      setError('Une erreur est survenue');
-    } finally {
-      setLoading(false);
+      const response = await axios.get(`${BACKEND_URL}/api/dashboard/stats`);
+      setStats({ loading: false, data: response.data });
+    } catch (error) {
+      setStats({ loading: false, error: error.message });
     }
   };
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      background: 'linear-gradient(to-br, #f1f5f9, #e0e7ff, #c7d2fe)',
-      display: 'flex',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-    }}>
-      {/* Left Hero Section */}
-      <div style={{
-        width: '50%',
-        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
-        position: 'relative',
-        overflow: 'hidden',
-        display: window.innerWidth > 1024 ? 'flex' : 'none',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        padding: '60px'
+    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
+      {/* Modern Navigation */}
+      <nav style={{
+        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+        color: 'white', padding: '16px 32px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
       }}>
-        {/* Decorative Elements */}
-        <div style={{
-          position: 'absolute', top: '80px', left: '80px',
-          width: '300px', height: '300px',
-          background: 'rgba(255,255,255,0.1)',
-          borderRadius: '50%', filter: 'blur(60px)'
-        }}></div>
-        <div style={{
-          position: 'absolute', bottom: '80px', right: '80px',
-          width: '400px', height: '400px',
-          background: 'rgba(124,58,237,0.3)',
-          borderRadius: '50%', filter: 'blur(80px)'
-        }}></div>
-
-        {/* Content */}
-        <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
-          <div style={{ fontSize: '72px', marginBottom: '30px' }}>
-          {/* Beautiful Receipt SVG Icon */}
-          <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
             <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
             <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
             <path d="M12 18V6"/>
           </svg>
-        </div>
-          
-          <h1 style={{
-            fontSize: '56px', fontWeight: '800', lineHeight: '1.1',
-            margin: '0 0 20px 0'
-          }}>
-            Simplifiez votre
-            <br/>
-            <span style={{ color: '#c7d2fe' }}>facturation</span>
+          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', letterSpacing: '-0.025em' }}>
+            FacturePro
           </h1>
-          
-          <p style={{
-            fontSize: '22px', lineHeight: '1.6', margin: '0 0 40px 0',
-            color: 'rgba(255,255,255,0.85)', maxWidth: '500px'
-          }}>
-            Gérez vos factures, soumissions et clients en toute simplicité avec notre solution complète et intuitive.
-          </p>
-
-          {/* Feature Cards */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '16px',
-              background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
-              borderRadius: '12px', backdropFilter: 'blur(10px)'
-            }}>
-              <div style={{ fontSize: '28px' }}>⚡</div>
-              <div>
-                <div style={{ fontWeight: '600', fontSize: '18px' }}>Facturation instantanée</div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Créez et envoyez vos factures en quelques clics</div>
-              </div>
-            </div>
-
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '16px',
-              background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
-              borderRadius: '12px', backdropFilter: 'blur(10px)'
-            }}>
-              <div style={{ fontSize: '28px' }}>⏰</div>
-              <div>
-                <div style={{ fontWeight: '600', fontSize: '18px' }}>Récurrence automatique</div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Programmez vos factures récurrentes</div>
-              </div>
-            </div>
-
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: '16px',
-              background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
-              borderRadius: '12px', backdropFilter: 'blur(10px)'
-            }}>
-              <div style={{ fontSize: '28px' }}>🛡️</div>
-              <div>
-                <div style={{ fontWeight: '600', fontSize: '18px' }}>Sécurisé et conforme</div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Taxes canadiennes TPS/TVQ automatiques</div>
-              </div>
-            </div>
-          </div>
         </div>
-      </div>
+        
+        <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+          <button
+            onClick={() => navigate('/dashboard')}
+            style={{
+              background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none',
+              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
+              fontWeight: '600', fontSize: '14px'
+            }}
+          >
+            📊 Dashboard
+          </button>
+          <button
+            onClick={() => navigate('/clients')}
+            style={{
+              background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none',
+              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
+              fontWeight: '500', fontSize: '14px'
+            }}
+          >
+            👥 Clients
+          </button>
+          <button
+            onClick={() => navigate('/invoices')}
+            style={{
+              background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none',
+              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
+              fontWeight: '500', fontSize: '14px'
+            }}
+          >
+            📄 Factures
+          </button>
+        </div>
 
-      {/* Right Login Section */}
-      <div style={{
-        width: window.innerWidth > 1024 ? '50%' : '100%',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '40px'
-      }}>
-        <div style={{ width: '100%', maxWidth: '460px' }}>
-          {/* Header */}
-          <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: '88px', height: '88px',
-              background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
-              borderRadius: '24px', marginBottom: '24px',
-              boxShadow: '0 20px 40px rgba(67,56,202,0.4)'
+        <button
+          onClick={logout}
+          style={{
+            background: '#ef4444', color: 'white', border: 'none',
+            padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
+            fontWeight: '600'
+          }}
+        >
+          Déconnexion
+        </button>
+      </nav>
+
+      {/* Dashboard Content */}
+      <div style={{ padding: '32px' }}>
+        <div style={{ marginBottom: '32px' }}>
+          <h2 style={{ fontSize: '32px', fontWeight: '800', color: '#0f172a', margin: '0 0 8px 0' }}>
+            Tableau de bord
+          </h2>
+          <p style={{ color: '#64748b', fontSize: '16px', margin: 0 }}>
+            Vue d'ensemble de votre activité
+          </p>
+        </div>
+
+        {stats.loading ? (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+            <p>Chargement des statistiques...</p>
+          </div>
+        ) : (
+          <>
+            {/* Stats Cards */}
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
+              gap: '24px', 
+              marginBottom: '32px' 
             }}>
-              {/* Beautiful Receipt SVG Icon */}
-              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-                <path d="M12 18V6"/>
-              </svg>
+              <div style={{
+                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                color: 'white', padding: '28px', borderRadius: '16px',
+                textAlign: 'center', position: 'relative', overflow: 'hidden'
+              }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>👥</div>
+                <div style={{ fontSize: '32px', fontWeight: '800', marginBottom: '4px' }}>
+                  {stats.data?.total_clients || 0}
+                </div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Clients</div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
+                color: 'white', padding: '28px', borderRadius: '16px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📄</div>
+                <div style={{ fontSize: '32px', fontWeight: '800', marginBottom: '4px' }}>
+                  {stats.data?.total_invoices || 0}
+                </div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Factures</div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)',
+                color: 'white', padding: '28px', borderRadius: '16px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📝</div>
+                <div style={{ fontSize: '32px', fontWeight: '800', marginBottom: '4px' }}>
+                  {stats.data?.total_quotes || 0}
+                </div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Soumissions</div>
+              </div>
+
+              <div style={{
+                background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                color: 'white', padding: '28px', borderRadius: '16px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>💰</div>
+                <div style={{ fontSize: '20px', fontWeight: '800', marginBottom: '4px' }}>
+                  {new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD' }).format(stats.data?.total_revenue || 0)}
+                </div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Revenus</div>
+              </div>
             </div>
 
-            <h1 style={{
-              fontSize: '36px', fontWeight: '800', color: '#1e293b',
-              margin: '0 0 8px 0'
+            {/* Quick Actions */}
+            <div style={{
+              background: 'white', border: '1px solid #e2e8f0',
+              borderRadius: '16px', padding: '32px'
             }}>
-              FacturePro
-            </h1>
-            <h2 style={{
-              fontSize: '24px', fontWeight: '600', color: '#475569',
-              margin: '0 0 8px 0'
-            }}>
-              {isLogin ? 'Connexion' : 'Créer un compte'}
-            </h2>
-            <p style={{
-              color: '#64748b', margin: 0, fontSize: '16px'
-            }}>
-              {isLogin 
-                ? 'Accédez à votre tableau de bord professionnel' 
-                : 'Démarrez votre essai gratuit de 14 jours'
-              }
-            </p>
-          </div>
-
-          {/* Login Form */}
-          <div style={{
-            background: 'rgba(255,255,255,0.8)',
-            backdropFilter: 'blur(20px)',
-            padding: '40px', borderRadius: '24px',
-            border: 'none',
-            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)'
-          }}>
-            {error && (
+              <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700', color: '#0f172a' }}>
+                🚀 Actions rapides
+              </h3>
               <div style={{
-                background: '#fef2f2', border: '1px solid #fecaca',
-                color: '#b91c1c', padding: '16px', borderRadius: '12px',
-                marginBottom: '24px', fontSize: '14px'
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                gap: '16px'
               }}>
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              {!isLogin && (
-                <div>
-                  <label style={{
-                    display: 'block', fontSize: '14px', fontWeight: '600',
-                    color: '#374151', marginBottom: '8px'
-                  }}>
-                    Nom de l'entreprise *
-                  </label>
-                  <input
-                    type="text"
-                    name="companyName"
-                    value={formData.companyName}
-                    onChange={(e) => setFormData(prev => ({ ...prev, companyName: e.target.value }))}
-                    placeholder="Mon Entreprise Inc."
-                    required
-                    style={{
-                      width: '100%', height: '52px', fontSize: '16px',
-                      padding: '16px', border: '1px solid #d1d5db',
-                      borderRadius: '12px', boxSizing: 'border-box',
-                      transition: 'all 0.3s ease'
-                    }}
-                  />
-                </div>
-              )}
-
-              <div>
-                <label style={{
-                  display: 'block', fontSize: '14px', fontWeight: '600',
-                  color: '#374151', marginBottom: '8px'
-                }}>
-                  Adresse email *
-                </label>
-                <input
-                  type="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                  placeholder="votre@email.com"
-                  required
-                  style={{
-                    width: '100%', height: '52px', fontSize: '16px',
-                    padding: '16px', border: '1px solid #d1d5db',
-                    borderRadius: '12px', boxSizing: 'border-box',
-                    transition: 'all 0.3s ease'
-                  }}
-                />
-              </div>
-
-              <div>
-                <label style={{
-                  display: 'block', fontSize: '14px', fontWeight: '600',
-                  color: '#374151', marginBottom: '8px'
-                }}>
-                  Mot de passe *
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    name="password"
-                    value={formData.password}
-                    onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                    placeholder="••••••••••"
-                    required
-                    style={{
-                      width: '100%', height: '52px', fontSize: '16px',
-                      padding: '16px 56px 16px 16px', border: '1px solid #d1d5db',
-                      borderRadius: '12px', boxSizing: 'border-box',
-                      transition: 'all 0.3s ease'
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    style={{
-                      position: 'absolute', right: '16px', top: '50%',
-                      transform: 'translateY(-50%)', background: 'none',
-                      border: 'none', cursor: 'pointer', fontSize: '20px'
-                    }}
-                  >
-                    {showPassword ? '🙈' : '👁️'}
-                  </button>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                style={{
-                  width: '100%', height: '52px', fontSize: '16px', fontWeight: '700',
-                  background: loading ? '#94a3b8' : 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
-                  color: 'white', border: 'none', borderRadius: '12px',
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 10px 25px rgba(67,56,202,0.3)',
-                  transform: 'translateY(0)', transition: 'all 0.3s ease'
-                }}
-                onMouseEnter={(e) => {
-                  if (!loading) e.target.style.transform = 'translateY(-2px)';
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.transform = 'translateY(0)';
-                }}
-              >
-                {loading ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                    <div style={{
-                      width: '20px', height: '20px', border: '2px solid transparent',
-                      borderTop: '2px solid white', borderRadius: '50%',
-                      animation: 'spin 1s linear infinite'
-                    }}></div>
-                    Connexion...
-                  </div>
-                ) : (
-                  isLogin ? 'Se connecter' : 'Créer mon compte'
-                )}
-              </button>
-            </form>
-
-            {/* Forgot Password */}
-            {isLogin && (
-              <div style={{ textAlign: 'center', marginTop: '20px' }}>
                 <button
-                  onClick={() => setShowForgotPassword(true)}
+                  onClick={() => navigate('/clients')}
                   style={{
-                    background: 'none', border: 'none', color: '#4338ca',
-                    fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
+                    background: '#f8fafc', border: '1px solid #e2e8f0',
+                    padding: '20px', borderRadius: '12px', cursor: 'pointer',
+                    textAlign: 'center', transition: 'all 0.3s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.background = '#f1f5f9';
+                    e.target.style.transform = 'translateY(-2px)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = '#f8fafc';
+                    e.target.style.transform = 'translateY(0)';
                   }}
                 >
-                  Mot de passe oublié ?
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>👥</div>
+                  <div style={{ fontWeight: '600', color: '#374151' }}>Gérer les clients</div>
+                </button>
+
+                <button
+                  onClick={() => navigate('/invoices')}
+                  style={{
+                    background: '#f8fafc', border: '1px solid #e2e8f0',
+                    padding: '20px', borderRadius: '12px', cursor: 'pointer',
+                    textAlign: 'center', transition: 'all 0.3s ease'
+                  }}
+                >
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>📄</div>
+                  <div style={{ fontWeight: '600', color: '#374151' }}>Créer une facture</div>
+                </button>
+
+                <button
+                  style={{
+                    background: '#f8fafc', border: '1px solid #e2e8f0',
+                    padding: '20px', borderRadius: '12px', cursor: 'pointer',
+                    textAlign: 'center', opacity: 0.6
+                  }}
+                >
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>📦</div>
+                  <div style={{ fontWeight: '600', color: '#374151' }}>Produits (bientôt)</div>
                 </button>
               </div>
-            )}
-
-            {/* Toggle */}
-            <div style={{ textAlign: 'center', marginTop: '28px' }}>
-              <button
-                onClick={() => {
-                  setIsLogin(!isLogin);
-                  setError('');
-                  setFormData({ email: '', password: '', companyName: '' });
-                }}
-                style={{
-                  background: 'none', border: 'none', color: '#4338ca',
-                  fontSize: '16px', fontWeight: '600', cursor: 'pointer'
-                }}
-              >
-                {isLogin 
-                  ? "Nouveau sur FacturePro ? Créer un compte" 
-                  : "Déjà client ? Se connecter"
-                }
-              </button>
             </div>
-          </div>
-
-          {/* Terms */}
-          {!isLogin && (
-            <div style={{ 
-              textAlign: 'center', marginTop: '24px', 
-              fontSize: '14px', color: '#64748b' 
-            }}>
-              En créant un compte, vous acceptez nos{' '}
-              <a href="#" style={{ color: '#4338ca' }}>conditions d'utilisation</a>{' '}
-              et notre{' '}
-              <a href="#" style={{ color: '#4338ca' }}>politique de confidentialité</a>
-            </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
-
-      {/* Modal */}
-      {showForgotPassword && <ForgotPasswordModal onClose={() => setShowForgotPassword(false)} />}
-
-      {/* CSS Animation for spinner */}
-      <style>
-        {`
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-        `}
-      </style>
     </div>
   );
 };
 
-// Invoices Page Component
-const InvoicesPage = () => {
-  const [invoices, setInvoices] = useState([]);
+// Clients Page
+const ClientsPage = ({ navigate, user, logout }) => {
   const [clients, setClients] = useState([]);
-  const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({
-    client_id: '',
-    due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0], // 30 days from now
-    items: [{ description: '', quantity: 1, unit_price: 0 }],
-    province: 'QC',
-    notes: ''
-  });
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
 
   useEffect(() => {
-    fetchData();
+    fetchClients();
   }, []);
 
-  const fetchData = async () => {
+  const fetchClients = async () => {
     try {
-      const [invoicesRes, clientsRes, productsRes] = await Promise.all([
-        axios.get(`${BACKEND_URL}/api/invoices`),
-        axios.get(`${BACKEND_URL}/api/clients`),
-        axios.get(`${BACKEND_URL}/api/dashboard/stats`) // For products, we'll use stats for now
-      ]);
-      setInvoices(invoicesRes.data);
-      setClients(clientsRes.data);
+      const response = await axios.get(`${BACKEND_URL}/api/clients`);
+      setClients(response.data);
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching clients:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    try {
-      // Calculate totals for each item
-      const processedItems = formData.items.map(item => ({
-        ...item,
-        quantity: parseFloat(item.quantity) || 0,
-        unit_price: parseFloat(item.unit_price) || 0,
-        total: (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0)
-      }));
-
-      const invoiceData = {
-        ...formData,
-        items: processedItems
-      };
-
-      await axios.post(`${BACKEND_URL}/api/invoices`, invoiceData);
-      
-      setShowForm(false);
-      setFormData({
-        client_id: '',
-        due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-        items: [{ description: '', quantity: 1, unit_price: 0 }],
-        province: 'QC',
-        notes: ''
-      });
-      fetchData();
-    } catch (error) {
-      alert('Erreur lors de la création de la facture : ' + (error.response?.data?.detail || error.message));
-    }
-  };
-
-  const addItem = () => {
-    setFormData(prev => ({
-      ...prev,
-      items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }]
-    }));
-  };
-
-  const updateItem = (index, field, value) => {
-    const newItems = [...formData.items];
-    newItems[index] = { ...newItems[index], [field]: value };
-    setFormData(prev => ({ ...prev, items: newItems }));
-  };
-
-  const removeItem = (index) => {
-    if (formData.items.length > 1) {
-      setFormData(prev => ({
-        ...prev,
-        items: prev.items.filter((_, i) => i !== index)
-      }));
-    }
-  };
-
-  const getClientName = (clientId) => {
-    const client = clients.find(c => c.id === clientId);
-    return client ? client.name : 'Client inconnu';
-  };
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('fr-CA', {
-      style: 'currency',
-      currency: 'CAD'
-    }).format(amount || 0);
-  };
-
-  const calculateItemSubtotal = () => {
-    return formData.items.reduce((sum, item) => {
-      return sum + ((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0));
-    }, 0);
-  };
-
-  const getStatusBadge = (status) => {
-    const statusConfig = {
-      draft: { label: 'Brouillon', bg: '#f3f4f6', color: '#374151' },
-      sent: { label: 'Envoyée', bg: '#fef3c7', color: '#92400e' },
-      paid: { label: 'Payée', bg: '#dcfce7', color: '#166534' },
-      overdue: { label: 'En retard', bg: '#fee2e2', color: '#b91c1c' }
-    };
-    
-    const config = statusConfig[status] || statusConfig.draft;
-    return (
-      <span style={{
-        background: config.bg,
-        color: config.color,
-        padding: '4px 8px',
-        borderRadius: '6px',
-        fontSize: '12px',
-        fontWeight: '500'
-      }}>
-        {config.label}
-      </span>
-    );
-  };
-
-  if (loading) {
-    return <div style={{ padding: '30px' }}>Chargement des factures...</div>;
-  }
-
   return (
-    <div style={{ padding: '30px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
-        <div>
-          <h2 style={{ margin: '0 0 8px 0', color: '#1f2937', fontSize: '28px' }}>📄 Factures</h2>
-          <p style={{ margin: 0, color: '#6b7280' }}>{invoices.length} facture{invoices.length > 1 ? 's' : ''} au total</p>
+    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
+      {/* Navigation */}
+      <nav style={{
+        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+        color: 'white', padding: '16px 32px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+      }}>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>FacturePro</h1>
+        <div style={{ display: 'flex', gap: '20px' }}>
+          <button onClick={() => navigate('/dashboard')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dashboard</button>
+          <button style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px' }}>Clients</button>
+          <button onClick={() => navigate('/invoices')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Factures</button>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          style={{
-            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-            color: 'white', border: 'none', padding: '14px 28px',
-            borderRadius: '10px', cursor: 'pointer', fontWeight: '600',
-            fontSize: '16px', boxShadow: '0 4px 12px rgba(59,130,246,0.3)'
-          }}
-        >
-          ✨ Nouvelle Facture
-        </button>
-      </div>
+        <button onClick={logout} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Déconnexion</button>
+      </nav>
 
-      {/* Invoices List */}
-      {invoices.length === 0 ? (
-        <div style={{
-          background: 'white', border: '2px dashed #d1d5db',
-          borderRadius: '16px', padding: '60px 40px', textAlign: 'center'
-        }}>
-          <div style={{ fontSize: '64px', marginBottom: '20px' }}>📄</div>
-          <h3 style={{ margin: '0 0 12px 0', color: '#374151', fontSize: '20px' }}>Aucune facture créée</h3>
-          <p style={{ margin: '0 0 24px 0', color: '#6b7280' }}>
-            Créez votre première facture pour commencer à facturer vos clients
-          </p>
+      <div style={{ padding: '32px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+          <div>
+            <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: '0 0 8px 0' }}>👥 Clients</h2>
+            <p style={{ color: '#64748b', margin: 0 }}>{clients.length} client{clients.length > 1 ? 's' : ''} enregistré{clients.length > 1 ? 's' : ''}</p>
+          </div>
           <button
             onClick={() => setShowForm(true)}
             style={{
-              background: '#3b82f6', color: 'white', border: 'none',
-              padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
-              fontWeight: '600'
+              background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+              color: 'white', border: 'none', padding: '14px 28px',
+              borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
+              fontSize: '16px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
             }}
           >
-            🚀 Créer ma première facture
+            ➕ Nouveau Client
           </button>
         </div>
-      ) : (
-        <div style={{ display: 'grid', gap: '16px' }}>
-          {invoices.map(invoice => (
-            <div key={invoice.id} style={{
-              background: 'white', border: '1px solid #e5e7eb',
-              borderRadius: '12px', padding: '24px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-                    <h3 style={{ margin: 0, color: '#1f2937', fontSize: '20px', fontWeight: '700' }}>
-                      {invoice.invoice_number}
-                    </h3>
-                    {getStatusBadge(invoice.status)}
-                  </div>
-                  
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
-                    <div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600', marginBottom: '4px' }}>CLIENT</div>
-                      <div style={{ color: '#374151', fontWeight: '500' }}>{getClientName(invoice.client_id)}</div>
-                    </div>
-                    
-                    <div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600', marginBottom: '4px' }}>ÉCHÉANCE</div>
-                      <div style={{ color: '#374151' }}>{new Date(invoice.due_date).toLocaleDateString('fr-CA')}</div>
-                    </div>
-                    
-                    <div>
-                      <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600', marginBottom: '4px' }}>PROVINCE</div>
-                      <div style={{ color: '#374151' }}>{invoice.province === 'QC' ? 'Québec' : 'Ontario'}</div>
-                    </div>
-                  </div>
 
-                  {invoice.notes && (
-                    <div style={{ marginTop: '12px', padding: '8px', background: '#f8fafc', borderRadius: '6px' }}>
-                      <div style={{ fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>NOTES</div>
-                      <div style={{ fontSize: '14px', color: '#374151' }}>{invoice.notes}</div>
-                    </div>
-                  )}
-                </div>
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '60px' }}>
+            <div style={{ fontSize: '64px', marginBottom: '20px' }}>⏳</div>
+            <p style={{ fontSize: '18px', color: '#64748b' }}>Chargement des clients...</p>
+          </div>
+        ) : clients.length === 0 ? (
+          <div style={{
+            background: 'white', border: '2px dashed #d1d5db',
+            borderRadius: '16px', padding: '60px', textAlign: 'center'
+          }}>
+            <div style={{ fontSize: '80px', marginBottom: '24px' }}>👥</div>
+            <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>Aucun client enregistré</h3>
+            <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>Commencez par ajouter votre premier client pour créer des factures</p>
+            <button
+              onClick={() => setShowForm(true)}
+              style={{
+                background: '#3b82f6', color: 'white', border: 'none',
+                padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
+                fontWeight: '700', fontSize: '16px'
+              }}
+            >
+              🚀 Ajouter mon premier client
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
+            {clients.map(client => (
+              <div key={client.id} style={{
+                background: 'white', border: '1px solid #e5e7eb',
+                borderRadius: '12px', padding: '24px',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                transition: 'all 0.3s ease'
+              }}>
+                <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#1f2937', margin: '0 0 12px 0' }}>
+                  {client.name}
+                </h3>
+                <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>📧 {client.email}</div>
+                {client.phone && <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>📱 {client.phone}</div>}
+                {client.address && <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '16px' }}>📍 {client.address}</div>}
                 
-                <div style={{ textAlign: 'right', marginLeft: '24px' }}>
-                  <div style={{ marginBottom: '8px' }}>
-                    <div style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937' }}>
-                      {formatCurrency(invoice.total)}
-                    </div>
-                    <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                      Sous-total: {formatCurrency(invoice.subtotal)}
-                    </div>
-                    {invoice.province === 'QC' && (
-                      <>
-                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                          TPS: {formatCurrency(invoice.gst_amount)}
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                          TVQ: {formatCurrency(invoice.pst_amount)}
-                        </div>
-                      </>
-                    )}
-                    {invoice.province === 'ON' && (
-                      <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                        HST: {formatCurrency(invoice.hst_amount)}
-                      </div>
-                    )}
-                  </div>
-                  
+                <div style={{ textAlign: 'right' }}>
                   <button
                     onClick={async () => {
-                      if (window.confirm('Supprimer cette facture ?')) {
+                      if (window.confirm('Supprimer ce client ?')) {
                         try {
-                          await axios.delete(`${BACKEND_URL}/api/invoices/${invoice.id}`);
-                          fetchData();
+                          await axios.delete(`${BACKEND_URL}/api/clients/${client.id}`);
+                          fetchClients();
                         } catch (error) {
                           alert('Erreur lors de la suppression');
                         }
                       }
                     }}
                     style={{
-                      background: '#ef4444', color: 'white', border: 'none',
-                      padding: '6px 12px', borderRadius: '6px', cursor: 'pointer',
-                      fontSize: '14px'
+                      background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca',
+                      padding: '8px 12px', borderRadius: '8px', cursor: 'pointer',
+                      fontSize: '14px', fontWeight: '500'
                     }}
                   >
                     🗑️ Supprimer
                   </button>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
 
-      {/* Invoice Form Modal */}
+      {/* Client Form Modal */}
       {showForm && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -970,232 +1234,102 @@ const InvoicesPage = () => {
         }}>
           <div style={{
             background: 'white', padding: '32px', borderRadius: '16px',
-            width: '95%', maxWidth: '900px', maxHeight: '90vh', overflow: 'auto'
+            width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
-              <h3 style={{ margin: 0, fontSize: '24px', color: '#1f2937' }}>✨ Nouvelle Facture</h3>
-              <button
-                onClick={() => setShowForm(false)}
-                style={{
-                  background: '#f3f4f6', border: 'none', padding: '8px',
-                  borderRadius: '8px', cursor: 'pointer', fontSize: '20px'
-                }}
-              >
-                ✕
-              </button>
-            </div>
+            <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937', margin: '0 0 24px 0' }}>👥 Nouveau Client</h3>
             
-            <form onSubmit={handleSubmit}>
-              {/* Header Info */}
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
-                gap: '20px', 
-                marginBottom: '30px',
-                padding: '20px',
-                background: '#f8fafc',
-                borderRadius: '12px'
-              }}>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await axios.post(`${BACKEND_URL}/api/clients`, formData);
+                setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+                setShowForm(false);
+                fetchClients();
+              } catch (error) {
+                alert('Erreur lors de la création du client');
+              }
+            }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '24px' }}>
                 <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
-                    Client *
-                  </label>
-                  <select
-                    value={formData.client_id}
-                    onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
-                    required
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box'
-                    }}
-                  >
-                    <option value="">Sélectionner un client</option>
-                    {clients.map(client => (
-                      <option key={client.id} value={client.id}>
-                        {client.name} ({client.email})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
-                    Date d'échéance *
-                  </label>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Nom complet *</label>
                   <input
-                    type="date"
-                    value={formData.due_date}
-                    onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
                     required
+                    placeholder="Jean Dupont"
                     style={{
                       width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', boxSizing: 'border-box'
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
                     }}
                   />
                 </div>
-
                 <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600', color: '#374151' }}>
-                    Province (taxes)
-                  </label>
-                  <select
-                    value={formData.province}
-                    onChange={(e) => setFormData(prev => ({ ...prev, province: e.target.value }))}
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Email *</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                    required
+                    placeholder="jean@entreprise.com"
                     style={{
                       width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', boxSizing: 'border-box'
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
                     }}
-                  >
-                    <option value="QC">🍁 Québec (TPS 5% + TVQ 9.975%)</option>
-                    <option value="ON">🍁 Ontario (HST 13%)</option>
-                  </select>
+                  />
                 </div>
-              </div>
-
-              {/* Items */}
-              <div style={{ marginBottom: '30px' }}>
-                <h4 style={{ margin: '0 0 16px 0', color: '#1f2937', fontSize: '18px' }}>
-                  📋 Articles et Services
-                </h4>
-                
-                {/* Items Header */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '2fr 100px 120px 120px 60px',
-                  gap: '12px',
-                  padding: '12px 16px',
-                  background: '#f1f5f9',
-                  borderRadius: '8px 8px 0 0',
-                  fontSize: '12px',
-                  fontWeight: '700',
-                  color: '#374151',
-                  borderBottom: '2px solid #e2e8f0'
-                }}>
-                  <div>DESCRIPTION</div>
-                  <div style={{ textAlign: 'center' }}>QTÉ</div>
-                  <div style={{ textAlign: 'center' }}>PRIX UNIT.</div>
-                  <div style={{ textAlign: 'center' }}>TOTAL</div>
-                  <div></div>
-                </div>
-
-                {formData.items.map((item, index) => (
-                  <div key={index} style={{
-                    display: 'grid',
-                    gridTemplateColumns: '2fr 100px 120px 120px 60px',
-                    gap: '12px',
-                    padding: '16px',
-                    background: index % 2 === 0 ? 'white' : '#f8fafc',
-                    borderBottom: '1px solid #e5e7eb',
-                    alignItems: 'center'
-                  }}>
-                    <input
-                      type="text"
-                      value={item.description}
-                      onChange={(e) => updateItem(index, 'description', e.target.value)}
-                      placeholder="Description du service/produit"
-                      required
-                      style={{
-                        padding: '10px', border: '1px solid #d1d5db',
-                        borderRadius: '6px', fontSize: '14px', boxSizing: 'border-box'
-                      }}
-                    />
-                    
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={item.quantity}
-                      onChange={(e) => updateItem(index, 'quantity', e.target.value)}
-                      style={{
-                        padding: '10px', border: '1px solid #d1d5db',
-                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
-                      }}
-                    />
-                    
-                    <input
-                      type="number"
-                      step="0.01" 
-                      min="0"
-                      value={item.unit_price}
-                      onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
-                      style={{
-                        padding: '10px', border: '1px solid #d1d5db',
-                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
-                      }}
-                    />
-                    
-                    <div style={{
-                      padding: '10px', background: '#f1f5f9', borderRadius: '6px',
-                      textAlign: 'center', fontWeight: '600', color: '#374151'
-                    }}>
-                      {formatCurrency((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0))}
-                    </div>
-                    
-                    <button
-                      type="button"
-                      onClick={() => removeItem(index)}
-                      disabled={formData.items.length === 1}
-                      style={{
-                        background: formData.items.length === 1 ? '#f3f4f6' : '#ef4444',
-                        color: formData.items.length === 1 ? '#9ca3af' : 'white',
-                        border: 'none', padding: '8px', borderRadius: '6px',
-                        cursor: formData.items.length === 1 ? 'not-allowed' : 'pointer'
-                      }}
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                ))}
-
-                {/* Add Item Button */}
-                <div style={{ padding: '16px', textAlign: 'center', borderTop: '2px solid #e2e8f0' }}>
-                  <button
-                    type="button"
-                    onClick={addItem}
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Téléphone</label>
+                  <input
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                    placeholder="514-123-4567"
                     style={{
-                      background: '#10b981', color: 'white', border: 'none',
-                      padding: '10px 20px', borderRadius: '8px', cursor: 'pointer',
-                      fontWeight: '600'
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
                     }}
-                  >
-                    ➕ Ajouter un article
-                  </button>
+                  />
                 </div>
-
-                {/* Totals */}
-                <div style={{
-                  background: '#f8fafc', padding: '20px', borderRadius: '0 0 8px 8px',
-                  borderTop: '2px solid #3b82f6'
-                }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937' }}>
-                      Sous-total: {formatCurrency(calculateItemSubtotal())}
-                    </div>
-                    <div style={{ fontSize: '14px', color: '#6b7280', marginTop: '4px' }}>
-                      {formData.province === 'QC' ? 'TPS (5%) + TVQ (9.975%) ajoutées automatiquement' : 
-                       formData.province === 'ON' ? 'HST (13%) ajoutée automatiquement' : 
-                       'Taxes calculées selon la province'}
-                    </div>
-                  </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Adresse</label>
+                  <input
+                    type="text"
+                    value={formData.address}
+                    onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                    placeholder="123 Rue Example"
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                    }}
+                  />
                 </div>
-              </div>
-
-              {/* Notes */}
-              <div style={{ marginBottom: '30px' }}>
-                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#374151' }}>
-                  📝 Notes (optionnel)
-                </label>
-                <textarea
-                  value={formData.notes}
-                  onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
-                  rows={3}
-                  placeholder="Conditions de paiement, informations supplémentaires..."
-                  style={{
-                    width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                    borderRadius: '8px', resize: 'vertical', fontSize: '14px',
-                    boxSizing: 'border-box'
-                  }}
-                />
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Ville</label>
+                  <input
+                    type="text"
+                    value={formData.city}
+                    onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
+                    placeholder="Montréal"
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Code postal</label>
+                  <input
+                    type="text"
+                    value={formData.postal_code}
+                    onChange={(e) => setFormData(prev => ({ ...prev, postal_code: e.target.value }))}
+                    placeholder="H1A 1A1"
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
@@ -1214,10 +1348,10 @@ const InvoicesPage = () => {
                   style={{
                     background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', color: 'white',
                     border: 'none', padding: '12px 24px', borderRadius: '8px',
-                    cursor: 'pointer', fontWeight: '600'
+                    cursor: 'pointer', fontWeight: '700'
                   }}
                 >
-                  💾 Créer la facture
+                  💾 Créer le client
                 </button>
               </div>
             </form>
@@ -1227,216 +1361,80 @@ const InvoicesPage = () => {
     </div>
   );
 };
-const Dashboard = () => {
-  const { user, logout } = useAuth();
 
+// Invoices Page
+const InvoicesPage = ({ navigate, user, logout }) => {
   return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc', fontFamily: 'system-ui' }}>
+    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
       <nav style={{
-        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
-        color: 'white', padding: '20px 40px',
+        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+        color: 'white', padding: '16px 32px',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center'
       }}>
-        <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 'bold' }}>🧾 FacturePro</h1>
-        <button onClick={logout} style={{
-          background: '#ef4444', color: 'white', border: 'none',
-          padding: '10px 20px', borderRadius: '8px', cursor: 'pointer'
-        }}>
-          Déconnexion
-        </button>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>FacturePro</h1>
+        <div style={{ display: 'flex', gap: '20px' }}>
+          <button onClick={() => navigate('/dashboard')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dashboard</button>
+          <button onClick={() => navigate('/clients')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Clients</button>
+          <button style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px' }}>Factures</button>
+        </div>
+        <button onClick={logout} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Déconnexion</button>
       </nav>
 
-      <div style={{ padding: '40px' }}>
-        <h2 style={{ marginBottom: '30px', color: '#1e293b' }}>Tableau de bord</h2>
+      <div style={{ padding: '32px', textAlign: 'center' }}>
+        <div style={{ fontSize: '80px', marginBottom: '24px' }}>📄</div>
+        <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', marginBottom: '16px' }}>Factures</h2>
+        <p style={{ color: '#6b7280', fontSize: '18px', marginBottom: '32px' }}>Fonctionnalité en cours de développement...</p>
         
         <div style={{
-          background: 'linear-gradient(135deg, #10b981, #059669)',
-          color: 'white', padding: '30px', borderRadius: '16px',
-          textAlign: 'center', marginBottom: '30px'
+          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+          color: 'white', padding: '24px', borderRadius: '16px',
+          display: 'inline-block'
         }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🎉</div>
-          <h3 style={{ margin: '0 0 8px 0', fontSize: '24px' }}>Migration Réussie !</h3>
-          <p style={{ margin: 0, fontSize: '16px', opacity: 0.9 }}>
-            FacturePro fonctionne maintenant sur Vercel + Render
-          </p>
-        </div>
-
-        <div style={{
-          background: 'white', border: '1px solid #e2e8f0',
-          borderRadius: '16px', padding: '30px'
-        }}>
-          <h3 style={{ margin: '0 0 20px 0', color: '#1e293b' }}>👤 Informations du compte</h3>
-          <p style={{ margin: '8px 0', color: '#475569' }}>
-            <strong>Entreprise :</strong> {user?.company_name}
-          </p>
-          <p style={{ margin: '8px 0', color: '#475569' }}>
-            <strong>Email :</strong> {user?.email}
-          </p>
-          
-          <div style={{
-            background: '#f0f9ff', border: '1px solid #0ea5e9',
-            borderRadius: '8px', padding: '16px', marginTop: '20px'
-          }}>
-            <p style={{ margin: 0, color: '#0c4a6e', fontSize: '14px' }}>
-              ✅ Version de base déployée avec succès. Toutes les fonctionnalités avancées seront ajoutées progressivement.
-            </p>
-          </div>
+          <div style={{ fontSize: '32px', marginBottom: '8px' }}>🚧</div>
+          <div style={{ fontWeight: '700' }}>Bientôt disponible</div>
+          <div style={{ fontSize: '14px', opacity: 0.9 }}>Création et gestion de factures</div>
         </div>
       </div>
     </div>
   );
 };
 
-// Auth Provider
-const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('token'));
-
-  useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    }
-  }, [token]);
-
-  const login = async (email, password) => {
-    try {
-      const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
-      const { access_token, user: userData } = response.data;
-      
-      setToken(access_token);
-      setUser(userData);
-      localStorage.setItem('token', access_token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      
-      return { success: true };
-    } catch (error) {
-      return { 
-        success: false, 
-        error: error.response?.data?.detail || 'Email ou mot de passe incorrect' 
-      };
-    }
-  };
-
-  const register = async (email, password, company_name) => {
-    try {
-      const response = await axios.post(`${BACKEND_URL}/api/auth/register`, { 
-        email, password, company_name 
-      });
-      const { access_token, user: userData } = response.data;
-      
-      setToken(access_token);
-      setUser(userData);
-      localStorage.setItem('token', access_token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      
-      return { success: true };
-    } catch (error) {
-      return { 
-        success: false, 
-        error: error.response?.data?.detail || 'Erreur lors de la création du compte' 
-      };
-    }
-  };
-
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('token');
-    delete axios.defaults.headers.common['Authorization'];
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, token, login, register, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-// AppContent Component  
-const AppContent = () => {
-  const [currentPage, setCurrentPage] = useState('dashboard');
-
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'invoices':
-        return <InvoicesPage />;
-      default:
-        return <Dashboard onPageChange={setCurrentPage} />;
-    }
-  };
-
+// Settings Page
+const SettingsPage = ({ navigate, user, logout }) => {
   return (
     <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
       <nav style={{
-        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
+        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
         color: 'white', padding: '16px 32px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        boxShadow: '0 4px 6px rgba(0,0,0,0.1)'
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
       }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-            <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-          </svg>
-          FacturePro
-        </h1>
-        
-        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-          <button
-            onClick={() => setCurrentPage('dashboard')}
-            style={{
-              background: currentPage === 'dashboard' ? 'rgba(255,255,255,0.2)' : 'transparent',
-              color: 'white', border: 'none', padding: '8px 16px',
-              borderRadius: '6px', cursor: 'pointer'
-            }}
-          >
-            📊 Dashboard
-          </button>
-          <button
-            onClick={() => setCurrentPage('invoices')}
-            style={{
-              background: currentPage === 'invoices' ? 'rgba(255,255,255,0.2)' : 'transparent',
-              color: 'white', border: 'none', padding: '8px 16px',
-              borderRadius: '6px', cursor: 'pointer'
-            }}
-          >
-            📄 Factures
-          </button>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>FacturePro</h1>
+        <div style={{ display: 'flex', gap: '20px' }}>
+          <button onClick={() => navigate('/dashboard')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dashboard</button>
+          <button onClick={() => navigate('/clients')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Clients</button>
+          <button style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px' }}>Paramètres</button>
         </div>
-
-        <button
-          onClick={() => {
-            localStorage.removeItem('token');
-            window.location.reload();
-          }}
-          style={{
-            background: '#ef4444', color: 'white', border: 'none',
-            padding: '8px 16px', borderRadius: '6px', cursor: 'pointer'
-          }}
-        >
-          Déconnexion
-        </button>
+        <button onClick={logout} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Déconnexion</button>
       </nav>
 
-      <main>
-        {renderPage()}
-      </main>
+      <div style={{ padding: '32px', textAlign: 'center' }}>
+        <div style={{ fontSize: '80px', marginBottom: '24px' }}>⚙️</div>
+        <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', marginBottom: '16px' }}>Paramètres</h2>
+        <p style={{ color: '#6b7280', fontSize: '18px' }}>Configuration de l'entreprise - En développement</p>
+      </div>
     </div>
   );
 };
 
-// Main App
-function App() {
-  const { token } = useAuth();
-  return token ? <AppContent /> : <LoginPage />;
-}
-
-// App with Provider
-function AppWithAuth() {
+// Products Page
+const ProductsPage = ({ navigate, user, logout }) => {
   return (
-    <AuthProvider>
-      <App />
-    </AuthProvider>
+    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
+      <div style={{ padding: '32px', textAlign: 'center' }}>
+        <h2>Produits - En développement</h2>
+      </div>
+    </div>
   );
-}
+};
 
-export default AppWithAuth;
+export default App;
