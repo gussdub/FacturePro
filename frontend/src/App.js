@@ -494,27 +494,37 @@ const Layout = ({ currentRoute, navigate, children }) => {
               </div>
 
               {/* Notifications */}
-              <button style={{
-                position: 'relative',
-                background: 'none',
-                border: 'none',
-                padding: '8px',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                color: '#6b7280',
-                fontSize: '18px'
-              }}>
-                🔔
-                <span style={{
-                  position: 'absolute',
-                  top: '6px',
-                  right: '6px',
-                  width: '8px',
-                  height: '8px',
-                  background: '#ef4444',
-                  borderRadius: '50%'
-                }}></span>
-              </button>
+              <div style={{ position: 'relative' }}>
+                <button 
+                  onClick={() => setNotificationsOpen(!notificationsOpen)}
+                  style={{
+                    position: 'relative',
+                    background: 'none',
+                    border: 'none',
+                    padding: '8px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    color: '#6b7280',
+                    fontSize: '18px'
+                  }}
+                >
+                  🔔
+                  <span style={{
+                    position: 'absolute',
+                    top: '6px',
+                    right: '6px',
+                    width: '8px',
+                    height: '8px',
+                    background: '#ef4444',
+                    borderRadius: '50%'
+                  }}></span>
+                </button>
+
+                <NotificationsDropdown
+                  isOpen={notificationsOpen}
+                  onClose={() => setNotificationsOpen(false)}
+                />
+              </div>
 
               {/* User Avatar */}
               <div style={{
