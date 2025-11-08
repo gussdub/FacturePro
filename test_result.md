@@ -3,6 +3,18 @@
 ## Backend Tasks
 
 backend:
+  - task: "PostgreSQL Supabase Connection with asyncpg"
+    implemented: true
+    working: false
+    file: "/app/backend/server_postgresql.py"
+    stuck_count: 1
+    priority: "critical"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "❌ CRITICAL FAILURE: PostgreSQL Supabase connection failing due to IPv6 incompatibility in container environment. Direct connection to db.mnstslbjzolgjxexhpfd.supabase.co fails with DNS error '[Errno -5] No address associated with hostname'. Supabase has migrated to IPv6 for direct connections. Attempted pooler connection (aws-0-eu-central-1.pooler.supabase.com) resolves DNS but fails with 'Tenant or user not found' error. Tested multiple pooler formats (ports 5432, 6543) and username formats (postgres, postgres.mnstslbjzolgjxexhpfd). Container environment does not support IPv6. SOLUTION NEEDED: Either (1) Enable IPv6 in container, (2) Get correct Supabase pooler connection string from user, or (3) Use alternative database. asyncpg library is installed (v0.29.0)."
+
   - task: "MongoDB Atlas Connection with PyMongo Async"
     implemented: true
     working: true
