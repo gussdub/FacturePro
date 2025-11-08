@@ -351,8 +351,10 @@ metadata:
   database: "MongoDB Atlas"
 
 test_plan:
-  current_focus: []
-  stuck_tasks: []
+  current_focus:
+    - "PostgreSQL Supabase Connection with asyncpg"
+  stuck_tasks:
+    - "PostgreSQL Supabase Connection with asyncpg"
   test_all: false
   test_priority: "high_first"
 
