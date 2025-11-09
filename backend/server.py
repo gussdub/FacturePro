@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://user:password@localhost/facturepro')
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://localhost/facturepro')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'default-secret')
 
 # FastAPI app
