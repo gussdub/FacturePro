@@ -773,12 +773,17 @@ const LoginPage = () => {
         
         <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
           <div style={{ marginBottom: '32px' }}>
-            {/* Beautiful Receipt Icon - ORIGINAL */}
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: '24px' }}>
-              <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-              <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-              <path d="M12 18V6"/>
-            </svg>
+            {/* FacturePro Logo */}
+            <img 
+              src="https://customer-assets.emergentagent.com/job_62508191-52e7-42df-afe2-c04e90de23a9/artifacts/ey3nqz8l_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg"
+              alt="FacturePro Logo"
+              style={{
+                width: '64px',
+                height: '64px',
+                marginBottom: '24px',
+                borderRadius: '12px'
+              }}
+            />
             <h1 style={{
               fontSize: '80px', fontWeight: 'bold', marginBottom: '16px',
               lineHeight: '1.1', margin: 0
