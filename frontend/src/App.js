@@ -789,7 +789,7 @@ const LoginPage = () => {
               lineHeight: '1.1', margin: 0
             }}>
               Simplifiez votre
-              <span style={{ display: 'block', color: '#bfdbfe' }}>facturation</span>
+              <span style={{ display: 'block', color: '#a5f3fc' }}>facturation</span>
             </h1>
             <p style={{
               fontSize: '20px', color: 'rgba(255,255,255,0.8)',
