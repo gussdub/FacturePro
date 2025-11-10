@@ -684,7 +684,7 @@ app.add_middleware(
 # Startup
 @app.on_event("startup")
 async def startup():
-    global mongo_client, db, stripe_checkout
+    global mongo_client, db
     
     print("🚀 FacturePro starting...")
     
@@ -707,11 +707,8 @@ async def startup():
         await db.payment_transactions.create_index([("user_id", 1)])
         print("✅ Indexes created")
         
-        # Initialize Stripe
+        # Test Stripe
         if STRIPE_API_KEY:
-            host_url = "http://localhost:8001"  # Will be overridden by actual request
-            webhook_url = f"{host_url}/api/webhook/stripe"
-            stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
             print("✅ Stripe configured")
         
         # Test Resend
