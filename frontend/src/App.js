@@ -326,7 +326,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
       {/* Sidebar - DESIGN ORIGINAL */}
       <aside style={{
         width: '280px',
-        background: 'linear-gradient(180deg, #1e293b 0%, #334155 100%)',
+        background: 'linear-gradient(180deg, #0f766e 0%, #0d9488 100%)',
         boxShadow: '4px 0 6px -1px rgba(0, 0, 0, 0.1)'
       }}>
         {/* Logo Section */}
