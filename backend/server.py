@@ -1047,6 +1047,21 @@ async def create_employee(employee_data: dict, current_user: User = Depends(get_
     new_employee.pop('_id', None)
     return new_employee
 
+@app.put("/api/employees/{employee_id}")
+async def update_employee(
+    employee_id: str,
+    employee_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Update employee"""
+    await db.employees.update_one(
+        {"id": employee_id, "user_id": current_user.id},
+        {"$set": employee_data}
+    )
+    employee = await db.employees.find_one({"id": employee_id})
+    employee.pop('_id', None)
+    return employee
+
 @app.delete("/api/employees/{employee_id}")
 async def delete_employee(employee_id: str, current_user: User = Depends(get_current_user)):
     """Delete employee"""
