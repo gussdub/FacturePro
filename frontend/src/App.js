@@ -256,6 +256,10 @@ function App() {
         return <ExportPage />;
       case '/settings':
         return <SettingsPage />;
+      case '/change-password':
+        return <ChangePasswordPage />;
+      case '/billing':
+        return <BillingPage />;
       default:
         return <Dashboard />;
     }
