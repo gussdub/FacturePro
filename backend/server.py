@@ -1,37 +1,59 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-import pymongo
-from pymongo import AsyncMongoClient
 import os
 import jwt
 import bcrypt
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Dict
 import uuid
-import secrets
 from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+from emergentintegrations.payments.stripe.checkout import (
+    StripeCheckout, 
+    CheckoutSessionResponse, 
+    CheckoutStatusResponse, 
+    CheckoutSessionRequest
+)
 
 # Load environment
 load_dotenv()
 
 # Configuration
-MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+MONGO_URL = os.environ.get('MONGO_URL')
 DB_NAME = os.environ.get('DB_NAME', 'facturepro')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'default-secret')
-
-print(f"🔧 Connecting to MongoDB: {MONGO_URL}")
-
-# MongoDB connection with NEW PyMongo Async
-client = AsyncMongoClient(MONGO_URL)
-db = client[DB_NAME]
+STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'noreply@facturepro.ca')
 
 # FastAPI app
-app = FastAPI(title="FacturePro API", version="2.0.0")
-
-# Security
+app = FastAPI(title="FacturePro API", version="3.0.0")
 security = HTTPBearer()
+
+# MongoDB client
+mongo_client = None
+db = None
+
+# Stripe client
+stripe_checkout = None
+
+# Subscription Plans
+PLANS = {
+    "monthly": {
+        "price": 15.00,
+        "interval": "month",
+        "name": "Abonnement Mensuel"
+    },
+    "yearly": {
+        "price": 162.00,  # $15 * 12 * 0.90 = $162 (10% discount)
+        "interval": "year",
+        "name": "Abonnement Annuel (10% rabais)"
+    }
+}
 
 # Models
 class User(BaseModel):
@@ -39,16 +61,18 @@ class User(BaseModel):
     email: str
     company_name: str
     is_active: bool = True
-    subscription_status: str = "trial"
+    subscription_status: str = "trial"  # trial, active, expired, cancelled
     trial_end_date: Optional[datetime] = None
+    subscription_plan: Optional[str] = None  # monthly, yearly
+    is_lifetime_free: bool = False
 
 class UserCreate(BaseModel):
-    email: str
+    email: EmailStr
     password: str
     company_name: str
 
 class UserLogin(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
 class Token(BaseModel):
@@ -67,25 +91,96 @@ class Client(BaseModel):
     postal_code: Optional[str] = None
     country: Optional[str] = None
 
-class CompanySettings(BaseModel):
-    id: str
-    user_id: str
-    company_name: str
-    email: str
-    phone: Optional[str] = None
-    address: Optional[str] = None
-    city: Optional[str] = None
-    postal_code: Optional[str] = None
-    country: Optional[str] = None
-    logo_url: Optional[str] = None
-    primary_color: str = "#3B82F6"
-    secondary_color: str = "#1F2937"
-    default_due_days: int = 30
-    next_invoice_number: int = 1
-    next_quote_number: int = 1
-    gst_number: Optional[str] = None
-    pst_number: Optional[str] = None
-    hst_number: Optional[str] = None
+class SubscriptionRequest(BaseModel):
+    plan: str  # "monthly" or "yearly"
+
+# Email Service
+async def send_email(to_email: str, subject: str, html_content: str):
+    """Send email via SendGrid"""
+    try:
+        message = Mail(
+            from_email=SENDER_EMAIL,
+            to_emails=to_email,
+            subject=subject,
+            html_content=html_content
+        )
+        
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        print(f"Email sent to {to_email}: {response.status_code}")
+        return response.status_code == 202
+    except Exception as e:
+        print(f"Error sending email: {e}")
+        return False
+
+async def send_trial_end_notification(user_email: str, days_remaining: int):
+    """Send trial end notification"""
+    subject = f"Votre période d'essai se termine dans {days_remaining} jours"
+    
+    html_content = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #2563eb;">Votre période d'essai se termine bientôt</h2>
+                
+                <p>Bonjour,</p>
+                
+                <p>Votre période d'essai gratuite de 14 jours se termine dans <strong>{days_remaining} jours</strong>.</p>
+                
+                <p>Pour continuer à utiliser FacturePro sans interruption, veuillez choisir un abonnement :</p>
+                
+                <ul>
+                    <li><strong>Mensuel :</strong> 15 $ / mois (sans engagement)</li>
+                    <li><strong>Annuel :</strong> 162 $ / an (économisez 10%)</li>
+                </ul>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="https://app.facturepro.ca/subscription" 
+                       style="background-color: #2563eb; color: white; padding: 12px 30px; 
+                              text-decoration: none; border-radius: 5px; display: inline-block;">
+                        Choisir un abonnement
+                    </a>
+                </div>
+                
+                <p>Merci de votre confiance,</p>
+                <p><strong>L'équipe FacturePro</strong></p>
+            </div>
+        </body>
+    </html>
+    """
+    
+    await send_email(user_email, subject, html_content)
+
+async def send_payment_success_email(user_email: str, plan_name: str, amount: float):
+    """Send payment confirmation"""
+    subject = "Confirmation de paiement - FacturePro"
+    
+    html_content = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #10b981;">Paiement confirmé !</h2>
+                
+                <p>Bonjour,</p>
+                
+                <p>Nous avons bien reçu votre paiement pour FacturePro.</p>
+                
+                <div style="background-color: #f3f4f6; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                    <p><strong>Plan :</strong> {plan_name}</p>
+                    <p><strong>Montant :</strong> {amount:.2f} $</p>
+                    <p><strong>Date :</strong> {datetime.now().strftime('%d/%m/%Y')}</p>
+                </div>
+                
+                <p>Votre abonnement est maintenant actif.</p>
+                
+                <p>Merci de votre confiance,</p>
+                <p><strong>L'équipe FacturePro</strong></p>
+            </div>
+        </body>
+    </html>
+    """
+    
+    await send_email(user_email, subject, html_content)
 
 # Utility functions
 def hash_password(password: str) -> str:
@@ -98,283 +193,390 @@ def create_token(user_id: str) -> str:
     payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(hours=24)}
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
+# MongoDB helpers
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
         user_id = payload.get("sub")
         
-        user = await db.users.find_one({"id": user_id})
-        if not user:
+        user_doc = await db.users.find_one({"id": user_id})
+        if not user_doc:
             raise HTTPException(401, "User not found")
-        return User(**user)
+        
+        return User(
+            id=user_doc["id"],
+            email=user_doc["email"],
+            company_name=user_doc["company_name"],
+            is_active=user_doc.get("is_active", True),
+            subscription_status=user_doc.get("subscription_status", "trial"),
+            trial_end_date=user_doc.get("trial_end_date"),
+            subscription_plan=user_doc.get("subscription_plan"),
+            is_lifetime_free=user_doc.get("is_lifetime_free", False)
+        )
     except Exception as e:
         print(f"Auth error: {e}")
         raise HTTPException(401, "Invalid token")
 
-async def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    user = await get_current_user(credentials)
-    
-    # Exempt users
-    EXEMPT_USERS = ["gussdub@gmail.com"]
-    if user.email in EXEMPT_USERS:
-        return user
-    
-    return user
-
 # Routes
 @app.get("/")
 async def root():
-    return {"message": "FacturePro API v2.0", "status": "running", "database": "MongoDB Atlas"}
+    return {
+        "message": "FacturePro API v3.0", 
+        "status": "running", 
+        "database": "MongoDB",
+        "features": ["Stripe Payments", "SendGrid Emails"]
+    }
 
 @app.get("/api/health")
 async def health():
     try:
-        # Test MongoDB connection
-        result = await client.admin.command('ping')
-        return {"status": "healthy", "database": "connected", "ping": result}
+        await db.command('ping')
+        users_count = await db.users.count_documents({})
+        return {
+            "status": "healthy", 
+            "database": "connected", 
+            "users_count": users_count,
+            "stripe": "configured" if STRIPE_API_KEY else "not configured",
+            "sendgrid": "configured" if SENDGRID_API_KEY else "not configured"
+        }
     except Exception as e:
-        print(f"MongoDB connection error: {e}")
-        return {"status": "healthy", "database": "error", "error": str(e)}
+        return {"status": "unhealthy", "database": "error", "error": str(e)}
 
 # Auth Routes
 @app.post("/api/auth/register", response_model=Token)
-async def register(user_data: UserCreate):
+async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
     try:
         # Check if exists
         existing = await db.users.find_one({"email": user_data.email})
         if existing:
-            raise HTTPException(400, "Email already registered")
+            raise HTTPException(400, "Email déjà enregistré")
         
-        # Create user
+        # Create user with 14-day trial
         user_id = str(uuid.uuid4())
         trial_end = datetime.now(timezone.utc) + timedelta(days=14)
         
-        new_user = User(
+        # Check if user is gussdub@gmail.com for lifetime free
+        is_lifetime_free = user_data.email == "gussdub@gmail.com"
+        
+        new_user = {
+            "id": user_id,
+            "email": user_data.email,
+            "company_name": user_data.company_name,
+            "hashed_password": hash_password(user_data.password),
+            "is_active": True,
+            "subscription_status": "active" if is_lifetime_free else "trial",
+            "trial_end_date": None if is_lifetime_free else trial_end,
+            "subscription_plan": "lifetime" if is_lifetime_free else None,
+            "is_lifetime_free": is_lifetime_free,
+            "created_at": datetime.now(timezone.utc)
+        }
+        
+        await db.users.insert_one(new_user)
+        
+        # Create default settings
+        settings = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "company_name": user_data.company_name,
+            "email": user_data.email,
+            "logo_url": "",
+            "gst_number": "",
+            "pst_number": "",
+            "hst_number": ""
+        }
+        await db.company_settings.insert_one(settings)
+        
+        # Send welcome email (background task)
+        if not is_lifetime_free:
+            background_tasks.add_task(
+                send_email,
+                user_data.email,
+                "Bienvenue sur FacturePro !",
+                f"""
+                <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2>Bienvenue sur FacturePro !</h2>
+                        <p>Votre période d'essai gratuite de 14 jours commence maintenant.</p>
+                        <p>Vous pouvez créer vos factures, gérer vos clients et bien plus encore.</p>
+                        <p>Votre essai se termine le : <strong>{trial_end.strftime('%d/%m/%Y')}</strong></p>
+                    </body>
+                </html>
+                """
+            )
+        
+        user_obj = User(
             id=user_id,
             email=user_data.email,
             company_name=user_data.company_name,
             is_active=True,
-            subscription_status="trial",
-            trial_end_date=trial_end
+            subscription_status="active" if is_lifetime_free else "trial",
+            trial_end_date=None if is_lifetime_free else trial_end,
+            subscription_plan="lifetime" if is_lifetime_free else None,
+            is_lifetime_free=is_lifetime_free
         )
-        
-        # Insert user
-        await db.users.insert_one(new_user.model_dump())
-        
-        # Insert password separately
-        await db.user_passwords.insert_one({
-            "user_id": user_id,
-            "hashed_password": hash_password(user_data.password)
-        })
-        
-        # Create default settings
-        settings = CompanySettings(
-            id=str(uuid.uuid4()),
-            user_id=user_id,
-            company_name=user_data.company_name,
-            email=user_data.email
-        )
-        await db.company_settings.insert_one(settings.model_dump())
         
         token = create_token(user_id)
-        return Token(access_token=token, token_type="bearer", user=new_user)
+        return Token(access_token=token, token_type="bearer", user=user_obj)
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Register error: {e}")
-        raise HTTPException(500, f"Registration failed: {str(e)}")
+        raise HTTPException(500, "Échec de l'inscription")
 
 @app.post("/api/auth/login", response_model=Token)
 async def login(credentials: UserLogin):
     try:
         user = await db.users.find_one({"email": credentials.email})
         if not user:
-            raise HTTPException(401, "Incorrect email or password")
+            raise HTTPException(401, "Email ou mot de passe incorrect")
         
-        # Check password
-        password_doc = await db.user_passwords.find_one({"user_id": user["id"]})
-        if not password_doc or not verify_password(credentials.password, password_doc["hashed_password"]):
-            raise HTTPException(401, "Incorrect email or password")
+        if not verify_password(credentials.password, user["hashed_password"]):
+            raise HTTPException(401, "Email ou mot de passe incorrect")
+        
+        # Check trial expiration
+        if (user.get("subscription_status") == "trial" and 
+            user.get("trial_end_date") and 
+            user.get("trial_end_date") < datetime.now(timezone.utc)):
+            # Update status to expired
+            await db.users.update_one(
+                {"id": user["id"]},
+                {"$set": {"subscription_status": "expired", "is_active": False}}
+            )
+            raise HTTPException(403, "Votre période d'essai est expirée. Veuillez choisir un abonnement.")
+        
+        user_obj = User(
+            id=user["id"],
+            email=user["email"],
+            company_name=user["company_name"],
+            is_active=user.get("is_active", True),
+            subscription_status=user.get("subscription_status", "trial"),
+            trial_end_date=user.get("trial_end_date"),
+            subscription_plan=user.get("subscription_plan"),
+            is_lifetime_free=user.get("is_lifetime_free", False)
+        )
         
         token = create_token(user["id"])
-        return Token(access_token=token, token_type="bearer", user=User(**user))
+        return Token(access_token=token, token_type="bearer", user=user_obj)
         
     except HTTPException:
         raise
     except Exception as e:
         print(f"Login error: {e}")
-        raise HTTPException(500, f"Login failed: {str(e)}")
+        raise HTTPException(500, "Échec de la connexion")
 
-# Password Reset
-reset_tokens = {}
-
-@app.post("/api/auth/forgot-password")
-async def forgot_password(request: dict):
+# Subscription & Payment Routes
+@app.post("/api/subscription/create-checkout")
+async def create_checkout_session(
+    request: Request,
+    subscription_request: SubscriptionRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Create Stripe checkout session for subscription"""
     try:
-        email = request.get("email")
-        user = await db.users.find_one({"email": email})
+        # Check if user is lifetime free
+        if current_user.is_lifetime_free:
+            raise HTTPException(400, "Vous avez un accès gratuit à vie")
         
-        if not user:
-            return {"message": "Si cette adresse email existe, un code de récupération a été généré"}
+        # Validate plan
+        if subscription_request.plan not in PLANS:
+            raise HTTPException(400, "Plan invalide")
         
-        reset_token = secrets.token_urlsafe(32)
-        reset_tokens[reset_token] = {
-            "user_id": user["id"],
-            "email": user["email"],
-            "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
-        }
+        plan = PLANS[subscription_request.plan]
         
-        return {"message": "Code généré", "reset_token": reset_token}
-    except Exception as e:
-        print(f"Forgot password error: {e}")
-        raise HTTPException(500, "Error generating reset code")
-
-@app.post("/api/auth/reset-password")
-async def reset_password(request: dict):
-    try:
-        token = request.get("token")
-        new_password = request.get("new_password")
+        # Get origin from request
+        origin = request.headers.get("origin", "http://localhost:3000")
         
-        token_data = reset_tokens.get(token)
-        if not token_data or datetime.now(timezone.utc) > token_data["expires_at"]:
-            raise HTTPException(400, "Code invalide ou expiré")
+        # Create success and cancel URLs
+        success_url = f"{origin}/subscription/success?session_id={{{{CHECKOUT_SESSION_ID}}}}"
+        cancel_url = f"{origin}/subscription"
         
-        # Update password
-        await db.user_passwords.update_one(
-            {"user_id": token_data["user_id"]},
-            {"$set": {"hashed_password": hash_password(new_password)}}
+        # Create checkout session
+        checkout_request = CheckoutSessionRequest(
+            amount=plan["price"],
+            currency="cad",
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                "user_id": current_user.id,
+                "user_email": current_user.email,
+                "plan": subscription_request.plan
+            }
         )
         
-        del reset_tokens[token]
-        return {"message": "Mot de passe réinitialisé"}
+        session = await stripe_checkout.create_checkout_session(checkout_request)
         
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Reset password error: {e}")
-        raise HTTPException(500, "Error resetting password")
-
-# Client Routes
-@app.get("/api/clients")
-async def get_clients(current_user: User = Depends(get_current_user_with_access)):
-    try:
-        cursor = db.clients.find({"user_id": current_user.id})
-        clients = []
-        async for client in cursor:
-            clients.append(Client(**client))
-        return clients
-    except Exception as e:
-        print(f"Get clients error: {e}")
-        raise HTTPException(500, "Error fetching clients")
-
-@app.post("/api/clients")
-async def create_client(client_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        client_id = str(uuid.uuid4())
-        new_client = Client(
-            id=client_id,
-            user_id=current_user.id,
-            **client_data
-        )
-        
-        await db.clients.insert_one(new_client.model_dump())
-        return new_client
-    except Exception as e:
-        print(f"Create client error: {e}")
-        raise HTTPException(500, "Error creating client")
-
-@app.put("/api/clients/{client_id}")
-async def update_client(client_id: str, client_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        result = await db.clients.update_one(
-            {"id": client_id, "user_id": current_user.id},
-            {"$set": client_data}
-        )
-        
-        if result.modified_count == 0:
-            raise HTTPException(404, "Client not found")
-        
-        updated_client = await db.clients.find_one({"id": client_id})
-        return Client(**updated_client)
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Update client error: {e}")
-        raise HTTPException(500, "Error updating client")
-
-@app.delete("/api/clients/{client_id}")
-async def delete_client(client_id: str, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        result = await db.clients.delete_one({"id": client_id, "user_id": current_user.id})
-        if result.deleted_count == 0:
-            raise HTTPException(404, "Client not found")
-        return {"message": "Client deleted"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Delete client error: {e}")
-        raise HTTPException(500, "Error deleting client")
-
-# Product Routes
-@app.get("/api/products")
-async def get_products(current_user: User = Depends(get_current_user_with_access)):
-    try:
-        cursor = db.products.find({"user_id": current_user.id, "is_active": True})
-        products = []
-        async for product in cursor:
-            # Remove MongoDB _id field
-            if "_id" in product:
-                del product["_id"]
-            products.append(product)
-        return products
-    except Exception as e:
-        print(f"Get products error: {e}")
-        return []
-
-@app.post("/api/products")
-async def create_product(product_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        product_id = str(uuid.uuid4())
-        new_product = {
-            "id": product_id,
+        # Create payment transaction record
+        transaction = {
+            "id": str(uuid.uuid4()),
+            "session_id": session.session_id,
             "user_id": current_user.id,
-            "name": product_data["name"],
-            "description": product_data.get("description", ""),
-            "unit_price": float(product_data["unit_price"]),
-            "unit": product_data.get("unit", "unité"),
-            "category": product_data.get("category", ""),
-            "is_active": True,
+            "user_email": current_user.email,
+            "amount": plan["price"],
+            "currency": "cad",
+            "plan": subscription_request.plan,
+            "payment_status": "pending",
+            "status": "initiated",
             "created_at": datetime.now(timezone.utc)
         }
         
-        result = await db.products.insert_one(new_product)
-        # Remove MongoDB _id before returning
-        if "_id" in new_product:
-            del new_product["_id"]
-        return new_product
+        await db.payment_transactions.insert_one(transaction)
+        
+        return {"url": session.url, "session_id": session.session_id}
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Create product error: {e}")
-        raise HTTPException(500, "Error creating product")
+        print(f"Checkout error: {e}")
+        raise HTTPException(500, f"Erreur lors de la création du paiement: {str(e)}")
+
+@app.get("/api/subscription/checkout-status/{session_id}")
+async def get_checkout_status(
+    session_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
+    """Check Stripe checkout session status"""
+    try:
+        # Get status from Stripe
+        checkout_status = await stripe_checkout.get_checkout_status(session_id)
+        
+        # Find transaction
+        transaction = await db.payment_transactions.find_one({"session_id": session_id})
+        
+        if not transaction:
+            raise HTTPException(404, "Transaction non trouvée")
+        
+        # If payment is successful and not already processed
+        if (checkout_status.payment_status == "paid" and 
+            transaction.get("payment_status") != "paid"):
+            
+            # Update transaction
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {
+                    "payment_status": "paid",
+                    "status": "completed",
+                    "paid_at": datetime.now(timezone.utc)
+                }}
+            )
+            
+            # Update user subscription
+            plan = transaction.get("plan")
+            await db.users.update_one(
+                {"id": current_user.id},
+                {"$set": {
+                    "subscription_status": "active",
+                    "subscription_plan": plan,
+                    "is_active": True,
+                    "trial_end_date": None
+                }}
+            )
+            
+            # Send confirmation email
+            plan_info = PLANS.get(plan, {})
+            background_tasks.add_task(
+                send_payment_success_email,
+                current_user.email,
+                plan_info.get("name", "Abonnement"),
+                transaction.get("amount", 0)
+            )
+        
+        return {
+            "status": checkout_status.status,
+            "payment_status": checkout_status.payment_status,
+            "amount_total": checkout_status.amount_total,
+            "currency": checkout_status.currency
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Status check error: {e}")
+        raise HTTPException(500, f"Erreur lors de la vérification: {str(e)}")
+
+@app.post("/api/webhook/stripe")
+async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Handle Stripe webhooks"""
+    try:
+        body = await request.body()
+        signature = request.headers.get("Stripe-Signature")
+        
+        webhook_response = await stripe_checkout.handle_webhook(body, signature)
+        
+        # Handle payment success
+        if webhook_response.payment_status == "paid":
+            session_id = webhook_response.session_id
+            
+            # Find transaction
+            transaction = await db.payment_transactions.find_one({"session_id": session_id})
+            
+            if transaction and transaction.get("payment_status") != "paid":
+                # Update transaction
+                await db.payment_transactions.update_one(
+                    {"session_id": session_id},
+                    {"$set": {
+                        "payment_status": "paid",
+                        "status": "completed",
+                        "paid_at": datetime.now(timezone.utc)
+                    }}
+                )
+                
+                # Update user
+                user_id = webhook_response.metadata.get("user_id")
+                plan = webhook_response.metadata.get("plan")
+                
+                await db.users.update_one(
+                    {"id": user_id},
+                    {"$set": {
+                        "subscription_status": "active",
+                        "subscription_plan": plan,
+                        "is_active": True
+                    }}
+                )
+        
+        return {"status": "success"}
+        
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# Client Routes
+@app.get("/api/clients")
+async def get_clients(current_user: User = Depends(get_current_user)):
+    clients = []
+    cursor = db.clients.find({"user_id": current_user.id})
+    async for client in cursor:
+        client.pop('_id', None)
+        clients.append(Client(**client))
+    return clients
+
+@app.post("/api/clients")
+async def create_client(client_data: dict, current_user: User = Depends(get_current_user)):
+    client_id = str(uuid.uuid4())
+    new_client = {
+        "id": client_id,
+        "user_id": current_user.id,
+        **client_data,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db.clients.insert_one(new_client)
+    new_client.pop('_id', None)
+    return Client(**new_client)
+
+@app.delete("/api/clients/{client_id}")
+async def delete_client(client_id: str, current_user: User = Depends(get_current_user)):
+    await db.clients.delete_one({"id": client_id, "user_id": current_user.id})
+    return {"message": "Client supprimé"}
 
 # Settings Routes
 @app.get("/api/settings/company")
-async def get_settings(current_user: User = Depends(get_current_user_with_access)):
-    try:
-        settings = await db.company_settings.find_one({"user_id": current_user.id})
-        if not settings:
-            # Create default
-            default_settings = CompanySettings(
-                id=str(uuid.uuid4()),
-                user_id=current_user.id,
-                company_name=current_user.company_name,
-                email=current_user.email
-            )
-            await db.company_settings.insert_one(default_settings.model_dump())
-            return default_settings
-        return CompanySettings(**settings)
-    except Exception as e:
-        print(f"Get settings error: {e}")
-        # Return default if error
-        return {
+async def get_settings(current_user: User = Depends(get_current_user)):
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    
+    if not settings:
+        default = {
             "id": str(uuid.uuid4()),
             "user_id": current_user.id,
             "company_name": current_user.company_name,
@@ -384,190 +586,81 @@ async def get_settings(current_user: User = Depends(get_current_user_with_access
             "pst_number": "",
             "hst_number": ""
         }
+        await db.company_settings.insert_one(default)
+        default.pop('_id', None)
+        return default
+    
+    settings.pop('_id', None)
+    return settings
 
 @app.put("/api/settings/company")
-async def update_settings(settings_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        result = await db.company_settings.update_one(
-            {"user_id": current_user.id},
-            {"$set": settings_data},
-            upsert=True
-        )
-        
-        updated_settings = await db.company_settings.find_one({"user_id": current_user.id})
-        # Remove MongoDB _id before returning
-        if updated_settings and "_id" in updated_settings:
-            del updated_settings["_id"]
-        return updated_settings
-    except Exception as e:
-        print(f"Update settings error: {e}")
-        raise HTTPException(500, "Error updating settings")
+async def update_settings(settings_data: dict, current_user: User = Depends(get_current_user)):
+    await db.company_settings.update_one(
+        {"user_id": current_user.id},
+        {"$set": settings_data}
+    )
+    
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    settings.pop('_id', None)
+    return settings
 
 @app.post("/api/settings/company/upload-logo")
-async def upload_logo(logo_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        await db.company_settings.update_one(
-            {"user_id": current_user.id},
-            {"$set": {"logo_url": logo_data.get("logo_url")}},
-            upsert=True
-        )
-        return {"message": "Logo saved", "logo_url": logo_data.get("logo_url")}
-    except Exception as e:
-        print(f"Upload logo error: {e}")
-        raise HTTPException(500, "Error saving logo")
+async def upload_logo(logo_data: dict, current_user: User = Depends(get_current_user)):
+    await db.company_settings.update_one(
+        {"user_id": current_user.id},
+        {"$set": {"logo_url": logo_data.get("logo_url")}}
+    )
+    
+    return {"message": "Logo enregistré", "logo_url": logo_data.get("logo_url")}
 
 # Dashboard Stats
 @app.get("/api/dashboard/stats")
-async def get_stats(current_user: User = Depends(get_current_user_with_access)):
-    try:
-        total_clients = await db.clients.count_documents({"user_id": current_user.id})
-        total_invoices = await db.invoices.count_documents({"user_id": current_user.id})
-        total_quotes = await db.quotes.count_documents({"user_id": current_user.id})
-        total_products = await db.products.count_documents({"user_id": current_user.id, "is_active": True})
-        
-        return {
-            "total_clients": total_clients,
-            "total_invoices": total_invoices,
-            "total_quotes": total_quotes,
-            "total_products": total_products,
-            "total_revenue": 0,
-            "pending_invoices": 0
-        }
-    except Exception as e:
-        print(f"Dashboard stats error: {e}")
-        return {
-            "total_clients": 0,
-            "total_invoices": 0,
-            "total_quotes": 0,
-            "total_products": 0,
-            "total_revenue": 0,
-            "pending_invoices": 0
-        }
+async def get_stats(current_user: User = Depends(get_current_user)):
+    clients_count = await db.clients.count_documents({"user_id": current_user.id})
+    products_count = await db.products.count_documents({"user_id": current_user.id})
+    
+    return {
+        "total_clients": clients_count,
+        "total_invoices": 0,
+        "total_quotes": 0,
+        "total_products": products_count,
+        "total_revenue": 0,
+        "pending_invoices": 0
+    }
 
-# Invoice Routes
+# Product routes
+@app.get("/api/products")
+async def get_products(current_user: User = Depends(get_current_user)):
+    products = []
+    cursor = db.products.find({"user_id": current_user.id})
+    async for product in cursor:
+        product.pop('_id', None)
+        products.append(product)
+    return products
+
+@app.post("/api/products")
+async def create_product(product_data: dict, current_user: User = Depends(get_current_user)):
+    product_id = str(uuid.uuid4())
+    new_product = {
+        "id": product_id,
+        "user_id": current_user.id,
+        **product_data,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db.products.insert_one(new_product)
+    new_product.pop('_id', None)
+    return new_product
+
+# Placeholder routes
 @app.get("/api/invoices")
-async def get_invoices(current_user: User = Depends(get_current_user_with_access)):
-    try:
-        cursor = db.invoices.find({"user_id": current_user.id})
-        invoices = []
-        async for invoice in cursor:
-            # Remove MongoDB _id field
-            if "_id" in invoice:
-                del invoice["_id"]
-            invoices.append(invoice)
-        return invoices
-    except Exception as e:
-        print(f"Get invoices error: {e}")
-        return []
+async def get_invoices(current_user: User = Depends(get_current_user)):
+    return []
 
-@app.post("/api/invoices")
-async def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        invoice_id = str(uuid.uuid4())
-        
-        # Calculate totals
-        items = invoice_data.get("items", [])
-        subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
-        
-        # Tax calculation
-        province = invoice_data.get("province", "QC")
-        if province == "QC":
-            gst = subtotal * 0.05
-            pst = subtotal * 0.09975
-            hst = 0
-        elif province == "ON":
-            gst = 0
-            pst = 0
-            hst = subtotal * 0.13
-        else:
-            gst = subtotal * 0.05
-            pst = 0
-            hst = 0
-        
-        total_tax = gst + pst + hst
-        total = subtotal + total_tax
-        
-        # Generate invoice number
-        invoice_count = await db.invoices.count_documents({"user_id": current_user.id})
-        invoice_number = f"INV-{invoice_count + 1:04d}"
-        
-        new_invoice = {
-            "id": invoice_id,
-            "user_id": current_user.id,
-            "client_id": invoice_data["client_id"],
-            "invoice_number": invoice_number,
-            "issue_date": datetime.now(timezone.utc).isoformat(),
-            "due_date": invoice_data["due_date"],
-            "items": items,
-            "subtotal": round(subtotal, 2),
-            "gst_amount": round(gst, 2),
-            "pst_amount": round(pst, 2),
-            "hst_amount": round(hst, 2),
-            "total_tax": round(total_tax, 2),
-            "total": round(total, 2),
-            "province": province,
-            "status": "draft",
-            "notes": invoice_data.get("notes", ""),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        result = await db.invoices.insert_one(new_invoice)
-        # Remove MongoDB _id before returning
-        if "_id" in new_invoice:
-            del new_invoice["_id"]
-        return new_invoice
-        
-    except Exception as e:
-        print(f"Create invoice error: {e}")
-        raise HTTPException(500, "Error creating invoice")
-
-# Quote Routes
-@app.get("/api/quotes")
-async def get_quotes(current_user: User = Depends(get_current_user_with_access)):
-    try:
-        cursor = db.quotes.find({"user_id": current_user.id})
-        quotes = []
-        async for quote in cursor:
-            # Remove MongoDB _id field
-            if "_id" in quote:
-                del quote["_id"]
-            quotes.append(quote)
-        return quotes
-    except Exception as e:
-        print(f"Get quotes error: {e}")
-        return []
-
-@app.post("/api/quotes")
-async def create_quote(quote_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    try:
-        quote_id = str(uuid.uuid4())
-        
-        quote_count = await db.quotes.count_documents({"user_id": current_user.id})
-        quote_number = f"QUO-{quote_count + 1:04d}"
-        
-        new_quote = {
-            "id": quote_id,
-            "user_id": current_user.id,
-            "client_id": quote_data["client_id"],
-            "quote_number": quote_number,
-            "issue_date": datetime.now(timezone.utc).isoformat(),
-            "valid_until": quote_data["valid_until"],
-            "items": quote_data.get("items", []),
-            "total": 0,
-            "status": "pending",
-            "notes": quote_data.get("notes", ""),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        
-        result = await db.quotes.insert_one(new_quote)
-        # Remove MongoDB _id before returning
-        if "_id" in new_quote:
-            del new_quote["_id"]
-        return new_quote
-        
-    except Exception as e:
-        print(f"Create quote error: {e}")
-        raise HTTPException(500, "Error creating quote")
+@app.get("/api/quotes") 
+async def get_quotes(current_user: User = Depends(get_current_user)):
+    return []
 
 # CORS
 app.add_middleware(
@@ -578,86 +671,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Startup - Create gussdub account
+# Startup
 @app.on_event("startup")
-async def create_accounts():
+async def startup():
+    global mongo_client, db, stripe_checkout
+    
+    print("🚀 FacturePro starting...")
+    
     try:
-        print("🔧 Initializing FacturePro...")
+        # Connect to MongoDB
+        mongo_client = AsyncIOMotorClient(MONGO_URL)
+        db = mongo_client[DB_NAME]
         
-        # Test MongoDB connection
-        await client.admin.command('ping')
-        print("✅ MongoDB Atlas connected!")
+        # Test connection
+        await db.command('ping')
+        print("✅ MongoDB connected")
         
-        # Create gussdub account if doesn't exist
-        existing_user = await db.users.find_one({"email": "gussdub@gmail.com"})
+        # Create indexes
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("id", unique=True)
+        await db.clients.create_index([("user_id", 1)])
+        await db.products.create_index([("user_id", 1)])
+        await db.company_settings.create_index([("user_id", 1)])
+        await db.payment_transactions.create_index([("session_id", 1)])
+        await db.payment_transactions.create_index([("user_id", 1)])
+        print("✅ Indexes created")
         
-        if not existing_user:
-            print("🔧 Creating gussdub@gmail.com account...")
-            
-            user_id = str(uuid.uuid4())
-            trial_end = datetime.now(timezone.utc) + timedelta(days=3650)  # 10 years
-            
-            new_user = {
-                "id": user_id,
-                "email": "gussdub@gmail.com",
-                "company_name": "ProFireManager",
-                "is_active": True,
-                "subscription_status": "trial",
-                "trial_end_date": trial_end,
-                "created_at": datetime.now(timezone.utc)
-            }
-            
-            await db.users.insert_one(new_user)
-            await db.user_passwords.insert_one({
-                "user_id": user_id,
-                "hashed_password": hash_password("testpass123")
-            })
-            
-            # Create settings
-            await db.company_settings.insert_one({
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "company_name": "ProFireManager",
-                "email": "gussdub@gmail.com",
-                "gst_number": "123456789",
-                "pst_number": "1234567890",
-                "logo_url": "",
-                "primary_color": "#3B82F6",
-                "secondary_color": "#1F2937"
-            })
-            
-            # Create sample client
-            await db.clients.insert_one({
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "name": "Client Test",
-                "email": "test@client.com",
-                "phone": "514-123-4567",
-                "address": "123 Rue Test",
-                "city": "Montréal",
-                "postal_code": "H1A 1A1",
-                "country": "Canada"
-            })
-            
-            # Create sample product
-            await db.products.insert_one({
-                "id": str(uuid.uuid4()),
-                "user_id": user_id,
-                "name": "Consultation",
-                "description": "Consultation professionnelle",
-                "unit_price": 100.0,
-                "unit": "heure",
-                "category": "Services",
-                "is_active": True
-            })
-            
-            print("✅ Account gussdub@gmail.com created with sample data")
-        else:
-            print("✅ Account gussdub@gmail.com already exists")
-            
+        # Initialize Stripe
+        if STRIPE_API_KEY:
+            host_url = "http://localhost:8001"  # Will be overridden by actual request
+            webhook_url = f"{host_url}/api/webhook/stripe"
+            stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+            print("✅ Stripe configured")
+        
+        # Test SendGrid
+        if SENDGRID_API_KEY:
+            print("✅ SendGrid configured")
+        
+        print(f"✅ Server started successfully")
+        print(f"📧 Sender email: {SENDER_EMAIL}")
+        
     except Exception as e:
         print(f"❌ Startup error: {e}")
 
+@app.on_event("shutdown")
+async def shutdown():
+    if mongo_client:
+        mongo_client.close()
+        print("MongoDB connection closed")
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8001)))
