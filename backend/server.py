@@ -1089,6 +1089,11 @@ async def startup():
         await db.company_settings.create_index([("user_id", 1)])
         await db.payment_transactions.create_index([("session_id", 1)])
         await db.payment_transactions.create_index([("user_id", 1)])
+        await db.invoices.create_index([("user_id", 1)])
+        await db.invoices.create_index([("invoice_number", 1)])
+        await db.quotes.create_index([("user_id", 1)])
+        await db.employees.create_index([("user_id", 1)])
+        await db.expenses.create_index([("user_id", 1)])
         print("✅ Indexes created")
         
         # Test Stripe
