@@ -11,12 +11,7 @@ import uuid
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 import resend
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout, 
-    CheckoutSessionResponse, 
-    CheckoutStatusResponse, 
-    CheckoutSessionRequest
-)
+import stripe as stripe_lib
 
 # Load environment
 load_dotenv()
