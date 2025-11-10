@@ -856,6 +856,31 @@ async def create_product(product_data: dict, current_user: User = Depends(get_cu
     new_product.pop('_id', None)
     return new_product
 
+@app.put("/api/products/{product_id}")
+async def update_product(
+    product_id: str,
+    product_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Update product"""
+    await db.products.update_one(
+        {"id": product_id, "user_id": current_user.id},
+        {"$set": product_data}
+    )
+    
+    product = await db.products.find_one({"id": product_id, "user_id": current_user.id})
+    if not product:
+        raise HTTPException(404, "Produit non trouvé")
+    
+    product.pop('_id', None)
+    return product
+
+@app.delete("/api/products/{product_id}")
+async def delete_product(product_id: str, current_user: User = Depends(get_current_user)):
+    """Delete product"""
+    await db.products.delete_one({"id": product_id, "user_id": current_user.id})
+    return {"message": "Produit supprimé"}
+
 # Password Change Route
 @app.post("/api/auth/change-password")
 async def change_password(
