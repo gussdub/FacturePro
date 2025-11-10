@@ -541,42 +541,135 @@ const Layout = ({ currentRoute, navigate, children }) => {
                 />
               </div>
 
-              {/* User Avatar */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '8px 12px',
-                borderRadius: '8px',
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0'
-              }}>
-                <div style={{
-                  width: '32px', height: '32px',
-                  background: settings?.logo_url ? 'white' : '#3b82f6',
-                  borderRadius: '50%',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center'
-                }}>
-                  {settings?.logo_url ? (
-                    <img 
-                      src={settings.logo_url} 
-                      alt="Logo" 
-                      style={{
-                        width: '28px', height: '28px',
-                        objectFit: 'contain', borderRadius: '50%'
+              {/* User Avatar with Dropdown */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setUserMenuOpen(!userMenuOpen)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{
+                    width: '32px', height: '32px',
+                    background: settings?.logo_url ? 'white' : '#3b82f6',
+                    borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  }}>
+                    {settings?.logo_url ? (
+                      <img 
+                        src={settings.logo_url} 
+                        alt="Logo" 
+                        style={{
+                          width: '28px', height: '28px',
+                          objectFit: 'contain', borderRadius: '50%'
+                        }}
+                      />
+                    ) : (
+                      <span style={{
+                        color: 'white', fontSize: '14px', fontWeight: '700'
+                      }}>
+                        {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>
+                    {user?.company_name}
+                  </div>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+
+                {/* Dropdown Menu */}
+                {userMenuOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '8px',
+                    width: '220px',
+                    background: 'white',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
+                    zIndex: 50
+                  }}>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        navigate('/change-password');
                       }}
-                    />
-                  ) : (
-                    <span style={{
-                      color: 'white', fontSize: '14px', fontWeight: '700'
-                    }}>
-                      {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>
-                  {user?.company_name}
-                </div>
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                        background: 'white',
+                        border: 'none',
+                        borderBottom: '1px solid #e2e8f0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOut={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      🔒 Changer le mot de passe
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        navigate('/billing');
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                        background: 'white',
+                        border: 'none',
+                        borderBottom: '1px solid #e2e8f0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOut={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      💳 Facturation
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        logout();
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                        background: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        color: '#ef4444',
+                        borderRadius: '0 0 8px 8px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.background = '#fef2f2'}
+                      onMouseOut={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      🚪 Déconnexion
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
