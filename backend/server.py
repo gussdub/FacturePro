@@ -764,14 +764,297 @@ async def change_password(
         print(f"Change password error: {e}")
         raise HTTPException(500, "Erreur lors du changement de mot de passe")
 
-# Placeholder routes (will be fully implemented)
+# Invoice Routes
 @app.get("/api/invoices")
 async def get_invoices(current_user: User = Depends(get_current_user)):
-    return []
+    """Get all invoices for current user"""
+    invoices = []
+    cursor = db.invoices.find({"user_id": current_user.id})
+    async for invoice in cursor:
+        invoice.pop('_id', None)
+        invoices.append(invoice)
+    return invoices
 
-@app.get("/api/quotes") 
+@app.get("/api/invoices/{invoice_id}")
+async def get_invoice(invoice_id: str, current_user: User = Depends(get_current_user)):
+    """Get specific invoice"""
+    invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
+    if not invoice:
+        raise HTTPException(404, "Facture non trouvée")
+    invoice.pop('_id', None)
+    return invoice
+
+@app.post("/api/invoices")
+async def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user)):
+    """Create new invoice"""
+    # Generate invoice number
+    count = await db.invoices.count_documents({"user_id": current_user.id})
+    invoice_number = f"INV-{count + 1:05d}"
+    
+    # Calculate totals
+    items = invoice_data.get("items", [])
+    subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
+    tax_total = sum(item["quantity"] * item["unit_price"] * item.get("tax_rate", 0) / 100 for item in items)
+    discount = invoice_data.get("discount", 0)
+    total = subtotal + tax_total - discount
+    
+    invoice_id = str(uuid.uuid4())
+    new_invoice = {
+        "id": invoice_id,
+        "user_id": current_user.id,
+        "invoice_number": invoice_number,
+        "client_id": invoice_data.get("client_id"),
+        "client_name": invoice_data.get("client_name"),
+        "client_email": invoice_data.get("client_email"),
+        "client_address": invoice_data.get("client_address"),
+        "items": items,
+        "subtotal": subtotal,
+        "tax_total": tax_total,
+        "discount": discount,
+        "total": total,
+        "status": invoice_data.get("status", "draft"),
+        "issue_date": datetime.fromisoformat(invoice_data.get("issue_date")) if invoice_data.get("issue_date") else datetime.now(timezone.utc),
+        "due_date": datetime.fromisoformat(invoice_data.get("due_date")) if invoice_data.get("due_date") else datetime.now(timezone.utc) + timedelta(days=30),
+        "notes": invoice_data.get("notes"),
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db.invoices.insert_one(new_invoice)
+    new_invoice.pop('_id', None)
+    return new_invoice
+
+@app.put("/api/invoices/{invoice_id}")
+async def update_invoice(
+    invoice_id: str,
+    invoice_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Update invoice"""
+    # Recalculate totals
+    items = invoice_data.get("items", [])
+    subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
+    tax_total = sum(item["quantity"] * item["unit_price"] * item.get("tax_rate", 0) / 100 for item in items)
+    discount = invoice_data.get("discount", 0)
+    total = subtotal + tax_total - discount
+    
+    update_data = {
+        **invoice_data,
+        "subtotal": subtotal,
+        "tax_total": tax_total,
+        "total": total
+    }
+    
+    await db.invoices.update_one(
+        {"id": invoice_id, "user_id": current_user.id},
+        {"$set": update_data}
+    )
+    
+    invoice = await db.invoices.find_one({"id": invoice_id})
+    invoice.pop('_id', None)
+    return invoice
+
+@app.delete("/api/invoices/{invoice_id}")
+async def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user)):
+    """Delete invoice"""
+    await db.invoices.delete_one({"id": invoice_id, "user_id": current_user.id})
+    return {"message": "Facture supprimée"}
+
+@app.post("/api/invoices/{invoice_id}/send-email")
+async def send_invoice_email(
+    invoice_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user)
+):
+    """Send invoice by email"""
+    invoice = await db.invoices.find_one({"id": invoice_id, "user_id": current_user.id})
+    if not invoice:
+        raise HTTPException(404, "Facture non trouvée")
+    
+    # Get company settings for sender info
+    settings = await db.company_settings.find_one({"user_id": current_user.id})
+    
+    # Build email HTML
+    html_content = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>Facture #{invoice['invoice_number']}</h2>
+            <p>Bonjour {invoice['client_name']},</p>
+            <p>Veuillez trouver ci-joint votre facture.</p>
+            
+            <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+                <thead>
+                    <tr style="background: #f3f4f6;">
+                        <th style="padding: 10px; text-align: left;">Description</th>
+                        <th style="padding: 10px; text-align: right;">Quantité</th>
+                        <th style="padding: 10px; text-align: right;">Prix unitaire</th>
+                        <th style="padding: 10px; text-align: right;">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+    """
+    
+    for item in invoice['items']:
+        html_content += f"""
+                    <tr>
+                        <td style="padding: 10px; border-top: 1px solid #e5e7eb;">{item['description']}</td>
+                        <td style="padding: 10px; border-top: 1px solid #e5e7eb; text-align: right;">{item['quantity']}</td>
+                        <td style="padding: 10px; border-top: 1px solid #e5e7eb; text-align: right;">{item['unit_price']:.2f} $</td>
+                        <td style="padding: 10px; border-top: 1px solid #e5e7eb; text-align: right;">{item['quantity'] * item['unit_price']:.2f} $</td>
+                    </tr>
+        """
+    
+    html_content += f"""
+                </tbody>
+            </table>
+            
+            <div style="text-align: right; margin: 20px 0;">
+                <p><strong>Sous-total:</strong> {invoice['subtotal']:.2f} $</p>
+                <p><strong>Taxes:</strong> {invoice['tax_total']:.2f} $</p>
+                <p><strong>Total:</strong> {invoice['total']:.2f} $</p>
+            </div>
+            
+            <p>Merci de votre confiance !</p>
+            <p><strong>{settings.get('company_name', current_user.company_name) if settings else current_user.company_name}</strong></p>
+        </body>
+    </html>
+    """
+    
+    # Send email
+    background_tasks.add_task(
+        send_email,
+        invoice['client_email'],
+        f"Facture #{invoice['invoice_number']} - {current_user.company_name}",
+        html_content
+    )
+    
+    # Update invoice status to "sent"
+    await db.invoices.update_one(
+        {"id": invoice_id},
+        {"$set": {"status": "sent"}}
+    )
+    
+    return {"message": "Facture envoyée par email"}
+
+# Quote Routes
+@app.get("/api/quotes")
 async def get_quotes(current_user: User = Depends(get_current_user)):
-    return []
+    """Get all quotes for current user"""
+    quotes = []
+    cursor = db.quotes.find({"user_id": current_user.id})
+    async for quote in cursor:
+        quote.pop('_id', None)
+        quotes.append(quote)
+    return quotes
+
+@app.post("/api/quotes")
+async def create_quote(quote_data: dict, current_user: User = Depends(get_current_user)):
+    """Create new quote"""
+    # Generate quote number
+    count = await db.quotes.count_documents({"user_id": current_user.id})
+    quote_number = f"QUO-{count + 1:05d}"
+    
+    # Calculate totals
+    items = quote_data.get("items", [])
+    subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
+    tax_total = sum(item["quantity"] * item["unit_price"] * item.get("tax_rate", 0) / 100 for item in items)
+    discount = quote_data.get("discount", 0)
+    total = subtotal + tax_total - discount
+    
+    quote_id = str(uuid.uuid4())
+    new_quote = {
+        "id": quote_id,
+        "user_id": current_user.id,
+        "quote_number": quote_number,
+        "client_id": quote_data.get("client_id"),
+        "client_name": quote_data.get("client_name"),
+        "client_email": quote_data.get("client_email"),
+        "client_address": quote_data.get("client_address"),
+        "items": items,
+        "subtotal": subtotal,
+        "tax_total": tax_total,
+        "discount": discount,
+        "total": total,
+        "status": quote_data.get("status", "draft"),
+        "valid_until": datetime.fromisoformat(quote_data.get("valid_until")) if quote_data.get("valid_until") else datetime.now(timezone.utc) + timedelta(days=30),
+        "notes": quote_data.get("notes"),
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db.quotes.insert_one(new_quote)
+    new_quote.pop('_id', None)
+    return new_quote
+
+@app.delete("/api/quotes/{quote_id}")
+async def delete_quote(quote_id: str, current_user: User = Depends(get_current_user)):
+    """Delete quote"""
+    await db.quotes.delete_one({"id": quote_id, "user_id": current_user.id})
+    return {"message": "Soumission supprimée"}
+
+# Employee Routes
+@app.get("/api/employees")
+async def get_employees(current_user: User = Depends(get_current_user)):
+    """Get all employees"""
+    employees = []
+    cursor = db.employees.find({"user_id": current_user.id})
+    async for employee in cursor:
+        employee.pop('_id', None)
+        employees.append(employee)
+    return employees
+
+@app.post("/api/employees")
+async def create_employee(employee_data: dict, current_user: User = Depends(get_current_user)):
+    """Create new employee"""
+    employee_id = str(uuid.uuid4())
+    new_employee = {
+        "id": employee_id,
+        "user_id": current_user.id,
+        **employee_data,
+        "is_active": employee_data.get("is_active", True),
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db.employees.insert_one(new_employee)
+    new_employee.pop('_id', None)
+    return new_employee
+
+@app.delete("/api/employees/{employee_id}")
+async def delete_employee(employee_id: str, current_user: User = Depends(get_current_user)):
+    """Delete employee"""
+    await db.employees.delete_one({"id": employee_id, "user_id": current_user.id})
+    return {"message": "Employé supprimé"}
+
+# Expense Routes
+@app.get("/api/expenses")
+async def get_expenses(current_user: User = Depends(get_current_user)):
+    """Get all expenses"""
+    expenses = []
+    cursor = db.expenses.find({"user_id": current_user.id})
+    async for expense in cursor:
+        expense.pop('_id', None)
+        expenses.append(expense)
+    return expenses
+
+@app.post("/api/expenses")
+async def create_expense(expense_data: dict, current_user: User = Depends(get_current_user)):
+    """Create new expense"""
+    expense_id = str(uuid.uuid4())
+    new_expense = {
+        "id": expense_id,
+        "user_id": current_user.id,
+        **expense_data,
+        "date": datetime.fromisoformat(expense_data.get("date")) if expense_data.get("date") else datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    await db.expenses.insert_one(new_expense)
+    new_expense.pop('_id', None)
+    return new_expense
+
+@app.delete("/api/expenses/{expense_id}")
+async def delete_expense(expense_id: str, current_user: User = Depends(get_current_user)):
+    """Delete expense"""
+    await db.expenses.delete_one({"id": expense_id, "user_id": current_user.id})
+    return {"message": "Dépense supprimée"}
 
 # CORS
 app.add_middleware(
