@@ -359,15 +359,25 @@ const Layout = ({ currentRoute, navigate, children }) => {
                 fill="none"
                 style={{ display: settings?.logo_url ? 'none' : 'block' }}
               >
-                {/* F Letter */}
-                <rect x="8" y="8" width="24" height="24" rx="4" fill="url(#gradient1)" />
-                <path d="M16 14h10M16 14v12M16 20h8" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                {/* P Letter - stylized as document corner */}
-                <path d="M24 10 L30 10 L30 20 L28 22 L24 22 Z" fill="rgba(255,255,255,0.3)" />
+                {/* Document/Invoice shape */}
+                <rect x="10" y="6" width="20" height="28" rx="2" fill="url(#gradient1)" />
+                {/* Wavy bottom edge for invoice effect */}
+                <path d="M10 34 L12 32 L14 34 L16 32 L18 34 L20 32 L22 34 L24 32 L26 34 L28 32 L30 34 V32 H10 Z" fill="url(#gradient2)" />
+                {/* Lines on invoice */}
+                <line x1="14" y1="12" x2="26" y2="12" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.9"/>
+                <line x1="14" y1="16" x2="26" y2="16" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7"/>
+                <line x1="14" y1="20" x2="22" y2="20" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7"/>
+                {/* Dollar sign */}
+                <circle cx="20" cy="26" r="3.5" fill="white" opacity="0.95"/>
+                <text x="20" y="28.5" fontSize="6" fontWeight="bold" fill="#3b82f6" textAnchor="middle" fontFamily="Arial, sans-serif">$</text>
                 <defs>
-                  <linearGradient id="gradient1" x1="8" y1="8" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                  <linearGradient id="gradient1" x1="10" y1="6" x2="30" y2="34" gradientUnits="userSpaceOnUse">
                     <stop offset="0%" stopColor="#3b82f6"/>
-                    <stop offset="100%" stopColor="#1d4ed8"/>
+                    <stop offset="100%" stopColor="#1e40af"/>
+                  </linearGradient>
+                  <linearGradient id="gradient2" x1="10" y1="32" x2="30" y2="34" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stopColor="#1e40af"/>
+                    <stop offset="100%" stopColor="#1e3a8a"/>
                   </linearGradient>
                 </defs>
               </svg>
