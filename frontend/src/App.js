@@ -5186,14 +5186,6 @@ const BillingPage = () => {
   );
 };
 
-const ExportPage = () => (
-  <div style={{ textAlign: 'center', padding: '60px' }}>
-    <div style={{ fontSize: '80px', marginBottom: '24px' }}>📊</div>
-    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Exports</h2>
-    <p style={{ color: '#6b7280', fontSize: '18px' }}>Exportez vos données en PDF, Excel, CSV</p>
-  </div>
-);
-
 const ExportPage = () => {
   const [dataType, setDataType] = useState('invoices');
   const [format, setFormat] = useState('csv');
