@@ -742,14 +742,14 @@ const LoginPage = () => {
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(to-br, #f1f5f9, #e0e7ff, #c7d2fe)',
+      background: 'linear-gradient(to-br, #f0fdfa, #ccfbf1, #99f6e4)',
       display: 'flex',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
       {/* Left Hero Section - DESIGN ORIGINAL */}
       <div style={{
         width: '50%',
-        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
+        background: 'linear-gradient(135deg, #0d9488, #06b6d4)',
         position: 'relative',
         overflow: 'hidden',
         display: 'flex',
@@ -767,7 +767,7 @@ const LoginPage = () => {
         <div style={{
           position: 'absolute', bottom: '80px', right: '80px',
           width: '384px', height: '384px',
-          background: 'rgba(59,130,246,0.2)',
+          background: 'rgba(34,211,238,0.2)',
           borderRadius: '50%', filter: 'blur(48px)'
         }}></div>
         
