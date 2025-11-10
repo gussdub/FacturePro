@@ -109,7 +109,10 @@ const NotificationsDropdown = ({ isOpen, onClose }) => {
 
 // Auth Provider
 const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    const savedUser = localStorage.getItem('user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
@@ -118,10 +121,18 @@ const AuthProvider = ({ children }) => {
       if (token) {
         try {
           axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-          // Could verify token here if needed
+          // Load user from localStorage if not loaded
+          if (!user) {
+            const savedUser = localStorage.getItem('user');
+            if (savedUser) {
+              setUser(JSON.parse(savedUser));
+            }
+          }
         } catch (error) {
           localStorage.removeItem('token');
+          localStorage.removeItem('user');
           setToken(null);
+          setUser(null);
         }
       }
       setLoading(false);
