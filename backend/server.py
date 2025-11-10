@@ -379,11 +379,19 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
         
         # Send welcome email (background task)
         if not is_lifetime_free:
-            background_tasks.add_task(
-                send_email,
-                user_data.email,
-                "Bienvenue sur FacturePro !",
-                f"""
+            if extended_free_until:
+                welcome_message = f"""
+                <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2>Bienvenue sur FacturePro !</h2>
+                        <p>Vous bénéficiez d'un accès gratuit jusqu'au <strong>{extended_free_until.strftime('%d/%m/%Y')}</strong>.</p>
+                        <p>Vous pouvez créer vos factures, gérer vos clients et bien plus encore.</p>
+                        <p>Profitez pleinement de toutes les fonctionnalités !</p>
+                    </body>
+                </html>
+                """
+            else:
+                welcome_message = f"""
                 <html>
                     <body style="font-family: Arial, sans-serif;">
                         <h2>Bienvenue sur FacturePro !</h2>
@@ -393,6 +401,12 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
                     </body>
                 </html>
                 """
+            
+            background_tasks.add_task(
+                send_email,
+                user_data.email,
+                "Bienvenue sur FacturePro !",
+                welcome_message
             )
         
         user_obj = User(
