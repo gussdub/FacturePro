@@ -1,0 +1,2 @@
+// Code trop long pour être inclus directement
+// Sera ajouté via bulk file writer
