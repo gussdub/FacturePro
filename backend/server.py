@@ -98,21 +98,20 @@ class SubscriptionRequest(BaseModel):
 
 # Email Service
 async def send_email(to_email: str, subject: str, html_content: str):
-    """Send email via SendGrid"""
+    """Send email via Resend"""
     try:
-        message = Mail(
-            from_email=SENDER_EMAIL,
-            to_emails=to_email,
-            subject=subject,
-            html_content=html_content
-        )
+        params = {
+            "from": SENDER_EMAIL,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_content
+        }
         
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        response = sg.send(message)
-        print(f"Email sent to {to_email}: {response.status_code}")
-        return response.status_code == 202
+        email = resend.Emails.send(params)
+        print(f"✅ Email sent to {to_email}: {email}")
+        return True
     except Exception as e:
-        print(f"Error sending email: {e}")
+        print(f"❌ Error sending email: {e}")
         return False
 
 async def send_trial_end_notification(user_email: str, days_remaining: int):
