@@ -1045,6 +1045,169 @@ async def send_invoice_email(
     
     return {"message": "Facture envoyée par email"}
 
+@app.post("/api/invoices/generate-recurring")
+async def generate_recurring_invoices(current_user: User = Depends(get_current_user)):
+    """Generate recurring invoices that are due"""
+    try:
+        now = datetime.now(timezone.utc)
+        
+        # Find all recurring invoices that need to be generated
+        recurring_invoices = await db.invoices.find({
+            "user_id": current_user.id,
+            "is_recurring": True,
+            "next_generation_date": {"$lte": now}
+        }).to_list(length=None)
+        
+        generated_count = 0
+        
+        for template_invoice in recurring_invoices:
+            # Calculate next invoice number
+            last_invoice = await db.invoices.find_one(
+                {"user_id": current_user.id},
+                sort=[("invoice_number", -1)]
+            )
+            
+            next_number = 1
+            if last_invoice and last_invoice.get("invoice_number"):
+                try:
+                    last_num = int(last_invoice["invoice_number"].split("-")[1])
+                    next_number = last_num + 1
+                except:
+                    pass
+            
+            # Create new invoice
+            new_invoice = {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user.id,
+                "invoice_number": f"INV-{str(next_number).zfill(4)}",
+                "client_id": template_invoice["client_id"],
+                "client_name": template_invoice["client_name"],
+                "client_email": template_invoice["client_email"],
+                "client_address": template_invoice.get("client_address"),
+                "items": template_invoice["items"],
+                "subtotal": template_invoice["subtotal"],
+                "tax_total": template_invoice["tax_total"],
+                "discount": template_invoice.get("discount", 0.0),
+                "total": template_invoice["total"],
+                "status": "draft",
+                "issue_date": now,
+                "due_date": now + timedelta(days=30),
+                "notes": template_invoice.get("notes"),
+                "created_at": now,
+                "is_recurring": False,
+                "parent_invoice_id": template_invoice["id"]
+            }
+            
+            await db.invoices.insert_one(new_invoice)
+            
+            # Send email automatically
+            try:
+                settings = await db.company_settings.find_one({"user_id": current_user.id})
+                
+                html_content = f"""
+                <html>
+                    <body style="font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto;">
+                        <div style="background: linear-gradient(135deg, #0d9488, #06b6d4); padding: 30px; border-radius: 12px 12px 0 0;">
+                            <h1 style="color: white; margin: 0;">Facture #{new_invoice['invoice_number']}</h1>
+                            <p style="color: white; margin: 10px 0 0 0;">Date: {now.strftime('%d/%m/%Y')}</p>
+                        </div>
+                        
+                        <div style="padding: 30px; background: white; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+                            <p style="font-size: 16px;">Bonjour {new_invoice['client_name']},</p>
+                            <p>Veuillez trouver ci-dessous votre facture récurrente.</p>
+                            
+                            <table style="width: 100%; border-collapse: collapse; margin: 30px 0;">
+                                <thead>
+                                    <tr style="background: #f0fdfa; border-bottom: 2px solid #0d9488;">
+                                        <th style="padding: 12px; text-align: left; color: #0d9488;">Description</th>
+                                        <th style="padding: 12px; text-align: center; color: #0d9488;">Qté</th>
+                                        <th style="padding: 12px; text-align: right; color: #0d9488;">Prix unitaire</th>
+                                        <th style="padding: 12px; text-align: right; color: #0d9488;">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                """
+                
+                for item in new_invoice['items']:
+                    item_total = item['quantity'] * item['unit_price']
+                    html_content += f"""
+                                    <tr style="border-bottom: 1px solid #e5e7eb;">
+                                        <td style="padding: 12px;">{item['description']}</td>
+                                        <td style="padding: 12px; text-align: center;">{item['quantity']}</td>
+                                        <td style="padding: 12px; text-align: right;">{item['unit_price']:.2f} $</td>
+                                        <td style="padding: 12px; text-align: right;">{item_total:.2f} $</td>
+                                    </tr>
+                    """
+                
+                html_content += f"""
+                                </tbody>
+                            </table>
+                            
+                            <div style="text-align: right; margin: 30px 0; padding: 20px; background: #f9fafb; border-radius: 8px;">
+                                <p style="margin: 5px 0;"><strong>Sous-total:</strong> {new_invoice['subtotal']:.2f} $</p>
+                                <p style="margin: 5px 0;"><strong>Taxes:</strong> {new_invoice['tax_total']:.2f} $</p>
+                                <p style="margin: 10px 0 0 0; font-size: 20px; color: #0d9488;"><strong>Total:</strong> {new_invoice['total']:.2f} $</p>
+                            </div>
+                            
+                            <p style="margin-top: 30px;">Date d'échéance: <strong>{new_invoice['due_date'].strftime('%d/%m/%Y')}</strong></p>
+                            
+                            <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+                            
+                            <p style="margin-top: 30px;">Merci de votre confiance !</p>
+                            <p style="color: #0d9488; font-weight: bold; font-size: 18px;">
+                                {settings.get('company_name', current_user.company_name) if settings else current_user.company_name}
+                            </p>
+                        </div>
+                    </body>
+                </html>
+                """
+                
+                resend.Emails.send({
+                    "from": SENDER_EMAIL,
+                    "to": new_invoice['client_email'],
+                    "subject": f"Facture #{new_invoice['invoice_number']} - {current_user.company_name}",
+                    "html": html_content
+                })
+                
+                # Update invoice status to sent
+                await db.invoices.update_one(
+                    {"id": new_invoice["id"]},
+                    {"$set": {"status": "sent"}}
+                )
+                
+            except Exception as e:
+                print(f"Error sending recurring invoice email: {e}")
+            
+            # Calculate next generation date based on frequency
+            frequency = template_invoice.get("frequency", "monthly")
+            if frequency == "weekly":
+                next_date = now + timedelta(weeks=1)
+            elif frequency == "monthly":
+                next_date = now + timedelta(days=30)
+            elif frequency == "quarterly":
+                next_date = now + timedelta(days=90)
+            elif frequency == "yearly":
+                next_date = now + timedelta(days=365)
+            else:
+                next_date = now + timedelta(days=30)
+            
+            # Update template invoice with next generation date
+            await db.invoices.update_one(
+                {"id": template_invoice["id"]},
+                {"$set": {"next_generation_date": next_date}}
+            )
+            
+            generated_count += 1
+        
+        return {
+            "message": f"{generated_count} facture(s) récurrente(s) générée(s) et envoyée(s)",
+            "generated_count": generated_count
+        }
+        
+    except Exception as e:
+        print(f"Error generating recurring invoices: {e}")
+        raise HTTPException(500, "Erreur lors de la génération des factures récurrentes")
+
 # Quote Routes
 @app.get("/api/quotes")
 async def get_quotes(current_user: User = Depends(get_current_user)):
