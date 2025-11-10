@@ -3204,20 +3204,58 @@ const QuotesPage = () => {
                   </td>
                   <td style={{ padding: '16px' }}>{getStatusBadge(quote.status)}</td>
                   <td style={{ padding: '16px', textAlign: 'center' }}>
-                    <button
-                      onClick={() => openModal(quote)}
-                      style={{ background: '#8b5cf6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}
-                      title="Modifier"
-                    >
-                      ✏️
-                    </button>
-                    <button
-                      onClick={() => handleDelete(quote.id)}
-                      style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
-                      title="Supprimer"
-                    >
-                      🗑️
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => openModal(quote)}
+                        style={{ background: '#8b5cf6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                        title="Modifier"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (window.confirm('Envoyer cette soumission au client par email ?')) {
+                            try {
+                              await axios.post(`${BACKEND_URL}/api/quotes/${quote.id}/send-email`);
+                              setSuccess('Soumission envoyée au client !');
+                              fetchData();
+                            } catch (error) {
+                              setError('Erreur lors de l\'envoi de la soumission');
+                            }
+                          }
+                        }}
+                        style={{ background: '#0d9488', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                        title="Envoyer au client"
+                      >
+                        📧
+                      </button>
+                      {quote.status === 'accepted' && (
+                        <button
+                          onClick={async () => {
+                            if (window.confirm('Convertir cette soumission en facture ?')) {
+                              try {
+                                await axios.post(`${BACKEND_URL}/api/quotes/${quote.id}/convert-to-invoice`);
+                                setSuccess('Soumission convertie en facture avec succès !');
+                                fetchData();
+                              } catch (error) {
+                                setError('Erreur lors de la conversion');
+                              }
+                            }
+                          }}
+                          style={{ background: '#10b981', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                          title="Convertir en facture"
+                        >
+                          💼
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDelete(quote.id)}
+                        style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                        title="Supprimer"
+                      >
+                        🗑️
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
