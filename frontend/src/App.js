@@ -1008,10 +1008,10 @@ const LoginPage = () => {
                   width: '100%', height: '48px', fontSize: '16px', fontWeight: '700',
                   background: loading 
                     ? '#94a3b8' 
-                    : 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
+                    : 'linear-gradient(135deg, #0d9488 0%, #06b6d4 100%)',
                   color: 'white', border: 'none', borderRadius: '12px',
                   cursor: loading ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 10px 25px rgba(67,56,202,0.4)'
+                  boxShadow: '0 10px 25px rgba(13,148,136,0.4)'
                 }}
               >
                 {loading ? (
