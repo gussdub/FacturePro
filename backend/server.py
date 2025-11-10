@@ -1293,6 +1293,290 @@ async def delete_quote(quote_id: str, current_user: User = Depends(get_current_u
     await db.quotes.delete_one({"id": quote_id, "user_id": current_user.id})
     return {"message": "Soumission supprimée"}
 
+@app.post("/api/quotes/{quote_id}/convert-to-invoice")
+async def convert_quote_to_invoice(
+    quote_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Convert a quote to an invoice"""
+    try:
+        # Get the quote
+        quote = await db.quotes.find_one({"id": quote_id, "user_id": current_user.id})
+        if not quote:
+            raise HTTPException(404, "Soumission non trouvée")
+        
+        # Generate invoice number
+        last_invoice = await db.invoices.find_one(
+            {"user_id": current_user.id},
+            sort=[("invoice_number", -1)]
+        )
+        
+        next_number = 1
+        if last_invoice and last_invoice.get("invoice_number"):
+            try:
+                last_num = int(last_invoice["invoice_number"].split("-")[1])
+                next_number = last_num + 1
+            except:
+                pass
+        
+        invoice_number = f"INV-{str(next_number).zfill(4)}"
+        
+        # Create invoice from quote
+        now = datetime.now(timezone.utc)
+        new_invoice = {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user.id,
+            "invoice_number": invoice_number,
+            "client_id": quote.get("client_id"),
+            "client_name": quote.get("client_name"),
+            "client_email": quote.get("client_email"),
+            "client_address": quote.get("client_address"),
+            "items": quote.get("items"),
+            "subtotal": quote.get("subtotal"),
+            "tax_total": quote.get("tax_total"),
+            "discount": quote.get("discount", 0.0),
+            "total": quote.get("total"),
+            "status": "draft",
+            "issue_date": now,
+            "due_date": now + timedelta(days=30),
+            "notes": quote.get("notes"),
+            "created_at": now,
+            "is_recurring": False,
+            "frequency": None,
+            "next_generation_date": None,
+            "parent_invoice_id": None
+        }
+        
+        await db.invoices.insert_one(new_invoice)
+        
+        # Update quote status to "accepted"
+        await db.quotes.update_one(
+            {"id": quote_id},
+            {"$set": {"status": "accepted"}}
+        )
+        
+        new_invoice.pop('_id', None)
+        return {"message": "Soumission convertie en facture", "invoice": new_invoice}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error converting quote to invoice: {e}")
+        raise HTTPException(500, "Erreur lors de la conversion")
+
+@app.post("/api/quotes/{quote_id}/send-email")
+async def send_quote_email(
+    quote_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    """Send quote by email with acceptance link"""
+    try:
+        quote = await db.quotes.find_one({"id": quote_id, "user_id": current_user.id})
+        if not quote:
+            raise HTTPException(404, "Soumission non trouvée")
+        
+        # Get company settings
+        settings = await db.company_settings.find_one({"user_id": current_user.id})
+        company_name = settings.get('company_name', current_user.company_name) if settings else current_user.company_name
+        
+        # Generate acceptance token (valid for 30 days)
+        accept_token = str(uuid.uuid4())
+        accept_expiry = datetime.now(timezone.utc) + timedelta(days=30)
+        
+        # Store acceptance token
+        await db.quote_tokens.update_one(
+            {"quote_id": quote_id},
+            {
+                "$set": {
+                    "token": accept_token,
+                    "expiry": accept_expiry,
+                    "used": False
+                }
+            },
+            upsert=True
+        )
+        
+        # Get origin for acceptance link
+        origin = request.headers.get("origin", "http://localhost:3000")
+        accept_url = f"{origin}/accept-quote/{accept_token}"
+        
+        # Build email HTML
+        html_content = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto;">
+                <div style="background: linear-gradient(135deg, #0d9488, #06b6d4); padding: 30px; border-radius: 12px 12px 0 0;">
+                    <h1 style="color: white; margin: 0;">Soumission #{quote['quote_number']}</h1>
+                    <p style="color: white; margin: 10px 0 0 0;">De: {company_name}</p>
+                </div>
+                
+                <div style="padding: 30px; background: white; border: 1px solid #e5e7eb; border-top: none;">
+                    <p style="font-size: 16px;">Bonjour {quote['client_name']},</p>
+                    <p>Veuillez trouver ci-dessous votre soumission.</p>
+                    
+                    <table style="width: 100%; border-collapse: collapse; margin: 30px 0;">
+                        <thead>
+                            <tr style="background: #f0fdfa; border-bottom: 2px solid #0d9488;">
+                                <th style="padding: 12px; text-align: left; color: #0d9488;">Description</th>
+                                <th style="padding: 12px; text-align: center; color: #0d9488;">Qté</th>
+                                <th style="padding: 12px; text-align: right; color: #0d9488;">Prix unitaire</th>
+                                <th style="padding: 12px; text-align: right; color: #0d9488;">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        """
+        
+        for item in quote['items']:
+            item_total = item['quantity'] * item['unit_price']
+            html_content += f"""
+                            <tr style="border-bottom: 1px solid #e5e7eb;">
+                                <td style="padding: 12px;">{item['description']}</td>
+                                <td style="padding: 12px; text-align: center;">{item['quantity']}</td>
+                                <td style="padding: 12px; text-align: right;">{item['unit_price']:.2f} $</td>
+                                <td style="padding: 12px; text-align: right;">{item_total:.2f} $</td>
+                            </tr>
+            """
+        
+        valid_until_str = quote['valid_until'].strftime('%d/%m/%Y') if isinstance(quote['valid_until'], datetime) else 'N/A'
+        
+        html_content += f"""
+                        </tbody>
+                    </table>
+                    
+                    <div style="text-align: right; margin: 30px 0; padding: 20px; background: #f9fafb; border-radius: 8px;">
+                        <p style="margin: 5px 0;"><strong>Sous-total:</strong> {quote['subtotal']:.2f} $</p>
+                        <p style="margin: 5px 0;"><strong>Taxes:</strong> {quote['tax_total']:.2f} $</p>
+                        <p style="margin: 10px 0 0 0; font-size: 20px; color: #0d9488;"><strong>Total:</strong> {quote['total']:.2f} $</p>
+                    </div>
+                    
+                    <p style="margin-top: 30px;">Valide jusqu'au: <strong>{valid_until_str}</strong></p>
+                    
+                    <div style="text-align: center; margin: 40px 0;">
+                        <a href="{accept_url}" style="display: inline-block; background: linear-gradient(135deg, #0d9488, #06b6d4); color: white; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; box-shadow: 0 4px 12px rgba(13,148,136,0.4);">
+                            ✅ Accepter cette soumission
+                        </a>
+                    </div>
+                    
+                    <p style="font-size: 14px; color: #6b7280; text-align: center;">En cliquant sur ce bouton, vous acceptez les termes de cette soumission.</p>
+                    
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+                    
+                    <p style="margin-top: 30px;">Merci de votre confiance !</p>
+                    <p style="color: #0d9488; font-weight: bold; font-size: 18px;">{company_name}</p>
+                </div>
+            </body>
+        </html>
+        """
+        
+        # Send email
+        resend.Emails.send({
+            "from": SENDER_EMAIL,
+            "to": quote['client_email'],
+            "subject": f"Soumission #{quote['quote_number']} - {company_name}",
+            "html": html_content
+        })
+        
+        # Update quote status to "sent"
+        await db.quotes.update_one(
+            {"id": quote_id},
+            {"$set": {"status": "sent"}}
+        )
+        
+        return {"message": "Soumission envoyée par email"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error sending quote email: {e}")
+        raise HTTPException(500, "Erreur lors de l'envoi de l'email")
+
+@app.get("/api/quotes/accept/{token}")
+async def accept_quote_by_token(token: str):
+    """Public endpoint to accept a quote via email link"""
+    try:
+        # Find token
+        token_record = await db.quote_tokens.find_one({"token": token, "used": False})
+        if not token_record:
+            raise HTTPException(404, "Lien invalide ou expiré")
+        
+        # Check expiry
+        if token_record["expiry"] < datetime.now(timezone.utc):
+            raise HTTPException(400, "Ce lien a expiré")
+        
+        # Get the quote
+        quote = await db.quotes.find_one({"id": token_record["quote_id"]})
+        if not quote:
+            raise HTTPException(404, "Soumission non trouvée")
+        
+        # Update quote status
+        await db.quotes.update_one(
+            {"id": token_record["quote_id"]},
+            {"$set": {"status": "accepted"}}
+        )
+        
+        # Mark token as used
+        await db.quote_tokens.update_one(
+            {"token": token},
+            {"$set": {"used": True}}
+        )
+        
+        # Get user info for confirmation email
+        user = await db.users.find_one({"id": quote["user_id"]})
+        if user:
+            # Send confirmation email to business owner
+            settings = await db.company_settings.find_one({"user_id": quote["user_id"]})
+            company_name = settings.get('company_name', user['company_name']) if settings else user['company_name']
+            
+            confirmation_html = f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+                    <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 30px; border-radius: 12px 12px 0 0;">
+                        <h1 style="color: white; margin: 0;">🎉 Soumission Acceptée !</h1>
+                    </div>
+                    
+                    <div style="padding: 30px; background: white; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+                        <p style="font-size: 16px;">Bonjour {company_name},</p>
+                        <p>Excellente nouvelle ! Votre client <strong>{quote['client_name']}</strong> a accepté la soumission suivante :</p>
+                        
+                        <div style="background: #f0fdf4; padding: 20px; border-radius: 8px; border-left: 4px solid #10b981; margin: 20px 0;">
+                            <p style="margin: 5px 0;"><strong>Numéro:</strong> {quote['quote_number']}</p>
+                            <p style="margin: 5px 0;"><strong>Client:</strong> {quote['client_name']}</p>
+                            <p style="margin: 5px 0;"><strong>Email:</strong> {quote['client_email']}</p>
+                            <p style="margin: 5px 0;"><strong>Montant:</strong> {quote['total']:.2f} $</p>
+                        </div>
+                        
+                        <p style="margin-top: 30px;">Vous pouvez maintenant convertir cette soumission en facture depuis votre tableau de bord.</p>
+                        
+                        <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+                        
+                        <p style="color: #6b7280; font-size: 12px;">FacturePro - Solution de facturation</p>
+                    </div>
+                </body>
+            </html>
+            """
+            
+            try:
+                resend.Emails.send({
+                    "from": SENDER_EMAIL,
+                    "to": user['email'],
+                    "subject": f"✅ Soumission {quote['quote_number']} acceptée par {quote['client_name']}",
+                    "html": confirmation_html
+                })
+            except Exception as e:
+                print(f"Error sending confirmation email: {e}")
+        
+        return {
+            "message": "Soumission acceptée avec succès !",
+            "quote_number": quote['quote_number'],
+            "client_name": quote['client_name']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error accepting quote: {e}")
+        raise HTTPException(500, "Erreur lors de l'acceptation de la soumission")
+
 # Employee Routes
 @app.get("/api/employees")
 async def get_employees(current_user: User = Depends(get_current_user)):
