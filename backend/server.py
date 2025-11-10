@@ -164,6 +164,10 @@ async def login(credentials: UserLogin):
         if not user:
             raise HTTPException(401, "Incorrect email or password")
         
+        print(f"DEBUG: User found: {user.get('email')}")
+        print(f"DEBUG: User has password: {'hashed_password' in user}")
+        print(f"DEBUG: User keys: {list(user.keys())}")
+        
         if not verify_password(credentials.password, user["hashed_password"]):
             raise HTTPException(401, "Incorrect email or password")
         
@@ -181,6 +185,8 @@ async def login(credentials: UserLogin):
         raise
     except Exception as e:
         print(f"Login error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(500, "Login failed")
 
 # Password Reset
