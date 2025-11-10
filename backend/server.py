@@ -27,6 +27,9 @@ SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'noreply@facturepro.ca')
 # Initialize Resend
 resend.api_key = RESEND_API_KEY
 
+# Initialize Stripe
+stripe_lib.api_key = STRIPE_API_KEY
+
 # FastAPI app
 app = FastAPI(title="FacturePro API", version="3.0.0")
 security = HTTPBearer()
