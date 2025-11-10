@@ -2393,7 +2393,11 @@ const ProductsPage = () => {
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
                 <button
                   type="button"
-                  onClick={() => setShowForm(false)}
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditingProduct(null);
+                    setFormData({ name: '', description: '', unit_price: '', unit: 'unité', category: '' });
+                  }}
                   style={{
                     background: 'white', color: '#374151', border: '1px solid #d1d5db',
                     padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
@@ -2409,7 +2413,7 @@ const ProductsPage = () => {
                     fontWeight: '600'
                   }}
                 >
-                  💾 Créer le produit
+                  {editingProduct ? '💾 Enregistrer les modifications' : '💾 Créer le produit'}
                 </button>
               </div>
             </form>
