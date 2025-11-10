@@ -327,8 +327,27 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
         user_id = str(uuid.uuid4())
         trial_end = datetime.now(timezone.utc) + timedelta(days=14)
         
-        # Check if user is gussdub@gmail.com for lifetime free
+        # Check for special free access
         is_lifetime_free = user_data.email == "gussdub@gmail.com"
+        
+        # Check for extended free access until end of 2026
+        extended_free_emails = {
+            "gignacarthur@gmail.com": datetime(2026, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        }
+        extended_free_until = extended_free_emails.get(user_data.email)
+        
+        if is_lifetime_free:
+            subscription_status = "active"
+            trial_end_date = None
+            subscription_plan = "lifetime"
+        elif extended_free_until:
+            subscription_status = "active"
+            trial_end_date = extended_free_until
+            subscription_plan = "free_extended"
+        else:
+            subscription_status = "trial"
+            trial_end_date = trial_end
+            subscription_plan = None
         
         new_user = {
             "id": user_id,
@@ -336,9 +355,9 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
             "company_name": user_data.company_name,
             "hashed_password": hash_password(user_data.password),
             "is_active": True,
-            "subscription_status": "active" if is_lifetime_free else "trial",
-            "trial_end_date": None if is_lifetime_free else trial_end,
-            "subscription_plan": "lifetime" if is_lifetime_free else None,
+            "subscription_status": subscription_status,
+            "trial_end_date": trial_end_date,
+            "subscription_plan": subscription_plan,
             "is_lifetime_free": is_lifetime_free,
             "created_at": datetime.now(timezone.utc)
         }
