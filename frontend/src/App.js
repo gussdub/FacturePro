@@ -353,17 +353,23 @@ const Layout = ({ currentRoute, navigate, children }) => {
                 />
               ) : null}
               <svg 
-                width="28" 
-                height="28" 
-                viewBox="0 0 24 24" 
-                fill="none" 
-                stroke="white" 
-                strokeWidth="2.5"
+                width="32" 
+                height="32" 
+                viewBox="0 0 40 40" 
+                fill="none"
                 style={{ display: settings?.logo_url ? 'none' : 'block' }}
               >
-                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-                <path d="M12 18V6"/>
+                {/* F Letter */}
+                <rect x="8" y="8" width="24" height="24" rx="4" fill="url(#gradient1)" />
+                <path d="M16 14h10M16 14v12M16 20h8" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                {/* P Letter - stylized as document corner */}
+                <path d="M24 10 L30 10 L30 20 L28 22 L24 22 Z" fill="rgba(255,255,255,0.3)" />
+                <defs>
+                  <linearGradient id="gradient1" x1="8" y1="8" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stopColor="#3b82f6"/>
+                    <stop offset="100%" stopColor="#1d4ed8"/>
+                  </linearGradient>
+                </defs>
               </svg>
             </div>
             <div>
