@@ -123,6 +123,10 @@ class Invoice(BaseModel):
     due_date: datetime
     notes: Optional[str] = None
     created_at: datetime
+    is_recurring: bool = False
+    frequency: Optional[str] = None  # weekly, monthly, quarterly, yearly
+    next_generation_date: Optional[datetime] = None
+    parent_invoice_id: Optional[str] = None  # For tracking recurring invoices
 
 class Quote(BaseModel):
     id: str
