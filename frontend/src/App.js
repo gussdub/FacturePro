@@ -1054,7 +1054,7 @@ const LoginPage = () => {
                   setFormData({ email: '', password: '', companyName: '' });
                 }}
                 style={{
-                  background: 'none', border: 'none', color: '#4338ca',
+                  background: 'none', border: 'none', color: '#0d9488',
                   fontSize: '16px', fontWeight: '600', cursor: 'pointer'
                 }}
               >
