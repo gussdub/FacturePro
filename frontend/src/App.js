@@ -3034,6 +3034,20 @@ const SettingsPage = () => {
                 type="tel"
                 value={settings.phone || ''}
                 onChange={(e) => setSettings(prev => ({ ...prev, phone: e.target.value }))}
+                placeholder="(514) 555-1234"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Adresse complète</label>
+              <input
+                type="text"
+                value={settings.address || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, address: e.target.value }))}
+                placeholder="123 Rue Principale"
                 style={{
                   width: '100%', padding: '12px', border: '1px solid #d1d5db',
                   borderRadius: '8px', boxSizing: 'border-box'
@@ -3046,6 +3060,33 @@ const SettingsPage = () => {
                 type="text"
                 value={settings.city || ''}
                 onChange={(e) => setSettings(prev => ({ ...prev, city: e.target.value }))}
+                placeholder="Montréal"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Code postal</label>
+              <input
+                type="text"
+                value={settings.postal_code || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, postal_code: e.target.value }))}
+                placeholder="H1A 1A1"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Pays</label>
+              <input
+                type="text"
+                value={settings.country || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, country: e.target.value }))}
+                placeholder="Canada"
                 style={{
                   width: '100%', padding: '12px', border: '1px solid #d1d5db',
                   borderRadius: '8px', boxSizing: 'border-box'
