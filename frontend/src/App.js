@@ -5449,7 +5449,7 @@ const ExportPage = () => {
           borderRadius: '8px'
         }}>
           <p style={{ margin: 0, fontSize: '14px', color: '#0369a1' }}>
-            💡 <strong>Astuce :</strong> Les exports CSV peuvent être ouverts directement dans Excel ou Google Sheets pour analyse et traitement.
+            💡 <strong>Astuce :</strong> Les exports CSV peuvent être ouverts dans Excel ou Google Sheets. Les exports PDF génèrent un fichier HTML que vous pouvez imprimer en PDF depuis votre navigateur.
           </p>
         </div>
       </div>
