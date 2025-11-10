@@ -1072,7 +1072,7 @@ const LoginPage = () => {
               fontSize: '14px', color: '#64748b'
             }}>
               En créant un compte, vous acceptez nos{' '}
-              <a href="#" style={{ color: '#4338ca', textDecoration: 'none' }}>
+              <a href="#" style={{ color: '#0d9488', textDecoration: 'none' }}>
                 conditions d'utilisation
               </a>{' '}
               et notre{' '}
