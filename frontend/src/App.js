@@ -2258,26 +2258,38 @@ const ProductsPage = () => {
                   </div>
                 </div>
                 
-                <button
-                  onClick={async () => {
-                    if (window.confirm('Supprimer ce produit ?')) {
-                      try {
-                        await axios.delete(`${BACKEND_URL}/api/products/${product.id}`);
-                        setSuccess('Produit supprimé');
-                        fetchProducts();
-                      } catch (error) {
-                        setError('Erreur suppression');
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={() => handleEdit(product)}
+                    style={{
+                      background: '#ede9fe', color: '#7c3aed', border: 'none',
+                      padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+                      fontSize: '12px', fontWeight: '600'
+                    }}
+                  >
+                    ✏️ Modifier
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (window.confirm('Supprimer ce produit ?')) {
+                        try {
+                          await axios.delete(`${BACKEND_URL}/api/products/${product.id}`);
+                          setSuccess('Produit supprimé');
+                          fetchProducts();
+                        } catch (error) {
+                          setError('Erreur suppression');
+                        }
                       }
-                    }
-                  }}
-                  style={{
-                    background: '#fef2f2', color: '#dc2626', border: 'none',
-                    padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
-                    fontSize: '12px'
-                  }}
-                >
-                  🗑️ Supprimer
-                </button>
+                    }}
+                    style={{
+                      background: '#fef2f2', color: '#dc2626', border: 'none',
+                      padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+                      fontSize: '12px', fontWeight: '600'
+                    }}
+                  >
+                    🗑️ Supprimer
+                  </button>
+                </div>
               </div>
             </div>
           ))}
