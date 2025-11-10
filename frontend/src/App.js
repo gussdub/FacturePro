@@ -5231,7 +5231,7 @@ const ExportPage = () => {
     <div style={{ maxWidth: '800px', margin: '0 auto' }}>
       <div style={{ marginBottom: '32px' }}>
         <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>📊 Exports</h1>
-        <p style={{ color: '#6b7280', margin: 0 }}>Exportez vos données en CSV ou JSON</p>
+        <p style={{ color: '#6b7280', margin: 0 }}>Exportez vos données en CSV ou PDF</p>
       </div>
 
       {error && (
