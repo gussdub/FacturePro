@@ -2950,12 +2950,48 @@ const SettingsPage = () => {
                     maxWidth: '200px',
                     maxHeight: '120px',
                     objectFit: 'contain',
-                  border: '1px solid #e5e7eb', borderRadius: '8px'
-                }}
-                onError={() => setError('Impossible de charger l\'image à cette URL')}
-              />
-            </div>
-          )}
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    marginBottom: '16px'
+                  }}
+                  onError={() => setError('Impossible de charger l\'image à cette URL')}
+                />
+                <br />
+                <label htmlFor="logo-upload" style={{
+                  display: 'inline-block',
+                  background: '#3b82f6',
+                  color: 'white',
+                  padding: '10px 20px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: '600',
+                  fontSize: '14px'
+                }}>
+                  🔄 Changer le logo
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettings(prev => ({ ...prev, logo_url: '' }));
+                    axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, { logo_url: '' });
+                  }}
+                  style={{
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    padding: '10px 20px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    marginLeft: '12px'
+                  }}
+                >
+                  🗑️ Supprimer
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Company Info */}
