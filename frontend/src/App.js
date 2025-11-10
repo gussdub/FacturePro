@@ -246,6 +246,12 @@ function App() {
     setCurrentRoute(path);
   };
 
+  // Handle public routes (no authentication required)
+  if (currentRoute.startsWith('/accept-quote/')) {
+    const token = currentRoute.split('/accept-quote/')[1];
+    return <AcceptQuotePage token={token} />;
+  }
+
   // Show login page if not authenticated
   if (!isAuthenticated) {
     return <LoginPage />;
