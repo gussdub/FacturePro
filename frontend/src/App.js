@@ -2591,7 +2591,7 @@ const InvoicesPage = () => {
           ...newItems[index],
           product_id: value,
           description: product.name,
-          unit_price: product.price
+          unit_price: product.unit_price
         };
       }
     } else {
@@ -3300,7 +3300,7 @@ const QuotesPage = () => {
           ...newItems[index],
           product_id: value,
           description: product.name,
-          unit_price: product.price
+          unit_price: product.unit_price
         };
       }
     } else {
