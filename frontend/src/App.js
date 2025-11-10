@@ -2079,6 +2079,7 @@ const ProductsPage = () => {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [editingProduct, setEditingProduct] = useState(null);
   const [formData, setFormData] = useState({
     name: '', description: '', unit_price: '', unit: 'unité', category: ''
   });
