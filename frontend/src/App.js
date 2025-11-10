@@ -225,6 +225,173 @@ const AuthProvider = ({ children }) => {
   );
 };
 
+// Public Quote Acceptance Page
+const AcceptQuotePage = ({ token }) => {
+  const [loading, setLoading] = useState(true);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
+  const [quoteData, setQuoteData] = useState(null);
+
+  useEffect(() => {
+    acceptQuote();
+  }, [token]);
+
+  const acceptQuote = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/quotes/accept/${token}`);
+      setQuoteData(response.data);
+      setSuccess(true);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Erreur lors de l\'acceptation de la soumission');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(to-br, #f0fdfa, #ccfbf1, #99f6e4)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '20px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      <div style={{
+        background: 'white',
+        borderRadius: '16px',
+        boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+        maxWidth: '600px',
+        width: '100%',
+        overflow: 'hidden'
+      }}>
+        {loading ? (
+          <div style={{ padding: '60px', textAlign: 'center' }}>
+            <div style={{
+              width: '60px',
+              height: '60px',
+              border: '4px solid #e5e7eb',
+              borderTop: '4px solid #0d9488',
+              borderRadius: '50%',
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto 20px'
+            }}></div>
+            <p style={{ color: '#6b7280', fontSize: '16px' }}>Traitement en cours...</p>
+          </div>
+        ) : success ? (
+          <>
+            <div style={{
+              background: 'linear-gradient(135deg, #10b981, #059669)',
+              padding: '40px',
+              textAlign: 'center'
+            }}>
+              <div style={{
+                width: '80px',
+                height: '80px',
+                background: 'white',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 20px',
+                fontSize: '40px'
+              }}>
+                ✅
+              </div>
+              <h1 style={{ color: 'white', margin: '0 0 10px 0', fontSize: '28px' }}>
+                Soumission Acceptée !
+              </h1>
+              <p style={{ color: 'rgba(255,255,255,0.9)', margin: 0, fontSize: '16px' }}>
+                Merci pour votre confirmation
+              </p>
+            </div>
+            <div style={{ padding: '40px' }}>
+              <div style={{
+                background: '#f0fdf4',
+                border: '2px solid #10b981',
+                borderRadius: '12px',
+                padding: '24px',
+                marginBottom: '24px'
+              }}>
+                <p style={{ margin: '0 0 12px 0', color: '#166534', fontWeight: '600', fontSize: '16px' }}>
+                  Détails de la soumission :
+                </p>
+                <p style={{ margin: '8px 0', color: '#374151' }}>
+                  <strong>Numéro:</strong> {quoteData?.quote_number}
+                </p>
+                <p style={{ margin: '8px 0', color: '#374151' }}>
+                  <strong>Client:</strong> {quoteData?.client_name}
+                </p>
+              </div>
+              <p style={{ color: '#6b7280', fontSize: '14px', lineHeight: '1.6', marginBottom: '24px' }}>
+                Un email de confirmation a été envoyé à l'entreprise. Vous serez contacté prochainement pour les prochaines étapes.
+              </p>
+              <div style={{
+                padding: '16px',
+                background: '#f0fdfa',
+                borderRadius: '8px',
+                border: '1px solid #5eead4'
+              }}>
+                <p style={{ margin: 0, color: '#0f766e', fontSize: '14px' }}>
+                  💡 Vous pouvez fermer cette page en toute sécurité.
+                </p>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{
+              background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+              padding: '40px',
+              textAlign: 'center'
+            }}>
+              <div style={{
+                width: '80px',
+                height: '80px',
+                background: 'white',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 20px',
+                fontSize: '40px'
+              }}>
+                ❌
+              </div>
+              <h1 style={{ color: 'white', margin: '0 0 10px 0', fontSize: '28px' }}>
+                Erreur
+              </h1>
+            </div>
+            <div style={{ padding: '40px' }}>
+              <div style={{
+                background: '#fef2f2',
+                border: '2px solid #ef4444',
+                borderRadius: '12px',
+                padding: '24px',
+                marginBottom: '24px'
+              }}>
+                <p style={{ margin: 0, color: '#991b1b', fontSize: '16px' }}>
+                  {error}
+                </p>
+              </div>
+              <p style={{ color: '#6b7280', fontSize: '14px' }}>
+                Si le problème persiste, veuillez contacter l'entreprise directement.
+              </p>
+            </div>
+          </>
+        )}
+      </div>
+      
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+    </div>
+  );
+};
+
 // App Router with routing
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
