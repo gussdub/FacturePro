@@ -2794,17 +2794,6 @@ const InvoicesPage = () => {
                     />
                   </div>
 
-                  {/* Color Picker */}
-                  <div style={{ marginBottom: '20px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Couleur principale</label>
-                    <input
-                      type="color"
-                      value={formData.primary_color}
-                      onChange={(e) => setFormData(prev => ({ ...prev, primary_color: e.target.value }))}
-                      style={{ width: '100px', height: '40px', border: '1px solid #d1d5db', borderRadius: '8px', cursor: 'pointer' }}
-                    />
-                  </div>
-
                   {/* Submit Button */}
                   <button
                     type="submit"
@@ -3493,17 +3482,6 @@ const QuotesPage = () => {
                         resize: 'vertical',
                         fontFamily: 'inherit'
                       }}
-                    />
-                  </div>
-
-                  {/* Color Picker */}
-                  <div style={{ marginBottom: '20px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Couleur principale</label>
-                    <input
-                      type="color"
-                      value={formData.primary_color}
-                      onChange={(e) => setFormData(prev => ({ ...prev, primary_color: e.target.value }))}
-                      style={{ width: '100px', height: '40px', border: '1px solid #d1d5db', borderRadius: '8px', cursor: 'pointer' }}
                     />
                   </div>
 
