@@ -749,6 +749,25 @@ async def create_client(client_data: dict, current_user: User = Depends(get_curr
     new_client.pop('_id', None)
     return Client(**new_client)
 
+@app.put("/api/clients/{client_id}")
+async def update_client(
+    client_id: str,
+    client_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Update client"""
+    await db.clients.update_one(
+        {"id": client_id, "user_id": current_user.id},
+        {"$set": client_data}
+    )
+    
+    client = await db.clients.find_one({"id": client_id, "user_id": current_user.id})
+    if not client:
+        raise HTTPException(404, "Client non trouvé")
+    
+    client.pop('_id', None)
+    return client
+
 @app.delete("/api/clients/{client_id}")
 async def delete_client(client_id: str, current_user: User = Depends(get_current_user)):
     await db.clients.delete_one({"id": client_id, "user_id": current_user.id})
