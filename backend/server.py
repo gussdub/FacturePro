@@ -705,9 +705,9 @@ async def startup():
             stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
             print("✅ Stripe configured")
         
-        # Test SendGrid
-        if SENDGRID_API_KEY:
-            print("✅ SendGrid configured")
+        # Test Resend
+        if RESEND_API_KEY:
+            print("✅ Resend configured")
         
         print(f"✅ Server started successfully")
         print(f"📧 Sender email: {SENDER_EMAIL}")
