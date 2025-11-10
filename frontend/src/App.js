@@ -852,15 +852,19 @@ const LoginPage = () => {
             <div style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               width: '88px', height: '88px',
-              background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
+              background: 'linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%)',
               borderRadius: '24px', marginBottom: '24px',
-              boxShadow: '0 20px 40px rgba(67,56,202,0.4)'
+              boxShadow: '0 20px 40px rgba(20, 184, 166, 0.4)'
             }}>
-              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-                <path d="M12 18V6"/>
-              </svg>
+              <img 
+                src="https://customer-assets.emergentagent.com/job_62508191-52e7-42df-afe2-c04e90de23a9/artifacts/ey3nqz8l_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg"
+                alt="FacturePro Logo"
+                style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '12px'
+                }}
+              />
             </div>
 
             <h1 style={{
