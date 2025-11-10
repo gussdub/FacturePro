@@ -2225,16 +2225,22 @@ const InvoicesPage = () => {
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
   const [products, setProducts] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  
   const [formData, setFormData] = useState({
     client_id: '',
+    issue_date: new Date().toISOString().split('T')[0],
     due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-    items: [{ description: '', quantity: 1, unit_price: 0 }],
-    province: 'QC',
-    notes: ''
+    items: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 14.975 }],
+    tax_type: 'TPSTVQ', // TPSTVQ or HST
+    discount: 0,
+    notes: 'Paiement dû à réception de la facture.\nMerci de votre confiance !',
+    primary_color: '#3b82f6'
   });
 
   useEffect(() => {
@@ -2243,61 +2249,120 @@ const InvoicesPage = () => {
 
   const fetchData = async () => {
     try {
-      const [invoicesRes, clientsRes, productsRes] = await Promise.all([
+      const [invoicesRes, clientsRes, productsRes, settingsRes] = await Promise.all([
         axios.get(`${BACKEND_URL}/api/invoices`),
         axios.get(`${BACKEND_URL}/api/clients`),
-        axios.get(`${BACKEND_URL}/api/products`)
+        axios.get(`${BACKEND_URL}/api/products`),
+        axios.get(`${BACKEND_URL}/api/settings/company`)
       ]);
       setInvoices(invoicesRes.data);
       setClients(clientsRes.data);
       setProducts(productsRes.data);
+      setSettings(settingsRes.data);
+      
+      // Set default color from settings
+      if (settingsRes.data?.primary_color) {
+        setFormData(prev => ({ ...prev, primary_color: settingsRes.data.primary_color }));
+      }
     } catch (error) {
+      console.error('Error fetching data:', error);
       setError('Erreur lors du chargement des données');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(''); setSuccess('');
-
-    try {
-      const invoiceData = {
-        ...formData,
-        items: formData.items.map(item => ({
-          ...item,
-          total: item.quantity * item.unit_price
-        }))
-      };
-
-      await axios.post(`${BACKEND_URL}/api/invoices`, invoiceData);
-      setSuccess('Facture créée avec succès');
-      setShowForm(false);
+  const openModal = (invoice = null) => {
+    if (invoice) {
+      setEditingInvoice(invoice);
+      setFormData({
+        client_id: invoice.client_id,
+        issue_date: invoice.issue_date?.split('T')[0] || new Date().toISOString().split('T')[0],
+        due_date: invoice.due_date?.split('T')[0] || new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+        items: invoice.items,
+        tax_type: invoice.tax_type || 'TPSTVQ',
+        discount: invoice.discount || 0,
+        notes: invoice.notes || '',
+        primary_color: invoice.primary_color || settings?.primary_color || '#3b82f6'
+      });
+    } else {
+      setEditingInvoice(null);
       setFormData({
         client_id: '',
+        issue_date: new Date().toISOString().split('T')[0],
         due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-        items: [{ description: '', quantity: 1, unit_price: 0 }],
-        province: 'QC',
-        notes: ''
+        items: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 14.975 }],
+        tax_type: 'TPSTVQ',
+        discount: 0,
+        notes: 'Paiement dû à réception de la facture.\nMerci de votre confiance !',
+        primary_color: settings?.primary_color || '#3b82f6'
       });
+    }
+    setShowModal(true);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    try {
+      const selectedClient = clients.find(c => c.id === formData.client_id);
+      if (!selectedClient) {
+        setError('Veuillez sélectionner un client');
+        return;
+      }
+
+      const invoiceData = {
+        ...formData,
+        client_name: selectedClient.name,
+        client_email: selectedClient.email,
+        client_address: `${selectedClient.address || ''}, ${selectedClient.city || ''} ${selectedClient.postal_code || ''}`.trim()
+      };
+
+      if (editingInvoice) {
+        await axios.put(`${BACKEND_URL}/api/invoices/${editingInvoice.id}`, invoiceData);
+        setSuccess('Facture modifiée avec succès');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/invoices`, invoiceData);
+        setSuccess('Facture créée avec succès');
+      }
+      
+      setShowModal(false);
       fetchData();
     } catch (error) {
-      setError('Erreur lors de la création de la facture');
+      console.error('Error saving invoice:', error);
+      setError(error.response?.data?.detail || 'Erreur lors de la sauvegarde');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette facture ?')) return;
+    
+    try {
+      await axios.delete(`${BACKEND_URL}/api/invoices/${id}`);
+      setSuccess('Facture supprimée');
+      fetchData();
+    } catch (error) {
+      setError('Erreur lors de la suppression');
+    }
+  };
+
+  const handleSendEmail = async (id) => {
+    try {
+      await axios.post(`${BACKEND_URL}/api/invoices/${id}/send-email`);
+      setSuccess('Facture envoyée par email');
+      fetchData();
+    } catch (error) {
+      setError('Erreur lors de l\'envoi de l\'email');
     }
   };
 
   const addItem = () => {
     setFormData(prev => ({
       ...prev,
-      items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }]
+      items: [...prev.items, { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: prev.tax_type === 'TPSTVQ' ? 14.975 : 13 }]
     }));
-  };
-
-  const updateItem = (index, field, value) => {
-    const newItems = [...formData.items];
-    newItems[index] = { ...newItems[index], [field]: value };
-    setFormData(prev => ({ ...prev, items: newItems }));
   };
 
   const removeItem = (index) => {
@@ -2309,36 +2374,86 @@ const InvoicesPage = () => {
     }
   };
 
-  const getClientName = (clientId) => {
-    const client = clients.find(c => c.id === clientId);
-    return client ? client.name : 'Client inconnu';
+  const updateItem = (index, field, value) => {
+    const newItems = [...formData.items];
+    
+    if (field === 'product_id' && value) {
+      const product = products.find(p => p.id === value);
+      if (product) {
+        newItems[index] = {
+          ...newItems[index],
+          product_id: value,
+          description: product.name,
+          unit_price: product.price
+        };
+      }
+    } else {
+      newItems[index] = { ...newItems[index], [field]: value };
+    }
+    
+    setFormData(prev => ({ ...prev, items: newItems }));
+  };
+
+  const updateTaxType = (type) => {
+    const rate = type === 'TPSTVQ' ? 14.975 : 13;
+    setFormData(prev => ({
+      ...prev,
+      tax_type: type,
+      items: prev.items.map(item => ({ ...item, tax_rate: rate }))
+    }));
+  };
+
+  const calculateTotals = () => {
+    const subtotal = formData.items.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
+    const taxTotal = formData.items.reduce((sum, item) => sum + (item.quantity * item.unit_price * item.tax_rate / 100), 0);
+    const total = subtotal + taxTotal - (formData.discount || 0);
+    return { subtotal, taxTotal, total };
   };
 
   const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('fr-CA', {
-      style: 'currency',
-      currency: 'CAD'
-    }).format(amount || 0);
+    return new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD' }).format(amount || 0);
   };
+
+  const getStatusBadge = (status) => {
+    const styles = {
+      draft: { bg: '#f3f4f6', color: '#374151', text: 'Brouillon' },
+      sent: { bg: '#dbeafe', color: '#1e40af', text: 'Envoyée' },
+      paid: { bg: '#dcfce7', color: '#166534', text: 'Payée' },
+      overdue: { bg: '#fee2e2', color: '#991b1b', text: 'En retard' }
+    };
+    const s = styles[status] || styles.draft;
+    return (
+      <span style={{ background: s.bg, color: s.color, padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: '600' }}>
+        {s.text}
+      </span>
+    );
+  };
+
+  const { subtotal, taxTotal, total } = calculateTotals();
+  const selectedClient = clients.find(c => c.id === formData.client_id);
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '60px' }}>Chargement...</div>;
 
   return (
     <div>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <div style={{ fontSize: '32px', marginRight: '12px' }}>📄</div>
-          <div>
-            <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Factures</h1>
-            <p style={{ color: '#6b7280', margin: 0 }}>Créez et gérez vos factures clients</p>
-          </div>
+        <div>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>📄 Factures</h1>
+          <p style={{ color: '#6b7280', margin: 0 }}>Créez et gérez vos factures professionnelles</p>
         </div>
         <button
-          onClick={() => setShowForm(true)}
+          onClick={() => openModal()}
           style={{
             background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-            color: 'white', border: 'none', padding: '14px 28px',
-            borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
-            fontSize: '14px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
+            color: 'white',
+            border: 'none',
+            padding: '14px 28px',
+            borderRadius: '12px',
+            cursor: 'pointer',
+            fontWeight: '700',
+            fontSize: '15px',
+            boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
           }}
         >
           ✨ Nouvelle Facture
@@ -2347,258 +2462,492 @@ const InvoicesPage = () => {
 
       {/* Messages */}
       {error && (
-        <div style={{
-          background: '#fef2f2', border: '1px solid #fecaca',
-          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
-        }}>{error}</div>
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {error}
+        </div>
       )}
       {success && (
-        <div style={{
-          background: '#f0fdf4', border: '1px solid #bbf7d0',
-          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
-        }}>{success}</div>
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {success}
+        </div>
       )}
 
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: '60px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
-          <p>Chargement des factures...</p>
-        </div>
-      ) : invoices.length === 0 ? (
-        <div style={{
-          background: 'white', border: '2px dashed #d1d5db',
-          borderRadius: '16px', padding: '64px', textAlign: 'center'
-        }}>
-          <div style={{ fontSize: '80px', marginBottom: '24px' }}>📄</div>
-          <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>
-            Aucune facture créée
-          </h3>
-          <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>
-            Créez votre première facture pour commencer à facturer vos clients
-          </p>
-          <button
-            onClick={() => setShowForm(true)}
-            style={{
-              background: '#3b82f6', color: 'white', border: 'none',
-              padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
-              fontWeight: '700', fontSize: '16px'
-            }}
-          >
-            🚀 Créer ma première facture
-          </button>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gap: '16px' }}>
-          {invoices.map(invoice => (
-            <div key={invoice.id} style={{
-              background: 'white', border: '1px solid #e5e7eb',
-              borderRadius: '12px', padding: '24px',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#1f2937', margin: '0 0 8px 0' }}>
-                    {invoice.invoice_number}
-                  </h3>
-                  <p style={{ color: '#6b7280', margin: '4px 0' }}>
-                    Client: {getClientName(invoice.client_id)}
-                  </p>
-                  <p style={{ color: '#6b7280', margin: '4px 0', fontSize: '14px' }}>
-                    Échéance: {new Date(invoice.due_date).toLocaleDateString('fr-CA')}
-                  </p>
-                </div>
-                
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#1f2937' }}>
+      {/* Invoices List */}
+      <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ background: '#f8fafc' }}>
+            <tr>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Numéro</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Client</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Date</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Montant</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Statut</th>
+              <th style={{ padding: '16px', textAlign: 'center', fontWeight: '600', color: '#374151' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {invoices.length === 0 ? (
+              <tr>
+                <td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>
+                  Aucune facture. Créez-en une pour commencer !
+                </td>
+              </tr>
+            ) : (
+              invoices.map(invoice => (
+                <tr key={invoice.id} style={{ borderTop: '1px solid #e5e7eb' }}>
+                  <td style={{ padding: '16px', fontWeight: '600' }}>{invoice.invoice_number}</td>
+                  <td style={{ padding: '16px' }}>{invoice.client_name}</td>
+                  <td style={{ padding: '16px', color: '#6b7280' }}>
+                    {new Date(invoice.issue_date).toLocaleDateString('fr-FR')}
+                  </td>
+                  <td style={{ padding: '16px', fontWeight: '600', color: '#059669' }}>
                     {formatCurrency(invoice.total)}
-                  </div>
-                  <span style={{
-                    background: invoice.status === 'paid' ? '#dcfce7' : '#fef3c7',
-                    color: invoice.status === 'paid' ? '#166534' : '#92400e',
-                    padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '600'
-                  }}>
-                    {invoice.status === 'paid' ? '✅ Payée' : '📤 ' + invoice.status}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Invoice Form Modal */}
-      {showForm && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', zIndex: 1000, padding: '20px'
-        }}>
-          <div style={{
-            background: 'white', padding: '32px', borderRadius: '16px',
-            width: '95%', maxWidth: '800px', maxHeight: '90vh', overflow: 'auto'
-          }}>
-            <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>
-              ✨ Nouvelle Facture
-            </h3>
-            
-            <form onSubmit={handleSubmit}>
-              {/* Client et Date */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Client *</label>
-                  <select
-                    value={formData.client_id}
-                    onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
-                    required
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #ddd',
-                      borderRadius: '8px', boxSizing: 'border-box'
-                    }}
-                  >
-                    <option value="">Sélectionner un client</option>
-                    {clients.map(client => (
-                      <option key={client.id} value={client.id}>
-                        {client.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Échéance *</label>
-                  <input
-                    type="date"
-                    value={formData.due_date}
-                    onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
-                    required
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #ddd',
-                      borderRadius: '8px', boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Province</label>
-                  <select
-                    value={formData.province}
-                    onChange={(e) => setFormData(prev => ({ ...prev, province: e.target.value }))}
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #ddd',
-                      borderRadius: '8px', boxSizing: 'border-box'
-                    }}
-                  >
-                    <option value="QC">🍁 Québec (TPS 5% + TVQ 9.975%)</option>
-                    <option value="ON">🍁 Ontario (HST 13%)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Items */}
-              <div style={{ marginBottom: '24px' }}>
-                <h4 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>
-                  📋 Articles et Services
-                </h4>
-                
-                {formData.items.map((item, index) => (
-                  <div key={index} style={{
-                    display: 'grid', gridTemplateColumns: '2fr 100px 120px 120px auto',
-                    gap: '12px', marginBottom: '12px', padding: '16px',
-                    background: '#f8fafc', borderRadius: '8px', alignItems: 'center'
-                  }}>
-                    <input
-                      type="text"
-                      value={item.description}
-                      onChange={(e) => updateItem(index, 'description', e.target.value)}
-                      placeholder="Description du service/produit"
-                      required
-                      style={{
-                        padding: '10px', border: '1px solid #ddd',
-                        borderRadius: '6px', boxSizing: 'border-box'
-                      }}
-                    />
-                    
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={item.quantity}
-                      onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
-                      style={{
-                        padding: '10px', border: '1px solid #ddd',
-                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
-                      }}
-                    />
-                    
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={item.unit_price}
-                      onChange={(e) => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
-                      style={{
-                        padding: '10px', border: '1px solid #ddd',
-                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
-                      }}
-                    />
-                    
-                    <div style={{
-                      padding: '10px', background: '#e5e7eb', borderRadius: '6px',
-                      textAlign: 'center', fontWeight: '600'
-                    }}>
-                      {formatCurrency(item.quantity * item.unit_price)}
-                    </div>
-                    
+                  </td>
+                  <td style={{ padding: '16px' }}>{getStatusBadge(invoice.status)}</td>
+                  <td style={{ padding: '16px', textAlign: 'center' }}>
                     <button
-                      type="button"
-                      onClick={() => removeItem(index)}
-                      disabled={formData.items.length === 1}
-                      style={{
-                        background: formData.items.length === 1 ? '#f3f4f6' : '#ef4444',
-                        color: formData.items.length === 1 ? '#9ca3af' : 'white',
-                        border: 'none', padding: '8px', borderRadius: '6px',
-                        cursor: formData.items.length === 1 ? 'not-allowed' : 'pointer'
-                      }}
+                      onClick={() => openModal(invoice)}
+                      style={{ background: '#3b82f6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}
+                      title="Modifier"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => handleSendEmail(invoice.id)}
+                      style={{ background: '#10b981', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}
+                      title="Envoyer par email"
+                    >
+                      📧
+                    </button>
+                    <button
+                      onClick={() => handleDelete(invoice.id)}
+                      style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                      title="Supprimer"
                     >
                       🗑️
                     </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal */}
+      {showModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }} onClick={() => setShowModal(false)}>
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '1400px',
+              maxHeight: '90vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{
+              padding: '24px',
+              borderBottom: '1px solid #e2e8f0',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <h2 style={{ margin: 0, fontSize: '24px', fontWeight: '700' }}>
+                {editingInvoice ? '✏️ Modifier la facture' : '✨ Nouvelle facture'}
+              </h2>
+              <button
+                onClick={() => setShowModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#9ca3af'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body - 2 Columns */}
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+              {/* Left: Form */}
+              <div style={{ flex: 1, padding: '24px', overflowY: 'auto', borderRight: '1px solid #e2e8f0' }}>
+                <form onSubmit={handleSubmit}>
+                  {/* Client Selection */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Client *</label>
+                    <select
+                      value={formData.client_id}
+                      onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
+                      required
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '8px',
+                        fontSize: '14px'
+                      }}
+                    >
+                      <option value="">Sélectionner un client</option>
+                      {clients.map(client => (
+                        <option key={client.id} value={client.id}>{client.name}</option>
+                      ))}
+                    </select>
                   </div>
-                ))}
-                
-                <button
-                  type="button"
-                  onClick={addItem}
-                  style={{
-                    background: '#10b981', color: 'white', border: 'none',
-                    padding: '10px 20px', borderRadius: '8px', cursor: 'pointer',
-                    fontWeight: '600', marginTop: '8px'
-                  }}
-                >
-                  ➕ Ajouter un article
-                </button>
+
+                  {/* Dates */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Date d'émission</label>
+                      <input
+                        type="date"
+                        value={formData.issue_date}
+                        onChange={(e) => setFormData(prev => ({ ...prev, issue_date: e.target.value }))}
+                        style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Date d'échéance</label>
+                      <input
+                        type="date"
+                        value={formData.due_date}
+                        onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
+                        style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Tax Type */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Type de taxes</label>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                      <button
+                        type="button"
+                        onClick={() => updateTaxType('TPSTVQ')}
+                        style={{
+                          flex: 1,
+                          padding: '12px',
+                          border: formData.tax_type === 'TPSTVQ' ? '2px solid #3b82f6' : '1px solid #d1d5db',
+                          background: formData.tax_type === 'TPSTVQ' ? '#eff6ff' : 'white',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '600'
+                        }}
+                      >
+                        TPS + TVQ (14.975%)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateTaxType('HST')}
+                        style={{
+                          flex: 1,
+                          padding: '12px',
+                          border: formData.tax_type === 'HST' ? '2px solid #3b82f6' : '1px solid #d1d5db',
+                          background: formData.tax_type === 'HST' ? '#eff6ff' : 'white',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: '600'
+                        }}
+                      >
+                        HST (13%)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Items */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Produits/Services</label>
+                    {formData.items.map((item, index) => (
+                      <div key={index} style={{
+                        background: '#f9fafb',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '8px',
+                        padding: '16px',
+                        marginBottom: '12px'
+                      }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                          <div>
+                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Produit</label>
+                            <select
+                              value={item.product_id}
+                              onChange={(e) => updateItem(index, 'product_id', e.target.value)}
+                              style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '14px' }}
+                            >
+                              <option value="">Personnalisé</option>
+                              {products.map(product => (
+                                <option key={product.id} value={product.id}>{product.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Quantité</label>
+                            <input
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
+                              min="0"
+                              step="0.01"
+                              style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: '6px' }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: '600' }}>Prix unitaire</label>
+                            <input
+                              type="number"
+                              value={item.unit_price}
+                              onChange={(e) => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                              min="0"
+                              step="0.01"
+                              style={{ width: '100%', padding: '8px', border: '1px solid #d1d5db', borderRadius: '6px' }}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px' }}>
+                          <input
+                            type="text"
+                            placeholder="Description"
+                            value={item.description}
+                            onChange={(e) => updateItem(index, 'description', e.target.value)}
+                            style={{ flex: 1, padding: '8px', border: '1px solid #d1d5db', borderRadius: '6px' }}
+                          />
+                          {formData.items.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeItem(index)}
+                              style={{
+                                background: '#ef4444',
+                                color: 'white',
+                                border: 'none',
+                                padding: '8px 16px',
+                                borderRadius: '6px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={addItem}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        background: '#f3f4f6',
+                        border: '2px dashed #d1d5db',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontWeight: '600',
+                        color: '#374151'
+                      }}
+                    >
+                      ➕ Ajouter une ligne
+                    </button>
+                  </div>
+
+                  {/* Discount */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Escompte</label>
+                    <input
+                      type="number"
+                      value={formData.discount}
+                      onChange={(e) => setFormData(prev => ({ ...prev, discount: parseFloat(e.target.value) || 0 }))}
+                      min="0"
+                      step="0.01"
+                      style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px' }}
+                    />
+                  </div>
+
+                  {/* Notes */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Notes/Conditions</label>
+                    <textarea
+                      value={formData.notes}
+                      onChange={(e) => setFormData(prev => ({ ...prev, notes: e.target.value }))}
+                      rows="3"
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: '8px',
+                        resize: 'vertical',
+                        fontFamily: 'inherit'
+                      }}
+                    />
+                  </div>
+
+                  {/* Color Picker */}
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Couleur principale</label>
+                    <input
+                      type="color"
+                      value={formData.primary_color}
+                      onChange={(e) => setFormData(prev => ({ ...prev, primary_color: e.target.value }))}
+                      style={{ width: '100px', height: '40px', border: '1px solid #d1d5db', borderRadius: '8px', cursor: 'pointer' }}
+                    />
+                  </div>
+
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    style={{
+                      width: '100%',
+                      background: 'linear-gradient(135deg, #10b981, #059669)',
+                      color: 'white',
+                      border: 'none',
+                      padding: '16px',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontWeight: '700',
+                      fontSize: '16px'
+                    }}
+                  >
+                    {editingInvoice ? '💾 Enregistrer les modifications' : '✨ Créer la facture'}
+                  </button>
+                </form>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  style={{
-                    background: 'white', color: '#374151', border: '1px solid #d1d5db',
-                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
-                  }}
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  style={{
-                    background: '#3b82f6', color: 'white', border: 'none',
-                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
-                    fontWeight: '600'
-                  }}
-                >
-                  💾 Créer la facture
-                </button>
+              {/* Right: Preview */}
+              <div style={{ flex: 1, padding: '24px', overflowY: 'auto', background: '#f9fafb' }}>
+                <div style={{
+                  background: 'white',
+                  padding: '40px',
+                  boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                  borderRadius: '8px',
+                  fontFamily: 'Arial, sans-serif'
+                }}>
+                  {/* Header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '32px', paddingBottom: '24px', borderBottom: `3px solid ${formData.primary_color}` }}>
+                    <div>
+                      {settings?.logo_url && (
+                        <img src={settings.logo_url} alt="Logo" style={{ height: '60px', marginBottom: '12px' }} />
+                      )}
+                      <h1 style={{ fontSize: '28px', fontWeight: '800', color: formData.primary_color, margin: '0 0 8px 0' }}>
+                        {settings?.company_name || 'Votre Entreprise'}
+                      </h1>
+                      <p style={{ margin: 0, color: '#6b7280', fontSize: '14px' }}>
+                        {settings?.address && `${settings.address}, `}
+                        {settings?.city && `${settings.city} `}
+                        {settings?.postal_code}
+                      </p>
+                      <p style={{ margin: '4px 0 0 0', color: '#6b7280', fontSize: '14px' }}>
+                        {settings?.email} • {settings?.phone}
+                      </p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <h2 style={{ fontSize: '32px', fontWeight: '800', color: formData.primary_color, margin: '0 0 16px 0' }}>
+                        FACTURE
+                      </h2>
+                      <p style={{ margin: '4px 0', fontSize: '14px' }}><strong>Date:</strong> {new Date(formData.issue_date).toLocaleDateString('fr-FR')}</p>
+                      <p style={{ margin: '4px 0', fontSize: '14px' }}><strong>Échéance:</strong> {new Date(formData.due_date).toLocaleDateString('fr-FR')}</p>
+                    </div>
+                  </div>
+
+                  {/* Client Info */}
+                  {selectedClient && (
+                    <div style={{ marginBottom: '32px', padding: '16px', background: '#f9fafb', borderRadius: '8px' }}>
+                      <p style={{ margin: '0 0 4px 0', fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>FACTURER À</p>
+                      <p style={{ margin: '4px 0', fontSize: '16px', fontWeight: '700' }}>{selectedClient.name}</p>
+                      <p style={{ margin: '2px 0', fontSize: '14px', color: '#6b7280' }}>
+                        {selectedClient.address && `${selectedClient.address}, `}
+                        {selectedClient.city && `${selectedClient.city} `}
+                        {selectedClient.postal_code}
+                      </p>
+                      <p style={{ margin: '2px 0', fontSize: '14px', color: '#6b7280' }}>{selectedClient.email}</p>
+                    </div>
+                  )}
+
+                  {/* Items Table */}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '24px' }}>
+                    <thead>
+                      <tr style={{ background: formData.primary_color, color: 'white' }}>
+                        <th style={{ padding: '12px', textAlign: 'left', fontSize: '14px' }}>Description</th>
+                        <th style={{ padding: '12px', textAlign: 'center', fontSize: '14px' }}>Qté</th>
+                        <th style={{ padding: '12px', textAlign: 'right', fontSize: '14px' }}>Prix unit.</th>
+                        <th style={{ padding: '12px', textAlign: 'right', fontSize: '14px' }}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {formData.items.map((item, index) => (
+                        <tr key={index} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                          <td style={{ padding: '12px', fontSize: '14px' }}>{item.description || '(Vide)'}</td>
+                          <td style={{ padding: '12px', textAlign: 'center', fontSize: '14px' }}>{item.quantity}</td>
+                          <td style={{ padding: '12px', textAlign: 'right', fontSize: '14px' }}>{formatCurrency(item.unit_price)}</td>
+                          <td style={{ padding: '12px', textAlign: 'right', fontSize: '14px', fontWeight: '600' }}>
+                            {formatCurrency(item.quantity * item.unit_price)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Totals */}
+                  <div style={{ marginLeft: 'auto', width: '300px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '14px' }}>
+                      <span>Sous-total:</span>
+                      <span style={{ fontWeight: '600' }}>{formatCurrency(subtotal)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '14px' }}>
+                      <span>{formData.tax_type === 'TPSTVQ' ? 'TPS + TVQ' : 'HST'} ({formData.tax_type === 'TPSTVQ' ? '14.975' : '13'}%):</span>
+                      <span style={{ fontWeight: '600' }}>{formatCurrency(taxTotal)}</span>
+                    </div>
+                    {formData.discount > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '14px', color: '#ef4444' }}>
+                        <span>Escompte:</span>
+                        <span style={{ fontWeight: '600' }}>-{formatCurrency(formData.discount)}</span>
+                      </div>
+                    )}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      padding: '16px',
+                      background: formData.primary_color,
+                      color: 'white',
+                      borderRadius: '8px',
+                      marginTop: '8px'
+                    }}>
+                      <span style={{ fontSize: '18px', fontWeight: '700' }}>TOTAL:</span>
+                      <span style={{ fontSize: '24px', fontWeight: '800' }}>{formatCurrency(total)}</span>
+                    </div>
+                  </div>
+
+                  {/* Tax Numbers */}
+                  {(settings?.gst_number || settings?.pst_number || settings?.hst_number) && (
+                    <div style={{ marginTop: '32px', padding: '16px', background: '#f9fafb', borderRadius: '8px', fontSize: '12px', color: '#6b7280' }}>
+                      {settings.gst_number && <p style={{ margin: '2px 0' }}>TPS: {settings.gst_number}</p>}
+                      {settings.pst_number && <p style={{ margin: '2px 0' }}>TVQ: {settings.pst_number}</p>}
+                      {settings.hst_number && <p style={{ margin: '2px 0' }}>HST: {settings.hst_number}</p>}
+                    </div>
+                  )}
+
+                  {/* Notes */}
+                  {formData.notes && (
+                    <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #e5e7eb' }}>
+                      <p style={{ fontSize: '12px', fontWeight: '600', color: '#374151', margin: '0 0 8px 0' }}>NOTES:</p>
+                      <p style={{ fontSize: '13px', color: '#6b7280', margin: 0, whiteSpace: 'pre-wrap' }}>{formData.notes}</p>
+                    </div>
+                  )}
+                </div>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}

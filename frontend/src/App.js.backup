@@ -3,19 +3,155 @@ import axios from 'axios';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api.onrender.com';
 
-// Auth Context
+// Configure axios to always send token
+axios.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+//Auth Context
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
 
+// Notifications Dropdown Component
+const NotificationsDropdown = ({ isOpen, onClose }) => {
+  const notifications = [
+    { id: 1, type: 'info', message: 'Bienvenue dans FacturePro !', time: 'Il y a 2 minutes' },
+    { id: 2, type: 'success', message: 'Application déployée avec succès', time: 'Il y a 1 heure' },
+    { id: 3, type: 'warning', message: 'Pensez à configurer vos numéros de taxes', time: 'Il y a 2 heures' }
+  ];
+
+  if (!isOpen) return null;
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '100%',
+      right: 0,
+      background: 'white',
+      border: '1px solid #e5e7eb',
+      borderRadius: '12px',
+      boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
+      width: '320px',
+      zIndex: 50,
+      marginTop: '8px'
+    }}>
+      <div style={{
+        padding: '16px',
+        borderBottom: '1px solid #e5e7eb'
+      }}>
+        <h3 style={{
+          fontSize: '16px',
+          fontWeight: '700',
+          color: '#1f2937',
+          margin: 0
+        }}>
+          🔔 Notifications
+        </h3>
+      </div>
+      
+      <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+        {notifications.map(notification => (
+          <div key={notification.id} style={{
+            padding: '16px',
+            borderBottom: '1px solid #f3f4f6'
+          }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'start',
+              gap: '12px'
+            }}>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: notification.type === 'success' ? '#10b981' : 
+                          notification.type === 'warning' ? '#f59e0b' : '#3b82f6',
+                marginTop: '6px'
+              }}></div>
+              <div style={{ flex: 1 }}>
+                <p style={{
+                  fontSize: '14px',
+                  color: '#374151',
+                  margin: '0 0 4px 0',
+                  fontWeight: '500'
+                }}>
+                  {notification.message}
+                </p>
+                <p style={{
+                  fontSize: '12px',
+                  color: '#6b7280',
+                  margin: 0
+                }}>
+                  {notification.time}
+                </p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      
+      <div style={{
+        padding: '12px 16px',
+        textAlign: 'center',
+        borderTop: '1px solid #e5e7eb'
+      }}>
+        <button
+          onClick={onClose}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: '#6b7280',
+            fontSize: '14px',
+            cursor: 'pointer'
+          }}
+        >
+          Fermer
+        </button>
+      </div>
+    </div>
+  );
+};
+
 // Auth Provider
 const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    const savedUser = localStorage.getItem('user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
   const [token, setToken] = useState(localStorage.getItem('token'));
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    }
+    const initAuth = async () => {
+      if (token) {
+        try {
+          axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+          // Load user from localStorage if not loaded
+          if (!user) {
+            const savedUser = localStorage.getItem('user');
+            if (savedUser) {
+              setUser(JSON.parse(savedUser));
+            }
+          }
+        } catch (error) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setToken(null);
+          setUser(null);
+        }
+      }
+      setLoading(false);
+    };
+    initAuth();
   }, [token]);
 
   const login = async (email, password) => {
@@ -26,6 +162,7 @@ const AuthProvider = ({ children }) => {
       setToken(access_token);
       setUser(userData);
       localStorage.setItem('token', access_token);
+      localStorage.setItem('user', JSON.stringify(userData));
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
       
       return { success: true };
@@ -47,13 +184,14 @@ const AuthProvider = ({ children }) => {
       setToken(access_token);
       setUser(userData);
       localStorage.setItem('token', access_token);
+      localStorage.setItem('user', JSON.stringify(userData));
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
       
       return { success: true };
     } catch (error) {
       return { 
         success: false, 
-        error: error.response?.data?.detail || 'Erreur lors de la création du compte' 
+        error: error.response?.data?.detail || 'Erreur d\'inscription' 
       };
     }
   };
@@ -62,24 +200,533 @@ const AuthProvider = ({ children }) => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     delete axios.defaults.headers.common['Authorization'];
   };
 
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        fontSize: '18px'
+      }}>
+        Chargement...
+      </div>
+    );
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, login, register, logout, isAuthenticated: !!token }}>
       {children}
     </AuthContext.Provider>
   );
 };
 
-// Login Page with Original Beautiful Design
-const LoginPage = ({ onLogin, onRegister, navigate }) => {
+// App Router with routing
+function App() {
+  const [currentRoute, setCurrentRoute] = useState(
+    window.location.pathname === '/' ? '/dashboard' : window.location.pathname
+  );
+  const { isAuthenticated } = useAuth();
+
+  // Simple router
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentRoute(window.location.pathname === '/' ? '/dashboard' : window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigate = (path) => {
+    window.history.pushState({}, '', path);
+    setCurrentRoute(path);
+  };
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  // Render protected routes with Layout
+  const renderPage = () => {
+    switch (currentRoute) {
+      case '/clients':
+        return <ClientsPage />;
+      case '/products':
+        return <ProductsPage />;
+      case '/invoices':
+        return <InvoicesPage />;
+      case '/quotes':
+        return <QuotesPage />;
+      case '/employees':
+        return <EmployeesPage />;
+      case '/expenses':
+        return <ExpensesPage />;
+      case '/export':
+        return <ExportPage />;
+      case '/settings':
+        return <SettingsPage />;
+      case '/change-password':
+        return <ChangePasswordPage />;
+      case '/billing':
+        return <BillingPage />;
+      default:
+        return <Dashboard />;
+    }
+  };
+
+  return (
+    <div>
+      <Layout currentRoute={currentRoute} navigate={navigate}>
+        {renderPage()}
+      </Layout>
+    </div>
+  );
+}
+
+// Layout Component with Sidebar (ORIGINAL DESIGN)
+const Layout = ({ currentRoute, navigate, children }) => {
+  const { user, logout } = useAuth();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [settings, setSettings] = useState(null);
+
+  // Load company settings for logo
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const response = await axios.get(`${BACKEND_URL}/api/settings/company`);
+        setSettings(response.data);
+      } catch (error) {
+        console.error('Error fetching settings:', error);
+      }
+    };
+    fetchSettings();
+  }, []);
+
+  const navigation = [
+    { name: 'Tableau de bord', href: '/dashboard', icon: '📊', current: currentRoute === '/dashboard' },
+    { name: 'Clients', href: '/clients', icon: '👥', current: currentRoute === '/clients' },
+    { name: 'Produits', href: '/products', icon: '📦', current: currentRoute === '/products' },
+    { name: 'Factures', href: '/invoices', icon: '📄', current: currentRoute === '/invoices' },
+    { name: 'Soumissions', href: '/quotes', icon: '📝', current: currentRoute === '/quotes' },
+    { name: 'Employés', href: '/employees', icon: '👨‍💼', current: currentRoute === '/employees' },
+    { name: 'Dépenses', href: '/expenses', icon: '💳', current: currentRoute === '/expenses' },
+    { name: 'Exports', href: '/export', icon: '📊', current: currentRoute === '/export' },
+    { name: 'Paramètres', href: '/settings', icon: '⚙️', current: currentRoute === '/settings' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc' }}>
+      {/* Sidebar - DESIGN ORIGINAL */}
+      <aside style={{
+        width: '280px',
+        background: 'linear-gradient(180deg, #1e293b 0%, #334155 100%)',
+        boxShadow: '4px 0 6px -1px rgba(0, 0, 0, 0.1)'
+      }}>
+        {/* Logo Section */}
+        <div style={{ padding: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '48px', height: '48px',
+              background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+              borderRadius: '12px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              {settings?.logo_url ? (
+                <img 
+                  src={settings.logo_url} 
+                  alt="Logo" 
+                  style={{
+                    width: '32px', height: '32px',
+                    objectFit: 'contain', borderRadius: '6px'
+                  }}
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                    e.target.nextSibling.style.display = 'block';
+                  }}
+                />
+              ) : null}
+              <svg 
+                width="28" 
+                height="28" 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="white" 
+                strokeWidth="2.5"
+                style={{ display: settings?.logo_url ? 'none' : 'block' }}
+              >
+                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
+                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
+                <path d="M12 18V6"/>
+              </svg>
+            </div>
+            <div>
+              <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
+              <div style={{ color: '#94a3b8', fontSize: '12px' }}>Solution complète</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Navigation Menu */}
+        <nav style={{ padding: '0 16px', flex: 1 }}>
+          {navigation.map((item) => {
+            return (
+              <button
+                key={item.name}
+                onClick={() => navigate(item.href)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  width: '100%',
+                  padding: '14px 16px',
+                  margin: '4px 0',
+                  background: item.current 
+                    ? 'rgba(59, 130, 246, 0.2)' 
+                    : 'transparent',
+                  color: item.current ? '#60a5fa' : '#cbd5e1',
+                  border: 'none',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  fontSize: '15px',
+                  fontWeight: '600',
+                  transition: 'all 0.3s ease',
+                  textAlign: 'left'
+                }}
+                onMouseEnter={(e) => {
+                  if (!item.current) {
+                    e.target.style.background = 'rgba(255,255,255,0.05)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!item.current) {
+                    e.target.style.background = 'transparent';
+                  }
+                }}
+              >
+                <span style={{ 
+                  marginRight: '14px', 
+                  fontSize: '18px',
+                  filter: item.current ? 'none' : 'grayscale(1)'
+                }}>
+                  {item.icon}
+                </span>
+                {item.name}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* User Section */}
+        <div style={{ padding: '20px', borderTop: '1px solid #334155', marginTop: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={{
+              width: '40px', height: '40px',
+              background: settings?.logo_url ? 'white' : '#3b82f6',
+              borderRadius: '50%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              marginRight: '12px'
+            }}>
+              {settings?.logo_url ? (
+                <img 
+                  src={settings.logo_url} 
+                  alt="Logo" 
+                  style={{
+                    width: '32px', height: '32px',
+                    objectFit: 'contain', borderRadius: '50%'
+                  }}
+                />
+              ) : (
+                <span style={{
+                  color: 'white', fontSize: '16px', fontWeight: '700'
+                }}>
+                  {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                </span>
+              )}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ color: 'white', fontSize: '14px', fontWeight: '600' }}>
+                {user?.company_name || 'Entreprise'}
+              </div>
+              <div style={{ color: '#94a3b8', fontSize: '12px' }}>
+                {user?.email}
+              </div>
+            </div>
+          </div>
+          
+          <button
+            onClick={logout}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              background: '#ef4444',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '600'
+            }}
+          >
+            🚪 Se déconnecter
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        {/* Header */}
+        <header style={{
+          background: 'white',
+          padding: '16px 32px',
+          borderBottom: '1px solid #e5e7eb',
+          boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'between', alignItems: 'center' }}>
+            <div style={{ flex: 1 }}>
+              <h1 style={{
+                fontSize: '28px',
+                fontWeight: '800',
+                color: '#1f2937',
+                margin: 0
+              }}>
+                {navigation.find(n => n.current)?.name || 'FacturePro'}
+              </h1>
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              {/* Search */}
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  placeholder="Rechercher..."
+                  style={{
+                    paddingLeft: '40px',
+                    paddingRight: '16px',
+                    paddingTop: '8px',
+                    paddingBottom: '8px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                    width: '200px'
+                  }}
+                />
+                <div style={{
+                  position: 'absolute',
+                  left: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: '#9ca3af',
+                  fontSize: '16px'
+                }}>🔍</div>
+              </div>
+
+              {/* Notifications */}
+              <div style={{ position: 'relative' }}>
+                <button 
+                  onClick={() => setNotificationsOpen(!notificationsOpen)}
+                  style={{
+                    position: 'relative',
+                    background: 'none',
+                    border: 'none',
+                    padding: '8px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    color: '#6b7280',
+                    fontSize: '18px'
+                  }}
+                >
+                  🔔
+                  <span style={{
+                    position: 'absolute',
+                    top: '6px',
+                    right: '6px',
+                    width: '8px',
+                    height: '8px',
+                    background: '#ef4444',
+                    borderRadius: '50%'
+                  }}></span>
+                </button>
+
+                <NotificationsDropdown
+                  isOpen={notificationsOpen}
+                  onClose={() => setNotificationsOpen(false)}
+                />
+              </div>
+
+              {/* User Avatar with Dropdown */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => setUserMenuOpen(!userMenuOpen)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{
+                    width: '32px', height: '32px',
+                    background: settings?.logo_url ? 'white' : '#3b82f6',
+                    borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  }}>
+                    {settings?.logo_url ? (
+                      <img 
+                        src={settings.logo_url} 
+                        alt="Logo" 
+                        style={{
+                          width: '28px', height: '28px',
+                          objectFit: 'contain', borderRadius: '50%'
+                        }}
+                      />
+                    ) : (
+                      <span style={{
+                        color: 'white', fontSize: '14px', fontWeight: '700'
+                      }}>
+                        {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>
+                    {user?.company_name}
+                  </div>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+
+                {/* Dropdown Menu */}
+                {userMenuOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '8px',
+                    width: '220px',
+                    background: 'white',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
+                    zIndex: 50
+                  }}>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        navigate('/change-password');
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                        background: 'white',
+                        border: 'none',
+                        borderBottom: '1px solid #e2e8f0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOut={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      🔒 Changer le mot de passe
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        navigate('/billing');
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                        background: 'white',
+                        border: 'none',
+                        borderBottom: '1px solid #e2e8f0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOut={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      💳 Facturation
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        logout();
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '12px 16px',
+                        textAlign: 'left',
+                        background: 'white',
+                        border: 'none',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        color: '#ef4444',
+                        borderRadius: '0 0 8px 8px'
+                      }}
+                      onMouseOver={(e) => e.currentTarget.style.background = '#fef2f2'}
+                      onMouseOut={(e) => e.currentTarget.style.background = 'white'}
+                    >
+                      🚪 Déconnexion
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Page Content */}
+        <main style={{ padding: '24px', flex: 1 }}>
+          <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
+            {children}
+          </div>
+        </main>
+      </div>
+
+      {/* Mobile menu overlay */}
+      {sidebarOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.6)',
+            zIndex: 50,
+            display: window.innerWidth <= 1024 ? 'block' : 'none'
+          }}
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+    </div>
+  );
+};
+
+// Login Page (DESIGN ORIGINAL COMPLET)
+const LoginPage = () => {
   const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
   const [isLogin, setIsLogin] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { login, register } = useAuth();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -89,9 +736,9 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
     try {
       let result;
       if (isLogin) {
-        result = await onLogin(formData.email, formData.password);
+        result = await login(formData.email, formData.password);
       } else {
-        result = await onRegister(formData.email, formData.password, formData.companyName);
+        result = await register(formData.email, formData.password, formData.companyName);
       }
 
       if (!result.success) {
@@ -104,23 +751,30 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
     }
   };
 
+  const handleChange = (e) => {
+    setFormData(prev => ({
+      ...prev,
+      [e.target.name]: e.target.value
+    }));
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex" style={{
+    <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(to bottom right, #f8fafc, #dbeafe, #c7d2fe)',
+      background: 'linear-gradient(to-br, #f1f5f9, #e0e7ff, #c7d2fe)',
       display: 'flex',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
-      {/* Left Hero Section */}
+      {/* Left Hero Section - DESIGN ORIGINAL */}
       <div style={{
-        display: window.innerWidth > 1024 ? 'flex' : 'none',
         width: '50%',
-        background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
         position: 'relative',
         overflow: 'hidden',
+        display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
-        padding: '48px'
+        padding: '60px'
       }}>
         {/* Decorative circles */}
         <div style={{
@@ -138,7 +792,7 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
         
         <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
           <div style={{ marginBottom: '32px' }}>
-            {/* Beautiful Receipt Icon */}
+            {/* Beautiful Receipt Icon - ORIGINAL */}
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: '24px' }}>
               <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
               <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
@@ -159,76 +813,73 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
             </p>
           </div>
           
-          {/* Feature highlights */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+          {/* Feature highlights - ORIGINAL */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{
-              display: 'flex', alignItems: 'center',
-              background: 'rgba(255,255,255,0.1)', padding: '12px 20px',
-              borderRadius: '12px', backdropFilter: 'blur(8px)'
+              display: 'flex', alignItems: 'center', gap: '16px',
+              background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
+              borderRadius: '12px', backdropFilter: 'blur(10px)'
             }}>
-              <span style={{ fontSize: '24px', marginRight: '12px' }}>⚡</span>
+              <div style={{ fontSize: '28px' }}>⚡</div>
               <div>
-                <div style={{ fontWeight: '600', fontSize: '16px' }}>Facturation instantanée</div>
+                <div style={{ fontWeight: '600', fontSize: '18px' }}>Facturation instantanée</div>
                 <div style={{ fontSize: '14px', opacity: 0.9 }}>Créez et envoyez vos factures en quelques clics</div>
               </div>
             </div>
-          </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
             <div style={{
-              display: 'flex', alignItems: 'center',
-              background: 'rgba(255,255,255,0.1)', padding: '12px 20px',
-              borderRadius: '12px', backdropFilter: 'blur(8px)'
+              display: 'flex', alignItems: 'center', gap: '16px',
+              background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
+              borderRadius: '12px', backdropFilter: 'blur(10px)'
             }}>
-              <span style={{ fontSize: '24px', marginRight: '12px' }}>🔄</span>
+              <div style={{ fontSize: '28px' }}>🔄</div>
               <div>
-                <div style={{ fontWeight: '600', fontSize: '16px' }}>Récurrence automatique</div>
+                <div style={{ fontWeight: '600', fontSize: '18px' }}>Récurrence automatique</div>
                 <div style={{ fontSize: '14px', opacity: 0.9 }}>Programmez vos factures récurrentes</div>
               </div>
             </div>
-          </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <div style={{
-              display: 'flex', alignItems: 'center',
-              background: 'rgba(255,255,255,0.1)', padding: '12px 20px',
-              borderRadius: '12px', backdropFilter: 'blur(8px)'
+              display: 'flex', alignItems: 'center', gap: '16px',
+              background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
+              borderRadius: '12px', backdropFilter: 'blur(10px)'
             }}>
-              <span style={{ fontSize: '24px', marginRight: '12px' }}>🛡️</span>
+              <div style={{ fontSize: '28px' }}>🛡️</div>
               <div>
-                <div style={{ fontWeight: '600', fontSize: '16px' }}>Sécurisé et fiable</div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Vos données sont protégées et sauvegardées</div>
+                <div style={{ fontWeight: '600', fontSize: '18px' }}>Sécurisé et conforme</div>
+                <div style={{ fontSize: '14px', opacity: 0.9 }}>Taxes canadiennes calculées automatiquement</div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Right side - Login/Register Form */}
+      {/* Right side - Form - DESIGN ORIGINAL */}
       <div style={{
-        width: window.innerWidth > 1024 ? '50%' : '100%',
+        width: '50%',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '40px 20px'
+        padding: '40px'
       }}>
-        <div style={{ width: '100%', maxWidth: '480px' }}>
-          {/* Logo and Title Section */}
-          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <div style={{ width: '100%', maxWidth: '460px' }}>
+          {/* Logo and Title */}
+          <div style={{ textAlign: 'center', marginBottom: '40px' }}>
             <div style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: '80px', height: '80px',
-              background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-              borderRadius: '20px', marginBottom: '20px',
-              boxShadow: '0 10px 25px rgba(79, 70, 229, 0.4)'
+              width: '88px', height: '88px',
+              background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
+              borderRadius: '24px', marginBottom: '24px',
+              boxShadow: '0 20px 40px rgba(67,56,202,0.4)'
             }}>
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
                 <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
                 <path d="M12 18V6"/>
               </svg>
             </div>
+
             <h1 style={{
-              fontSize: '32px', fontWeight: '800', color: '#1e293b',
-              margin: '0 0 8px 0', letterSpacing: '-0.025em'
+              fontSize: '36px', fontWeight: '800', color: '#1e293b',
+              margin: '0 0 8px 0'
             }}>
               FacturePro
             </h1>
@@ -248,11 +899,11 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
             </p>
           </div>
 
-          {/* Form Card */}
+          {/* Form Card - DESIGN ORIGINAL */}
           <div style={{
             background: 'rgba(255,255,255,0.95)',
             backdropFilter: 'blur(20px)',
-            padding: '32px', borderRadius: '20px',
+            padding: '32px', borderRadius: '24px',
             boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)',
             border: 'none'
           }}>
@@ -260,7 +911,7 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
               <div style={{
                 background: '#fef2f2', border: '1px solid #fecaca',
                 borderRadius: '12px', padding: '16px', marginBottom: '24px',
-                color: '#b91c1c', fontSize: '14px', textAlign: 'center'
+                color: '#b91c1c', fontSize: '14px'
               }}>
                 {error}
               </div>
@@ -279,14 +930,13 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
                     type="text"
                     name="companyName"
                     value={formData.companyName}
-                    onChange={(e) => setFormData(prev => ({ ...prev, companyName: e.target.value }))}
+                    onChange={handleChange}
                     placeholder="Mon Entreprise"
                     required
                     style={{
                       width: '100%', height: '48px', fontSize: '16px',
                       padding: '12px 16px', border: '1px solid #d1d5db',
-                      borderRadius: '12px', boxSizing: 'border-box',
-                      transition: 'all 0.2s ease'
+                      borderRadius: '12px', boxSizing: 'border-box'
                     }}
                   />
                 </div>
@@ -303,14 +953,13 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
                   type="email"
                   name="email"
                   value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  onChange={handleChange}
                   placeholder="votre@email.com"
                   required
                   style={{
                     width: '100%', height: '48px', fontSize: '16px',
                     padding: '12px 16px', border: '1px solid #d1d5db',
-                    borderRadius: '12px', boxSizing: 'border-box',
-                    transition: 'all 0.2s ease'
+                    borderRadius: '12px', boxSizing: 'border-box'
                   }}
                 />
               </div>
@@ -327,14 +976,13 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
                     type={showPassword ? "text" : "password"}
                     name="password"
                     value={formData.password}
-                    onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-                    placeholder="••••••••"
+                    onChange={handleChange}
+                    placeholder="••••••••••"
                     required
                     style={{
                       width: '100%', height: '48px', fontSize: '16px',
                       padding: '12px 52px 12px 16px', border: '1px solid #d1d5db',
-                      borderRadius: '12px', boxSizing: 'border-box',
-                      transition: 'all 0.2s ease'
+                      borderRadius: '12px', boxSizing: 'border-box'
                     }}
                   />
                   <button
@@ -343,15 +991,15 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
                     style={{
                       position: 'absolute', right: '12px', top: '50%',
                       transform: 'translateY(-50%)', background: 'none',
-                      border: 'none', cursor: 'pointer', color: '#64748b',
-                      fontSize: '20px', padding: '4px'
+                      border: 'none', cursor: 'pointer', color: '#6b7280',
+                      fontSize: '20px'
                     }}
                   >
                     {showPassword ? (
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/>
-                        <path d="m15 12 5-5-5-5M9 12l-5 5 5 5"/>
                         <path d="m2 2 20 20"/>
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
                       </svg>
                     ) : (
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -370,11 +1018,10 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
                   width: '100%', height: '48px', fontSize: '16px', fontWeight: '700',
                   background: loading 
                     ? '#94a3b8' 
-                    : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
+                    : 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
                   color: 'white', border: 'none', borderRadius: '12px',
                   cursor: loading ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 10px 25px rgba(79,70,229,0.4)',
-                  transform: 'translateY(0)', transition: 'all 0.3s ease'
+                  boxShadow: '0 10px 25px rgba(67,56,202,0.4)'
                 }}
               >
                 {loading ? (
@@ -392,14 +1039,14 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
               </button>
             </form>
 
-            {/* Forgot Password Link */}
+            {/* Forgot Password */}
             {isLogin && (
               <div style={{ marginTop: '16px', textAlign: 'center' }}>
                 <button
                   type="button"
                   onClick={() => setShowForgotPassword(true)}
                   style={{
-                    background: 'none', border: 'none', color: '#4f46e5',
+                    background: 'none', border: 'none', color: '#4338ca',
                     fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
                   }}
                 >
@@ -417,7 +1064,7 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
                   setFormData({ email: '', password: '', companyName: '' });
                 }}
                 style={{
-                  background: 'none', border: 'none', color: '#4f46e5',
+                  background: 'none', border: 'none', color: '#4338ca',
                   fontSize: '16px', fontWeight: '600', cursor: 'pointer'
                 }}
               >
@@ -435,11 +1082,11 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
               fontSize: '14px', color: '#64748b'
             }}>
               En créant un compte, vous acceptez nos{' '}
-              <a href="#" style={{ color: '#4f46e5', textDecoration: 'none' }}>
+              <a href="#" style={{ color: '#4338ca', textDecoration: 'none' }}>
                 conditions d'utilisation
               </a>{' '}
               et notre{' '}
-              <a href="#" style={{ color: '#4f46e5', textDecoration: 'none' }}>
+              <a href="#" style={{ color: '#4338ca', textDecoration: 'none' }}>
                 politique de confidentialité
               </a>
             </div>
@@ -457,30 +1104,13 @@ const LoginPage = ({ onLogin, onRegister, navigate }) => {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
           }
-          
-          input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-          }
-          
-          button:hover:not(:disabled) {
-            transform: translateY(-1px);
-            box-shadow: 0 12px 28px rgba(79,70,229,0.5);
-          }
         `}
       </style>
     </div>
   );
 };
 
-// Register Page (if needed separately)
-const RegisterPage = ({ onRegister, navigate }) => {
-  // Same as login but registration focused
-  return navigate('/login'); // Redirect to login with register mode
-};
-
-// Forgot Password Modal
+// Forgot Password Modal (COMPLET)
 const ForgotPasswordModal = ({ onClose }) => {
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
@@ -491,8 +1121,7 @@ const ForgotPasswordModal = ({ onClose }) => {
 
   const handleSendCode = async (e) => {
     e.preventDefault();
-    setLoading(true);
-    setError(''); setSuccess('');
+    setLoading(true); setError(''); setSuccess('');
 
     try {
       const response = await axios.post(`${BACKEND_URL}/api/auth/forgot-password`, { email });
@@ -501,11 +1130,9 @@ const ForgotPasswordModal = ({ onClose }) => {
         setResetData(prev => ({ ...prev, token: response.data.reset_token }));
         setSuccess('Code de récupération généré ! Utilisez-le ci-dessous.');
         setStep('reset');
-      } else {
-        setSuccess(response.data.message);
       }
     } catch (error) {
-      setError(error.response?.data?.detail || 'Erreur lors de la génération du code');
+      setError('Erreur lors de la génération du code');
     } finally {
       setLoading(false);
     }
@@ -519,11 +1146,6 @@ const ForgotPasswordModal = ({ onClose }) => {
       return;
     }
 
-    if (resetData.new_password.length < 6) {
-      setError('Le mot de passe doit contenir au moins 6 caractères');
-      return;
-    }
-
     setLoading(true); setError('');
 
     try {
@@ -532,11 +1154,10 @@ const ForgotPasswordModal = ({ onClose }) => {
         new_password: resetData.new_password
       });
 
-      setSuccess('Mot de passe réinitialisé avec succès ! Vous pouvez maintenant vous connecter.');
+      setSuccess('Mot de passe réinitialisé avec succès !');
       setTimeout(onClose, 2000);
-      
     } catch (error) {
-      setError(error.response?.data?.detail || 'Erreur lors de la réinitialisation');
+      setError('Erreur lors de la réinitialisation');
     } finally {
       setLoading(false);
     }
@@ -550,36 +1171,22 @@ const ForgotPasswordModal = ({ onClose }) => {
     }}>
       <div style={{
         background: 'white', padding: '32px', borderRadius: '16px',
-        maxWidth: '480px', width: '100%', position: 'relative'
+        maxWidth: '480px', width: '100%'
       }}>
         <button
           onClick={onClose}
           style={{
             position: 'absolute', top: '16px', right: '16px',
             background: 'none', border: 'none', fontSize: '24px',
-            cursor: 'pointer', color: '#64748b'
+            cursor: 'pointer', color: '#6b7280'
           }}
         >
           ×
         </button>
 
-        <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: '64px', height: '64px',
-            background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-            borderRadius: '16px', marginBottom: '16px'
-          }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-              <circle cx="8" cy="8" r="6"/>
-              <path d="m13 13 6 6"/>
-              <path d="M13 13v4a2 2 0 0 1-2 2h-3"/>
-            </svg>
-          </div>
-          <h2 style={{ margin: 0, color: '#1f2937', fontSize: '22px', fontWeight: '700' }}>
-            {step === 'email' ? 'Récupération de compte' : 'Nouveau mot de passe'}
-          </h2>
-        </div>
+        <h2 style={{ margin: '0 0 20px 0', textAlign: 'center', color: '#1f2937' }}>
+          🔑 {step === 'email' ? 'Récupération de compte' : 'Nouveau mot de passe'}
+        </h2>
 
         {success && (
           <div style={{
@@ -603,166 +1210,88 @@ const ForgotPasswordModal = ({ onClose }) => {
 
         {step === 'email' ? (
           <form onSubmit={handleSendCode}>
-            <p style={{ color: '#64748b', marginBottom: '20px', textAlign: 'center' }}>
-              Entrez votre adresse email pour recevoir un code de récupération
-            </p>
-            
-            <div style={{ marginBottom: '24px' }}>
-              <label style={{
-                display: 'block', fontSize: '14px', fontWeight: '600',
-                color: '#374151', marginBottom: '8px'
-              }}>
-                Adresse email
-              </label>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="votre@email.com"
                 required
                 style={{
-                  width: '100%', height: '48px', fontSize: '16px',
-                  padding: '12px', border: '1px solid #d1d5db',
+                  width: '100%', padding: '12px', border: '1px solid #ddd',
                   borderRadius: '8px', boxSizing: 'border-box'
                 }}
               />
             </div>
-
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button
-                type="button"
-                onClick={onClose}
-                style={{
-                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '500',
-                  background: 'white', color: '#374151', border: '1px solid #d1d5db',
-                  borderRadius: '8px', cursor: 'pointer'
-                }}
-              >
-                Annuler
-              </button>
-              <button
-                type="submit"
-                disabled={loading || !email}
-                style={{
-                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '600',
-                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-                  color: 'white', border: 'none', borderRadius: '8px',
-                  cursor: loading ? 'not-allowed' : 'pointer'
-                }}
-              >
-                {loading ? 'Génération...' : 'Générer le code'}
-              </button>
+              <button type="button" onClick={onClose} style={{
+                flex: 1, padding: '12px', background: '#f3f4f6', border: 'none',
+                borderRadius: '8px', cursor: 'pointer'
+              }}>Annuler</button>
+              <button type="submit" disabled={loading} style={{
+                flex: 1, padding: '12px', background: loading ? '#9ca3af' : '#4338ca',
+                color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer'
+              }}>{loading ? 'Génération...' : 'Générer code'}</button>
             </div>
           </form>
         ) : (
           <form onSubmit={handleResetPassword}>
-            <div style={{
-              background: '#eff6ff', border: '1px solid #3b82f6',
-              borderRadius: '8px', padding: '16px', marginBottom: '20px'
-            }}>
-              <p style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: '600', color: '#1e40af' }}>
-                Code de récupération :
-              </p>
-              <div style={{
-                background: 'white', border: '1px solid #3b82f6',
-                borderRadius: '6px', padding: '12px', fontFamily: 'monospace',
-                fontSize: '14px', wordBreak: 'break-all', color: '#1e40af'
-              }}>
-                {resetData.token}
-              </div>
-              <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#3730a3' }}>
-                Copiez ce code et collez-le ci-dessous
-              </p>
+            <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+              <strong>Code : </strong>
+              <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{resetData.token}</span>
             </div>
-
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{
-                display: 'block', fontSize: '14px', fontWeight: '600',
-                color: '#374151', marginBottom: '8px'
-              }}>
-                Code de récupération
-              </label>
+            
+            <div style={{ marginBottom: '15px' }}>
               <input
                 type="text"
                 value={resetData.token}
                 onChange={(e) => setResetData(prev => ({ ...prev, token: e.target.value }))}
-                placeholder="Collez le code ici"
+                placeholder="Code de récupération"
                 required
                 style={{
-                  width: '100%', height: '48px', fontSize: '14px',
-                  padding: '12px', border: '1px solid #d1d5db',
-                  borderRadius: '8px', fontFamily: 'monospace',
-                  boxSizing: 'border-box'
+                  width: '100%', padding: '12px', border: '1px solid #ddd',
+                  borderRadius: '8px', fontFamily: 'monospace', boxSizing: 'border-box'
                 }}
               />
             </div>
-
-            <div style={{ marginBottom: '20px' }}>
-              <label style={{
-                display: 'block', fontSize: '14px', fontWeight: '600',
-                color: '#374151', marginBottom: '8px'
-              }}>
-                Nouveau mot de passe
-              </label>
+            
+            <div style={{ marginBottom: '15px' }}>
               <input
                 type="password"
                 value={resetData.new_password}
                 onChange={(e) => setResetData(prev => ({ ...prev, new_password: e.target.value }))}
-                placeholder="Nouveau mot de passe (min. 6 caractères)"
+                placeholder="Nouveau mot de passe"
                 required
                 style={{
-                  width: '100%', height: '48px', fontSize: '16px',
-                  padding: '12px', border: '1px solid #d1d5db',
+                  width: '100%', padding: '12px', border: '1px solid #ddd',
                   borderRadius: '8px', boxSizing: 'border-box'
                 }}
               />
             </div>
-
-            <div style={{ marginBottom: '24px' }}>
-              <label style={{
-                display: 'block', fontSize: '14px', fontWeight: '600',
-                color: '#374151', marginBottom: '8px'
-              }}>
-                Confirmer le mot de passe
-              </label>
+            
+            <div style={{ marginBottom: '20px' }}>
               <input
                 type="password"
                 value={resetData.confirm_password}
                 onChange={(e) => setResetData(prev => ({ ...prev, confirm_password: e.target.value }))}
-                placeholder="Confirmez le nouveau mot de passe"
+                placeholder="Confirmer mot de passe"
                 required
                 style={{
-                  width: '100%', height: '48px', fontSize: '16px',
-                  padding: '12px', border: '1px solid #d1d5db',
+                  width: '100%', padding: '12px', border: '1px solid #ddd',
                   borderRadius: '8px', boxSizing: 'border-box'
                 }}
               />
             </div>
-
+            
             <div style={{ display: 'flex', gap: '12px' }}>
-              <button
-                type="button"
-                onClick={() => setStep('email')}
-                style={{
-                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '500',
-                  background: 'white', color: '#374151', border: '1px solid #d1d5db',
-                  borderRadius: '8px', cursor: 'pointer'
-                }}
-              >
-                ← Retour
-              </button>
-              <button
-                type="submit"
-                disabled={loading || !resetData.token || !resetData.new_password || !resetData.confirm_password}
-                style={{
-                  flex: 1, height: '48px', fontSize: '16px', fontWeight: '600',
-                  background: loading ? '#9ca3af' : 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-                  color: 'white', border: 'none', borderRadius: '8px',
-                  cursor: loading ? 'not-allowed' : 'pointer'
-                }}
-              >
-                {loading ? 'Réinitialisation...' : 'Réinitialiser'}
-              </button>
+              <button type="button" onClick={() => setStep('email')} style={{
+                flex: 1, padding: '12px', background: '#f3f4f6', border: 'none',
+                borderRadius: '8px', cursor: 'pointer'
+              }}>← Retour</button>
+              <button type="submit" disabled={loading} style={{
+                flex: 1, padding: '12px', background: loading ? '#9ca3af' : '#4338ca',
+                color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer'
+              }}>{loading ? 'Réinitialisation...' : 'Réinitialiser'}</button>
             </div>
           </form>
         )}
@@ -771,8 +1300,9 @@ const ForgotPasswordModal = ({ onClose }) => {
   );
 };
 
-// Modern Dashboard with Beautiful Layout
-const Dashboard = ({ navigate, user, logout }) => {
+// Dashboard Page (avec vraies stats)
+const Dashboard = () => {
+  const { user } = useAuth();
   const [stats, setStats] = useState({ loading: true });
 
   useEffect(() => {
@@ -788,335 +1318,786 @@ const Dashboard = ({ navigate, user, logout }) => {
     }
   };
 
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
+  if (stats.loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '20px' }}>⏳</div>
+        <p style={{ fontSize: '18px', color: '#6b7280' }}>Chargement du tableau de bord...</p>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
-      {/* Modern Navigation */}
-      <nav style={{
-        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-        color: 'white', padding: '16px 32px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
+    <div>
+      {/* Welcome Banner */}
+      <div style={{
+        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
+        color: 'white', padding: '32px', borderRadius: '16px',
+        marginBottom: '32px', textAlign: 'center'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-            <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-            <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-            <path d="M12 18V6"/>
-          </svg>
-          <h1 style={{ margin: 0, fontSize: '28px', fontWeight: '800', letterSpacing: '-0.025em' }}>
-            FacturePro
-          </h1>
-        </div>
-        
-        <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
-          <button
-            onClick={() => navigate('/dashboard')}
-            style={{
-              background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none',
-              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
-              fontWeight: '600', fontSize: '14px'
-            }}
-          >
-            📊 Dashboard
-          </button>
-          <button
-            onClick={() => navigate('/clients')}
-            style={{
-              background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none',
-              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
-              fontWeight: '500', fontSize: '14px'
-            }}
-          >
-            👥 Clients
-          </button>
-          <button
-            onClick={() => navigate('/invoices')}
-            style={{
-              background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none',
-              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
-              fontWeight: '500', fontSize: '14px'
-            }}
-          >
-            📄 Factures
-          </button>
-        </div>
+        <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>
+          Bienvenue dans FacturePro ! 🎉
+        </h1>
+        <p style={{ margin: 0, opacity: 0.9, fontSize: '18px' }}>
+          Votre tableau de bord est prêt. Gérez votre entreprise en toute simplicité.
+        </p>
+      </div>
 
-        <button
-          onClick={logout}
-          style={{
-            background: '#ef4444', color: 'white', border: 'none',
-            padding: '10px 18px', borderRadius: '8px', cursor: 'pointer',
-            fontWeight: '600'
-          }}
-        >
-          Déconnexion
-        </button>
-      </nav>
-
-      {/* Dashboard Content */}
-      <div style={{ padding: '32px' }}>
-        <div style={{ marginBottom: '32px' }}>
-          <h2 style={{ fontSize: '32px', fontWeight: '800', color: '#0f172a', margin: '0 0 8px 0' }}>
-            Tableau de bord
-          </h2>
-          <p style={{ color: '#64748b', fontSize: '16px', margin: 0 }}>
-            Vue d'ensemble de votre activité
-          </p>
-        </div>
-
-        {stats.loading ? (
-          <div style={{ textAlign: 'center', padding: '40px' }}>
-            <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
-            <p>Chargement des statistiques...</p>
+      {/* Stats Cards */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+        gap: '24px',
+        marginBottom: '32px'
+      }}>
+        <div style={{
+          background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+          color: 'white', padding: '28px', borderRadius: '16px',
+          textAlign: 'center', position: 'relative', overflow: 'hidden'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '12px' }}>👥</div>
+          <div style={{ fontSize: '36px', fontWeight: '800', marginBottom: '4px' }}>
+            {stats.data?.total_clients || 0}
           </div>
-        ) : (
-          <>
-            {/* Stats Cards */}
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', 
-              gap: '24px', 
-              marginBottom: '32px' 
-            }}>
-              <div style={{
-                background: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-                color: 'white', padding: '28px', borderRadius: '16px',
-                textAlign: 'center', position: 'relative', overflow: 'hidden'
-              }}>
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>👥</div>
-                <div style={{ fontSize: '32px', fontWeight: '800', marginBottom: '4px' }}>
-                  {stats.data?.total_clients || 0}
-                </div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Clients</div>
-              </div>
+          <div style={{ fontSize: '14px', opacity: 0.9, fontWeight: '600' }}>Clients</div>
+        </div>
 
-              <div style={{
-                background: 'linear-gradient(135deg, #10b981 0%, #047857 100%)',
-                color: 'white', padding: '28px', borderRadius: '16px',
-                textAlign: 'center'
-              }}>
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📄</div>
-                <div style={{ fontSize: '32px', fontWeight: '800', marginBottom: '4px' }}>
-                  {stats.data?.total_invoices || 0}
-                </div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Factures</div>
-              </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #10b981, #047857)',
+          color: 'white', padding: '28px', borderRadius: '16px',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '12px' }}>📄</div>
+          <div style={{ fontSize: '36px', fontWeight: '800', marginBottom: '4px' }}>
+            {stats.data?.total_invoices || 0}
+          </div>
+          <div style={{ fontSize: '14px', opacity: 0.9, fontWeight: '600' }}>Factures</div>
+        </div>
 
-              <div style={{
-                background: 'linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%)',
-                color: 'white', padding: '28px', borderRadius: '16px',
-                textAlign: 'center'
-              }}>
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📝</div>
-                <div style={{ fontSize: '32px', fontWeight: '800', marginBottom: '4px' }}>
-                  {stats.data?.total_quotes || 0}
-                </div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Soumissions</div>
-              </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #7c3aed, #5b21b6)',
+          color: 'white', padding: '28px', borderRadius: '16px',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '12px' }}>📝</div>
+          <div style={{ fontSize: '36px', fontWeight: '800', marginBottom: '4px' }}>
+            {stats.data?.total_quotes || 0}
+          </div>
+          <div style={{ fontSize: '14px', opacity: 0.9, fontWeight: '600' }}>Soumissions</div>
+        </div>
 
-              <div style={{
-                background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
-                color: 'white', padding: '28px', borderRadius: '16px',
-                textAlign: 'center'
-              }}>
-                <div style={{ fontSize: '48px', marginBottom: '12px' }}>💰</div>
-                <div style={{ fontSize: '20px', fontWeight: '800', marginBottom: '4px' }}>
-                  {new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD' }).format(stats.data?.total_revenue || 0)}
-                </div>
-                <div style={{ fontSize: '14px', opacity: 0.9 }}>Revenus</div>
-              </div>
-            </div>
+        <div style={{
+          background: 'linear-gradient(135deg, #dc2626, #991b1b)',
+          color: 'white', padding: '28px', borderRadius: '16px',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '48px', marginBottom: '12px' }}>💰</div>
+          <div style={{ fontSize: '20px', fontWeight: '800', marginBottom: '4px' }}>
+            {formatCurrency(stats.data?.total_revenue || 0)}
+          </div>
+          <div style={{ fontSize: '14px', opacity: 0.9, fontWeight: '600' }}>Revenus</div>
+        </div>
+      </div>
 
-            {/* Quick Actions */}
-            <div style={{
-              background: 'white', border: '1px solid #e2e8f0',
-              borderRadius: '16px', padding: '32px'
-            }}>
-              <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700', color: '#0f172a' }}>
-                🚀 Actions rapides
-              </h3>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: '16px'
-              }}>
-                <button
-                  onClick={() => navigate('/clients')}
-                  style={{
-                    background: '#f8fafc', border: '1px solid #e2e8f0',
-                    padding: '20px', borderRadius: '12px', cursor: 'pointer',
-                    textAlign: 'center', transition: 'all 0.3s ease'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.target.style.background = '#f1f5f9';
-                    e.target.style.transform = 'translateY(-2px)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.target.style.background = '#f8fafc';
-                    e.target.style.transform = 'translateY(0)';
-                  }}
-                >
-                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>👥</div>
-                  <div style={{ fontWeight: '600', color: '#374151' }}>Gérer les clients</div>
-                </button>
-
-                <button
-                  onClick={() => navigate('/invoices')}
-                  style={{
-                    background: '#f8fafc', border: '1px solid #e2e8f0',
-                    padding: '20px', borderRadius: '12px', cursor: 'pointer',
-                    textAlign: 'center', transition: 'all 0.3s ease'
-                  }}
-                >
-                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>📄</div>
-                  <div style={{ fontWeight: '600', color: '#374151' }}>Créer une facture</div>
-                </button>
-
-                <button
-                  style={{
-                    background: '#f8fafc', border: '1px solid #e2e8f0',
-                    padding: '20px', borderRadius: '12px', cursor: 'pointer',
-                    textAlign: 'center', opacity: 0.6
-                  }}
-                >
-                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>📦</div>
-                  <div style={{ fontWeight: '600', color: '#374151' }}>Produits (bientôt)</div>
-                </button>
-              </div>
-            </div>
-          </>
-        )}
+      {/* Quick Actions */}
+      <div style={{
+        background: 'white', border: '1px solid #e2e8f0',
+        borderRadius: '16px', padding: '32px'
+      }}>
+        <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>
+          🚀 Actions rapides
+        </h3>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '16px'
+        }}>
+          <QuickActionCard
+            icon="👥"
+            title="Gérer les clients"
+            description="Ajouter, modifier vos clients"
+            onClick={() => window.history.pushState({}, '', '/clients')}
+          />
+          <QuickActionCard
+            icon="📄"
+            title="Créer une facture"
+            description="Nouvelle facture client"
+            onClick={() => window.history.pushState({}, '', '/invoices')}
+          />
+          <QuickActionCard
+            icon="📦"
+            title="Gérer les produits"
+            description="Catalogue de services"
+            onClick={() => window.history.pushState({}, '', '/products')}
+          />
+          <QuickActionCard
+            icon="📝"
+            title="Créer une soumission"
+            description="Devis pour prospect"
+            onClick={() => window.history.pushState({}, '', '/quotes')}
+          />
+        </div>
       </div>
     </div>
   );
 };
 
-// Clients Page
-const ClientsPage = ({ navigate, user, logout }) => {
+// Quick Action Card Component
+const QuickActionCard = ({ icon, title, description, onClick }) => {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: '#f8fafc', border: '1px solid #e2e8f0',
+        padding: '20px', borderRadius: '12px', cursor: 'pointer',
+        textAlign: 'center', transition: 'all 0.3s ease',
+        width: '100%'
+      }}
+      onMouseEnter={(e) => {
+        e.target.style.background = '#f1f5f9';
+        e.target.style.transform = 'translateY(-2px)';
+        e.target.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+      }}
+      onMouseLeave={(e) => {
+        e.target.style.background = '#f8fafc';
+        e.target.style.transform = 'translateY(0)';
+        e.target.style.boxShadow = 'none';
+      }}
+    >
+      <div style={{ fontSize: '32px', marginBottom: '12px' }}>{icon}</div>
+      <div style={{ fontWeight: '600', color: '#374151', fontSize: '16px', marginBottom: '4px' }}>
+        {title}
+      </div>
+      <div style={{ fontSize: '14px', color: '#6b7280' }}>
+        {description}
+      </div>
+    </button>
+  );
+};
+
+// Clients Page (DESIGN ORIGINAL COMPLET)
+const ClientsPage = () => {
   const [clients, setClients] = useState([]);
+  const [filteredClients, setFilteredClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+  const [editingClient, setEditingClient] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: ''
+  });
 
   useEffect(() => {
     fetchClients();
   }, []);
+
+  useEffect(() => {
+    const filtered = clients.filter(client =>
+      client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      client.email.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+    setFilteredClients(filtered);
+  }, [clients, searchTerm]);
 
   const fetchClients = async () => {
     try {
       const response = await axios.get(`${BACKEND_URL}/api/clients`);
       setClients(response.data);
     } catch (error) {
-      console.error('Error fetching clients:', error);
+      setError('Erreur lors du chargement des clients');
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
-      {/* Navigation */}
-      <nav style={{
-        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-        color: 'white', padding: '16px 32px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-      }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>FacturePro</h1>
-        <div style={{ display: 'flex', gap: '20px' }}>
-          <button onClick={() => navigate('/dashboard')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dashboard</button>
-          <button style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px' }}>Clients</button>
-          <button onClick={() => navigate('/invoices')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Factures</button>
-        </div>
-        <button onClick={logout} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Déconnexion</button>
-      </nav>
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
 
-      <div style={{ padding: '32px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+    try {
+      if (editingClient) {
+        await axios.put(`${BACKEND_URL}/api/clients/${editingClient.id}`, formData);
+        setSuccess('Client modifié avec succès');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/clients`, formData);
+        setSuccess('Client créé avec succès');
+      }
+      
+      setShowForm(false);
+      setEditingClient(null);
+      setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+      fetchClients();
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la sauvegarde');
+    }
+  };
+
+  const handleEdit = (client) => {
+    setEditingClient(client);
+    setFormData({
+      name: client.name,
+      email: client.email,
+      phone: client.phone || '',
+      address: client.address || '',
+      city: client.city || '',
+      postal_code: client.postal_code || '',
+      country: client.country || ''
+    });
+    setShowForm(true);
+  };
+
+  const handleDelete = async (clientId) => {
+    if (window.confirm('Êtes-vous sûr de vouloir supprimer ce client ?')) {
+      try {
+        await axios.delete(`${BACKEND_URL}/api/clients/${clientId}`);
+        setSuccess('Client supprimé avec succès');
+        fetchClients();
+      } catch (error) {
+        setError('Erreur lors de la suppression');
+      }
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '64px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+        <p style={{ fontSize: '18px', color: '#6b7280' }}>Chargement des clients...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>👥</div>
           <div>
-            <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#0f172a', margin: '0 0 8px 0' }}>👥 Clients</h2>
-            <p style={{ color: '#64748b', margin: 0 }}>{clients.length} client{clients.length > 1 ? 's' : ''} enregistré{clients.length > 1 ? 's' : ''}</p>
+            <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Clients</h1>
+            <p style={{ color: '#6b7280', margin: 0 }}>Gérez vos clients et leurs informations</p>
           </div>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            color: 'white', border: 'none', padding: '14px 28px',
+            borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
+            fontSize: '14px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
+          }}
+        >
+          ➕ Nouveau Client
+        </button>
+      </div>
+
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px',
+          marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px',
+          marginBottom: '20px'
+        }}>
+          {success}
+        </div>
+      )}
+
+      {/* Search and Stats */}
+      <div style={{
+        background: 'white', border: '1px solid #e2e8f0',
+        borderRadius: '12px', padding: '24px', marginBottom: '24px'
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ position: 'relative', flex: 1, maxWidth: '320px' }}>
+            <input
+              type="text"
+              placeholder="Rechercher un client..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: '100%', padding: '12px 12px 12px 44px',
+                border: '1px solid #d1d5db', borderRadius: '8px',
+                fontSize: '14px', boxSizing: 'border-box'
+              }}
+            />
+            <div style={{
+              position: 'absolute', left: '14px', top: '50%',
+              transform: 'translateY(-50%)', color: '#9ca3af', fontSize: '16px'
+            }}>🔍</div>
+          </div>
+          <div style={{ fontSize: '14px', color: '#6b7280' }}>
+            {filteredClients.length} client{filteredClients.length > 1 ? 's' : ''}
+          </div>
+        </div>
+      </div>
+
+      {/* Clients List */}
+      {filteredClients.length === 0 && !searchTerm ? (
+        <div style={{
+          background: 'white', border: '2px dashed #d1d5db',
+          borderRadius: '16px', padding: '64px', textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '24px' }}>👥</div>
+          <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>
+            Aucun client enregistré
+          </h3>
+          <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>
+            Commencez par ajouter votre premier client pour créer des factures
+          </p>
           <button
             onClick={() => setShowForm(true)}
             style={{
-              background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-              color: 'white', border: 'none', padding: '14px 28px',
-              borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
-              fontSize: '16px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
+              background: '#3b82f6', color: 'white', border: 'none',
+              padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
+              fontWeight: '700', fontSize: '16px'
             }}
           >
-            ➕ Nouveau Client
+            🚀 Ajouter mon premier client
           </button>
         </div>
-
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px' }}>
-            <div style={{ fontSize: '64px', marginBottom: '20px' }}>⏳</div>
-            <p style={{ fontSize: '18px', color: '#64748b' }}>Chargement des clients...</p>
-          </div>
-        ) : clients.length === 0 ? (
-          <div style={{
-            background: 'white', border: '2px dashed #d1d5db',
-            borderRadius: '16px', padding: '60px', textAlign: 'center'
-          }}>
-            <div style={{ fontSize: '80px', marginBottom: '24px' }}>👥</div>
-            <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>Aucun client enregistré</h3>
-            <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>Commencez par ajouter votre premier client pour créer des factures</p>
-            <button
-              onClick={() => setShowForm(true)}
-              style={{
-                background: '#3b82f6', color: 'white', border: 'none',
-                padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
-                fontWeight: '700', fontSize: '16px'
-              }}
-            >
-              🚀 Ajouter mon premier client
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
-            {clients.map(client => (
-              <div key={client.id} style={{
-                background: 'white', border: '1px solid #e5e7eb',
-                borderRadius: '12px', padding: '24px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-                transition: 'all 0.3s ease'
-              }}>
-                <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#1f2937', margin: '0 0 12px 0' }}>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
+          {filteredClients.map(client => (
+            <div key={client.id} style={{
+              background: 'white', border: '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+              transition: 'all 0.3s ease'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937', margin: 0 }}>
                   {client.name}
                 </h3>
-                <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>📧 {client.email}</div>
-                {client.phone && <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>📱 {client.phone}</div>}
-                {client.address && <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '16px' }}>📍 {client.address}</div>}
-                
-                <div style={{ textAlign: 'right' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
                   <button
-                    onClick={async () => {
-                      if (window.confirm('Supprimer ce client ?')) {
-                        try {
-                          await axios.delete(`${BACKEND_URL}/api/clients/${client.id}`);
-                          fetchClients();
-                        } catch (error) {
-                          alert('Erreur lors de la suppression');
-                        }
-                      }
-                    }}
+                    onClick={() => handleEdit(client)}
                     style={{
-                      background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca',
-                      padding: '8px 12px', borderRadius: '8px', cursor: 'pointer',
-                      fontSize: '14px', fontWeight: '500'
+                      background: '#f0f9ff', color: '#0369a1', border: 'none',
+                      padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
+                      fontSize: '12px'
+                    }}
+                  >
+                    ✏️ Modifier
+                  </button>
+                  <button
+                    onClick={() => handleDelete(client.id)}
+                    style={{
+                      background: '#fef2f2', color: '#dc2626', border: 'none',
+                      padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
+                      fontSize: '12px'
                     }}
                   >
                     🗑️ Supprimer
                   </button>
                 </div>
               </div>
-            ))}
+              
+              <div style={{ fontSize: '14px', color: '#6b7280', lineHeight: '1.6' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ marginRight: '8px' }}>📧</span>
+                  {client.email}
+                </div>
+                {client.phone && (
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ marginRight: '8px' }}>📱</span>
+                    {client.phone}
+                  </div>
+                )}
+                {client.address && (
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ marginRight: '8px' }}>📍</span>
+                    {client.address}
+                  </div>
+                )}
+                {client.city && (
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <span style={{ marginRight: '8px' }}>🏙️</span>
+                    {client.city} {client.postal_code}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {filteredClients.length === 0 && searchTerm && (
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '40px', textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '64px', marginBottom: '16px' }}>🔍</div>
+          <h3 style={{ color: '#374151', margin: '0 0 8px 0' }}>Aucun client trouvé</h3>
+          <p style={{ color: '#6b7280', margin: 0 }}>Aucun client ne correspond à votre recherche "{searchTerm}"</p>
+        </div>
+      )}
+
+      {/* Client Form Modal - DESIGN ORIGINAL */}
+      {showForm && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0, 0, 0, 0.6)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 50, padding: '16px'
+        }}>
+          <div style={{
+            background: 'white', borderRadius: '16px',
+            maxWidth: '600px', width: '100%', maxHeight: '90vh', overflow: 'auto'
+          }}>
+            <div style={{
+              padding: '24px 24px 0 24px', borderBottom: '1px solid #e5e7eb',
+              marginBottom: '24px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 style={{
+                  fontSize: '20px', fontWeight: '700', color: '#1f2937', margin: 0
+                }}>
+                  {editingClient ? 'Modifier le client' : 'Nouveau Client'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditingClient(null);
+                    setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+                  }}
+                  style={{
+                    background: 'none', border: 'none', fontSize: '24px',
+                    cursor: 'pointer', color: '#6b7280'
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            
+            <div style={{ padding: '0 24px 24px 24px' }}>
+              <form onSubmit={handleSubmit}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+                      Nom complet *
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                      placeholder="Jean Dupont"
+                      required
+                      style={{
+                        width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                        borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+                      Adresse email *
+                    </label>
+                    <input
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                      placeholder="jean@entreprise.com"
+                      required
+                      style={{
+                        width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                        borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+                      Téléphone
+                    </label>
+                    <input
+                      type="tel"
+                      value={formData.phone}
+                      onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                      placeholder="514-123-4567"
+                      style={{
+                        width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                        borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+                      Ville
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.city}
+                      onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
+                      placeholder="Montréal"
+                      style={{
+                        width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                        borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                <div style={{ marginBottom: '24px' }}>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '500', color: '#374151', marginBottom: '6px' }}>
+                    Adresse complète
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.address}
+                    onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
+                    placeholder="123 Rue Example, App 456"
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', paddingTop: '16px', borderTop: '1px solid #e5e7eb' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForm(false);
+                      setEditingClient(null);
+                      setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+                    }}
+                    style={{
+                      background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                      padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
+                      fontSize: '14px', fontWeight: '500'
+                    }}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    style={{
+                      background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', color: 'white',
+                      border: 'none', padding: '12px 24px', borderRadius: '8px',
+                      cursor: 'pointer', fontWeight: '600', fontSize: '14px'
+                    }}
+                  >
+                    {editingClient ? 'Modifier le client' : 'Créer le client'}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Pages placeholders (seront développées)
+// Products Page (FONCTIONNELLE COMPLETE)
+const ProductsPage = () => {
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    name: '', description: '', unit_price: '', unit: 'unité', category: ''
+  });
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
+  const fetchProducts = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/products`);
+      setProducts(response.data);
+    } catch (error) {
+      setError('Erreur lors du chargement des produits');
+      console.error('Error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/products`, {
+        ...formData,
+        unit_price: parseFloat(formData.unit_price)
+      });
+      
+      setSuccess('Produit créé avec succès');
+      setShowForm(false);
+      setFormData({ name: '', description: '', unit_price: '', unit: 'unité', category: '' });
+      fetchProducts();
+    } catch (error) {
+      setError('Erreur lors de la création du produit');
+    }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>📦</div>
+          <div>
+            <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Produits & Services</h1>
+            <p style={{ color: '#6b7280', margin: 0 }}>Gérez votre catalogue de produits et services</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            background: 'linear-gradient(135deg, #10b981, #047857)',
+            color: 'white', border: 'none', padding: '14px 28px',
+            borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
+            fontSize: '14px', boxShadow: '0 4px 12px rgba(16,185,129,0.4)'
+          }}
+        >
+          ➕ Nouveau Produit
+        </button>
       </div>
 
-      {/* Client Form Modal */}
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>
+          {success}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '60px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+          <p>Chargement des produits...</p>
+        </div>
+      ) : products.length === 0 ? (
+        <div style={{
+          background: 'white', border: '2px dashed #d1d5db',
+          borderRadius: '16px', padding: '64px', textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '24px' }}>📦</div>
+          <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>
+            Aucun produit créé
+          </h3>
+          <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>
+            Créez vos produits et services pour faciliter la facturation
+          </p>
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              background: '#10b981', color: 'white', border: 'none',
+              padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
+              fontWeight: '700', fontSize: '16px'
+            }}
+          >
+            🚀 Créer mon premier produit
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+          {products.map(product => (
+            <div key={product.id} style={{
+              background: 'white', border: '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937', margin: 0 }}>
+                  {product.name}
+                </h3>
+                {product.category && (
+                  <span style={{
+                    background: '#f3f4f6', color: '#374151',
+                    padding: '4px 8px', borderRadius: '6px', fontSize: '12px'
+                  }}>
+                    {product.category}
+                  </span>
+                )}
+              </div>
+              
+              <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '16px' }}>
+                {product.description}
+              </p>
+              
+              <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                paddingTop: '16px', borderTop: '1px solid #e5e7eb'
+              }}>
+                <div>
+                  <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>
+                    {formatCurrency(product.unit_price)}
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                    par {product.unit}
+                  </div>
+                </div>
+                
+                <button
+                  onClick={async () => {
+                    if (window.confirm('Supprimer ce produit ?')) {
+                      try {
+                        await axios.delete(`${BACKEND_URL}/api/products/${product.id}`);
+                        setSuccess('Produit supprimé');
+                        fetchProducts();
+                      } catch (error) {
+                        setError('Erreur suppression');
+                      }
+                    }
+                  }}
+                  style={{
+                    background: '#fef2f2', color: '#dc2626', border: 'none',
+                    padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  🗑️ Supprimer
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Product Form Modal */}
       {showForm && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -1125,99 +2106,86 @@ const ClientsPage = ({ navigate, user, logout }) => {
         }}>
           <div style={{
             background: 'white', padding: '32px', borderRadius: '16px',
-            width: '100%', maxWidth: '600px', maxHeight: '90vh', overflow: 'auto'
+            width: '100%', maxWidth: '500px'
           }}>
-            <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#1f2937', margin: '0 0 24px 0' }}>👥 Nouveau Client</h3>
+            <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>
+              📦 Nouveau Produit/Service
+            </h3>
             
-            <form onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                await axios.post(`${BACKEND_URL}/api/clients`, formData);
-                setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
-                setShowForm(false);
-                fetchClients();
-              } catch (error) {
-                alert('Erreur lors de la création du client');
-              }
-            }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+            <form onSubmit={handleSubmit}>
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Nom *</label>
+                <input
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                  required
+                  placeholder="Consultation, Kilométrage, Formation..."
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #ddd',
+                    borderRadius: '8px', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Description</label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                  rows={3}
+                  placeholder="Description détaillée du service ou produit..."
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #ddd',
+                    borderRadius: '8px', resize: 'vertical', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '24px' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Nom complet *</label>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Prix (CAD) *</label>
                   <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                    type="number"
+                    step="0.01"
+                    value={formData.unit_price}
+                    onChange={(e) => setFormData(prev => ({ ...prev, unit_price: e.target.value }))}
                     required
-                    placeholder="Jean Dupont"
                     style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
                     }}
                   />
                 </div>
+
                 <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Email *</label>
-                  <input
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                    required
-                    placeholder="jean@entreprise.com"
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Unité</label>
+                  <select
+                    value={formData.unit}
+                    onChange={(e) => setFormData(prev => ({ ...prev, unit: e.target.value }))}
                     style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
                     }}
-                  />
+                  >
+                    <option value="unité">Unité</option>
+                    <option value="heure">Heure</option>
+                    <option value="km">Kilomètre</option>
+                    <option value="jour">Jour</option>
+                    <option value="mois">Mois</option>
+                  </select>
                 </div>
+
                 <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Téléphone</label>
-                  <input
-                    type="tel"
-                    value={formData.phone}
-                    onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
-                    placeholder="514-123-4567"
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Adresse</label>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Catégorie</label>
                   <input
                     type="text"
-                    value={formData.address}
-                    onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
-                    placeholder="123 Rue Example"
+                    value={formData.category}
+                    onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value }))}
+                    placeholder="Services, Transport..."
                     style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Ville</label>
-                  <input
-                    type="text"
-                    value={formData.city}
-                    onChange={(e) => setFormData(prev => ({ ...prev, city: e.target.value }))}
-                    placeholder="Montréal"
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Code postal</label>
-                  <input
-                    type="text"
-                    value={formData.postal_code}
-                    onChange={(e) => setFormData(prev => ({ ...prev, postal_code: e.target.value }))}
-                    placeholder="H1A 1A1"
-                    style={{
-                      width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                      borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box'
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
                     }}
                   />
                 </div>
@@ -1237,12 +2205,12 @@ const ClientsPage = ({ navigate, user, logout }) => {
                 <button
                   type="submit"
                   style={{
-                    background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', color: 'white',
-                    border: 'none', padding: '12px 24px', borderRadius: '8px',
-                    cursor: 'pointer', fontWeight: '700'
+                    background: '#10b981', color: 'white', border: 'none',
+                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
+                    fontWeight: '600'
                   }}
                 >
-                  💾 Créer le client
+                  💾 Créer le produit
                 </button>
               </div>
             </form>
@@ -1253,79 +2221,1438 @@ const ClientsPage = ({ navigate, user, logout }) => {
   );
 };
 
-// Invoices Page
-const InvoicesPage = ({ navigate, user, logout }) => {
-  return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
-      <nav style={{
-        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-        color: 'white', padding: '16px 32px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-      }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>FacturePro</h1>
-        <div style={{ display: 'flex', gap: '20px' }}>
-          <button onClick={() => navigate('/dashboard')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dashboard</button>
-          <button onClick={() => navigate('/clients')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Clients</button>
-          <button style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px' }}>Factures</button>
-        </div>
-        <button onClick={logout} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Déconnexion</button>
-      </nav>
+const InvoicesPage = () => {
+  const [invoices, setInvoices] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    client_id: '',
+    due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+    items: [{ description: '', quantity: 1, unit_price: 0 }],
+    province: 'QC',
+    notes: ''
+  });
 
-      <div style={{ padding: '32px', textAlign: 'center' }}>
-        <div style={{ fontSize: '80px', marginBottom: '24px' }}>📄</div>
-        <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', marginBottom: '16px' }}>Factures</h2>
-        <p style={{ color: '#6b7280', fontSize: '18px', marginBottom: '32px' }}>Fonctionnalité en cours de développement...</p>
-        
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const [invoicesRes, clientsRes, productsRes] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/invoices`),
+        axios.get(`${BACKEND_URL}/api/clients`),
+        axios.get(`${BACKEND_URL}/api/products`)
+      ]);
+      setInvoices(invoicesRes.data);
+      setClients(clientsRes.data);
+      setProducts(productsRes.data);
+    } catch (error) {
+      setError('Erreur lors du chargement des données');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+
+    try {
+      const invoiceData = {
+        ...formData,
+        items: formData.items.map(item => ({
+          ...item,
+          total: item.quantity * item.unit_price
+        }))
+      };
+
+      await axios.post(`${BACKEND_URL}/api/invoices`, invoiceData);
+      setSuccess('Facture créée avec succès');
+      setShowForm(false);
+      setFormData({
+        client_id: '',
+        due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+        items: [{ description: '', quantity: 1, unit_price: 0 }],
+        province: 'QC',
+        notes: ''
+      });
+      fetchData();
+    } catch (error) {
+      setError('Erreur lors de la création de la facture');
+    }
+  };
+
+  const addItem = () => {
+    setFormData(prev => ({
+      ...prev,
+      items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }]
+    }));
+  };
+
+  const updateItem = (index, field, value) => {
+    const newItems = [...formData.items];
+    newItems[index] = { ...newItems[index], [field]: value };
+    setFormData(prev => ({ ...prev, items: newItems }));
+  };
+
+  const removeItem = (index) => {
+    if (formData.items.length > 1) {
+      setFormData(prev => ({
+        ...prev,
+        items: prev.items.filter((_, i) => i !== index)
+      }));
+    }
+  };
+
+  const getClientName = (clientId) => {
+    const client = clients.find(c => c.id === clientId);
+    return client ? client.name : 'Client inconnu';
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>📄</div>
+          <div>
+            <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Factures</h1>
+            <p style={{ color: '#6b7280', margin: 0 }}>Créez et gérez vos factures clients</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            color: 'white', border: 'none', padding: '14px 28px',
+            borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
+            fontSize: '14px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
+          }}
+        >
+          ✨ Nouvelle Facture
+        </button>
+      </div>
+
+      {/* Messages */}
+      {error && (
         <div style={{
-          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-          color: 'white', padding: '24px', borderRadius: '16px',
-          display: 'inline-block'
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{error}</div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{success}</div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '60px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+          <p>Chargement des factures...</p>
+        </div>
+      ) : invoices.length === 0 ? (
+        <div style={{
+          background: 'white', border: '2px dashed #d1d5db',
+          borderRadius: '16px', padding: '64px', textAlign: 'center'
         }}>
-          <div style={{ fontSize: '32px', marginBottom: '8px' }}>🚧</div>
-          <div style={{ fontWeight: '700' }}>Bientôt disponible</div>
-          <div style={{ fontSize: '14px', opacity: 0.9 }}>Création et gestion de factures</div>
+          <div style={{ fontSize: '80px', marginBottom: '24px' }}>📄</div>
+          <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>
+            Aucune facture créée
+          </h3>
+          <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>
+            Créez votre première facture pour commencer à facturer vos clients
+          </p>
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              background: '#3b82f6', color: 'white', border: 'none',
+              padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
+              fontWeight: '700', fontSize: '16px'
+            }}
+          >
+            🚀 Créer ma première facture
+          </button>
         </div>
-      </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '16px' }}>
+          {invoices.map(invoice => (
+            <div key={invoice.id} style={{
+              background: 'white', border: '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                <div>
+                  <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#1f2937', margin: '0 0 8px 0' }}>
+                    {invoice.invoice_number}
+                  </h3>
+                  <p style={{ color: '#6b7280', margin: '4px 0' }}>
+                    Client: {getClientName(invoice.client_id)}
+                  </p>
+                  <p style={{ color: '#6b7280', margin: '4px 0', fontSize: '14px' }}>
+                    Échéance: {new Date(invoice.due_date).toLocaleDateString('fr-CA')}
+                  </p>
+                </div>
+                
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#1f2937' }}>
+                    {formatCurrency(invoice.total)}
+                  </div>
+                  <span style={{
+                    background: invoice.status === 'paid' ? '#dcfce7' : '#fef3c7',
+                    color: invoice.status === 'paid' ? '#166534' : '#92400e',
+                    padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '600'
+                  }}>
+                    {invoice.status === 'paid' ? '✅ Payée' : '📤 ' + invoice.status}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Invoice Form Modal */}
+      {showForm && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000, padding: '20px'
+        }}>
+          <div style={{
+            background: 'white', padding: '32px', borderRadius: '16px',
+            width: '95%', maxWidth: '800px', maxHeight: '90vh', overflow: 'auto'
+          }}>
+            <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>
+              ✨ Nouvelle Facture
+            </h3>
+            
+            <form onSubmit={handleSubmit}>
+              {/* Client et Date */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Client *</label>
+                  <select
+                    value={formData.client_id}
+                    onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="">Sélectionner un client</option>
+                    {clients.map(client => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Échéance *</label>
+                  <input
+                    type="date"
+                    value={formData.due_date}
+                    onChange={(e) => setFormData(prev => ({ ...prev, due_date: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Province</label>
+                  <select
+                    value={formData.province}
+                    onChange={(e) => setFormData(prev => ({ ...prev, province: e.target.value }))}
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="QC">🍁 Québec (TPS 5% + TVQ 9.975%)</option>
+                    <option value="ON">🍁 Ontario (HST 13%)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Items */}
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>
+                  📋 Articles et Services
+                </h4>
+                
+                {formData.items.map((item, index) => (
+                  <div key={index} style={{
+                    display: 'grid', gridTemplateColumns: '2fr 100px 120px 120px auto',
+                    gap: '12px', marginBottom: '12px', padding: '16px',
+                    background: '#f8fafc', borderRadius: '8px', alignItems: 'center'
+                  }}>
+                    <input
+                      type="text"
+                      value={item.description}
+                      onChange={(e) => updateItem(index, 'description', e.target.value)}
+                      placeholder="Description du service/produit"
+                      required
+                      style={{
+                        padding: '10px', border: '1px solid #ddd',
+                        borderRadius: '6px', boxSizing: 'border-box'
+                      }}
+                    />
+                    
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={item.quantity}
+                      onChange={(e) => updateItem(index, 'quantity', parseFloat(e.target.value) || 0)}
+                      style={{
+                        padding: '10px', border: '1px solid #ddd',
+                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
+                      }}
+                    />
+                    
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={item.unit_price}
+                      onChange={(e) => updateItem(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                      style={{
+                        padding: '10px', border: '1px solid #ddd',
+                        borderRadius: '6px', textAlign: 'center', boxSizing: 'border-box'
+                      }}
+                    />
+                    
+                    <div style={{
+                      padding: '10px', background: '#e5e7eb', borderRadius: '6px',
+                      textAlign: 'center', fontWeight: '600'
+                    }}>
+                      {formatCurrency(item.quantity * item.unit_price)}
+                    </div>
+                    
+                    <button
+                      type="button"
+                      onClick={() => removeItem(index)}
+                      disabled={formData.items.length === 1}
+                      style={{
+                        background: formData.items.length === 1 ? '#f3f4f6' : '#ef4444',
+                        color: formData.items.length === 1 ? '#9ca3af' : 'white',
+                        border: 'none', padding: '8px', borderRadius: '6px',
+                        cursor: formData.items.length === 1 ? 'not-allowed' : 'pointer'
+                      }}
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                ))}
+                
+                <button
+                  type="button"
+                  onClick={addItem}
+                  style={{
+                    background: '#10b981', color: 'white', border: 'none',
+                    padding: '10px 20px', borderRadius: '8px', cursor: 'pointer',
+                    fontWeight: '600', marginTop: '8px'
+                  }}
+                >
+                  ➕ Ajouter un article
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  style={{
+                    background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    background: '#3b82f6', color: 'white', border: 'none',
+                    padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  💾 Créer la facture
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-// Settings Page
-const SettingsPage = ({ navigate, user, logout }) => {
+const QuotesPage = () => {
+  const [quotes, setQuotes] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    client_id: '',
+    valid_until: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+    items: [{ description: '', quantity: 1, unit_price: 0 }],
+    province: 'QC',
+    notes: ''
+  });
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const [quotesRes, clientsRes] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/quotes`),
+        axios.get(`${BACKEND_URL}/api/clients`)
+      ]);
+      setQuotes(quotesRes.data);
+      setClients(clientsRes.data);
+    } catch (error) {
+      setError('Erreur lors du chargement');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/quotes`, {
+        ...formData,
+        items: formData.items.map(item => ({
+          ...item,
+          total: item.quantity * item.unit_price
+        }))
+      });
+      
+      setSuccess('Soumission créée avec succès');
+      setShowForm(false);
+      setFormData({
+        client_id: '',
+        valid_until: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+        items: [{ description: '', quantity: 1, unit_price: 0 }],
+        province: 'QC',
+        notes: ''
+      });
+      fetchData();
+    } catch (error) {
+      setError('Erreur lors de la création');
+    }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', {
+      style: 'currency',
+      currency: 'CAD'
+    }).format(amount || 0);
+  };
+
   return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
-      <nav style={{
-        background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)',
-        color: 'white', padding: '16px 32px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>📝</div>
+          <div>
+            <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Soumissions</h1>
+            <p style={{ color: '#6b7280', margin: 0 }}>Créez des devis pour vos prospects</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowForm(true)}
+          style={{
+            background: 'linear-gradient(135deg, #7c3aed, #5b21b6)',
+            color: 'white', border: 'none', padding: '14px 28px',
+            borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
+            fontSize: '14px', boxShadow: '0 4px 12px rgba(124,58,237,0.4)'
+          }}
+        >
+          ✨ Nouvelle Soumission
+        </button>
+      </div>
+
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{error}</div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{success}</div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '60px' }}>
+          <p>Chargement des soumissions...</p>
+        </div>
+      ) : quotes.length === 0 ? (
+        <div style={{
+          background: 'white', border: '2px dashed #d1d5db',
+          borderRadius: '16px', padding: '64px', textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '24px' }}>📝</div>
+          <h3 style={{ fontSize: '24px', fontWeight: '700', color: '#374151', margin: '0 0 12px 0' }}>
+            Aucune soumission créée
+          </h3>
+          <p style={{ color: '#6b7280', fontSize: '16px', margin: '0 0 32px 0' }}>
+            Créez des soumissions pour vos prospects avant la facturation
+          </p>
+          <button
+            onClick={() => setShowForm(true)}
+            style={{
+              background: '#7c3aed', color: 'white', border: 'none',
+              padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
+              fontWeight: '700', fontSize: '16px'
+            }}
+          >
+            🚀 Créer ma première soumission
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '16px' }}>
+          {quotes.map(quote => (
+            <div key={quote.id} style={{
+              background: 'white', border: '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div>
+                  <h3 style={{ fontSize: '20px', fontWeight: '700', margin: '0 0 8px 0' }}>
+                    {quote.quote_number}
+                  </h3>
+                  <p style={{ color: '#6b7280' }}>
+                    Valide jusqu'au: {new Date(quote.valid_until).toLocaleDateString('fr-CA')}
+                  </p>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#7c3aed' }}>
+                    {formatCurrency(quote.total)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Form Modal (similaire aux factures) */}
+      {showForm && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', zIndex: 1000, padding: '20px'
+        }}>
+          <div style={{
+            background: 'white', padding: '32px', borderRadius: '16px',
+            width: '95%', maxWidth: '600px'
+          }}>
+            <h3 style={{ margin: '0 0 24px 0' }}>✨ Nouvelle Soumission</h3>
+            
+            <form onSubmit={handleSubmit}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Client *</label>
+                  <select
+                    value={formData.client_id}
+                    onChange={(e) => setFormData(prev => ({ ...prev, client_id: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  >
+                    <option value="">Sélectionner un client</option>
+                    {clients.map(client => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Valide jusqu'au *</label>
+                  <input
+                    type="date"
+                    value={formData.valid_until}
+                    onChange={(e) => setFormData(prev => ({ ...prev, valid_until: e.target.value }))}
+                    required
+                    style={{
+                      width: '100%', padding: '12px', border: '1px solid #ddd',
+                      borderRadius: '8px', boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Description *</label>
+                <input
+                  type="text"
+                  value={formData.items[0]?.description || ''}
+                  onChange={(e) => setFormData(prev => ({ 
+                    ...prev, 
+                    items: [{ ...prev.items[0], description: e.target.value }]
+                  }))}
+                  required
+                  placeholder="Description de la soumission"
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #ddd',
+                    borderRadius: '8px', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                <button type="button" onClick={() => setShowForm(false)} style={{
+                  background: 'white', color: '#374151', border: '1px solid #d1d5db',
+                  padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
+                }}>Annuler</button>
+                <button type="submit" style={{
+                  background: '#7c3aed', color: 'white', border: 'none',
+                  padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600'
+                }}>💾 Créer la soumission</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const EmployeesPage = () => (
+  <div style={{ textAlign: 'center', padding: '60px' }}>
+    <div style={{ fontSize: '80px', marginBottom: '24px' }}>👨‍💼</div>
+    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Employés</h2>
+    <p style={{ color: '#6b7280', fontSize: '18px' }}>Gérez vos employés et leurs informations</p>
+  </div>
+);
+
+const ExpensesPage = () => (
+  <div style={{ textAlign: 'center', padding: '60px' }}>
+    <div style={{ fontSize: '80px', marginBottom: '24px' }}>💳</div>
+    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Dépenses</h2>
+    <p style={{ color: '#6b7280', fontSize: '18px' }}>Système de dépenses et remboursements</p>
+  </div>
+);
+
+const SettingsPage = () => {
+  const [settings, setSettings] = useState({
+    company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
+    logo_url: '', primary_color: '#3B82F6', secondary_color: '#1F2937',
+    gst_number: '', pst_number: '', hst_number: '', default_due_days: 30
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    fetchSettings();
+  }, []);
+
+  const fetchSettings = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/settings/company`);
+      setSettings({ ...settings, ...response.data });
+    } catch (error) {
+      setError('Erreur lors du chargement des paramètres');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setError(''); setSuccess('');
+
+    try {
+      await axios.put(`${BACKEND_URL}/api/settings/company`, settings);
+      setSuccess('Paramètres sauvegardés avec succès');
+    } catch (error) {
+      setError('Erreur lors de la sauvegarde');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleLogoSave = async () => {
+    if (!settings.logo_url) {
+      setError('Veuillez entrer une URL de logo');
+      return;
+    }
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+        logo_url: settings.logo_url
+      });
+      setSuccess('Logo sauvegardé avec succès');
+    } catch (error) {
+      setError('Erreur lors de la sauvegarde du logo');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+        <p>Chargement des paramètres...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>⚙️</div>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Paramètres</h1>
+        </div>
+        <p style={{ color: '#6b7280', margin: 0 }}>Configuration de votre entreprise</p>
+      </div>
+
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{error}</div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>{success}</div>
+      )}
+
+      <form onSubmit={handleSubmit}>
+        {/* Logo Section */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>🖼️ Logo de l'entreprise</h3>
+          
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.currentTarget.style.borderColor = '#3b82f6';
+              e.currentTarget.style.background = '#eff6ff';
+            }}
+            onDragLeave={(e) => {
+              e.currentTarget.style.borderColor = '#d1d5db';
+              e.currentTarget.style.background = '#f9fafb';
+            }}
+            onDrop={async (e) => {
+              e.preventDefault();
+              e.currentTarget.style.borderColor = '#d1d5db';
+              e.currentTarget.style.background = '#f9fafb';
+              
+              const file = e.dataTransfer.files[0];
+              if (file && file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                  const base64Logo = event.target.result;
+                  setSettings(prev => ({ ...prev, logo_url: base64Logo }));
+                  // Auto-save after upload
+                  try {
+                    await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+                      logo_url: base64Logo
+                    });
+                    setSuccess('Logo téléchargé avec succès !');
+                    setTimeout(() => setSuccess(''), 3000);
+                  } catch (error) {
+                    setError('Erreur lors du téléchargement du logo');
+                  }
+                };
+                reader.readAsDataURL(file);
+              }
+            }}
+            style={{
+              border: '2px dashed #d1d5db',
+              borderRadius: '12px',
+              padding: '32px',
+              textAlign: 'center',
+              background: '#f9fafb',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              position: 'relative'
+            }}
+          >
+            <input
+              type="file"
+              accept="image/*"
+              onChange={async (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = async (event) => {
+                    const base64Logo = event.target.result;
+                    setSettings(prev => ({ ...prev, logo_url: base64Logo }));
+                    // Auto-save after upload
+                    try {
+                      await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+                        logo_url: base64Logo
+                      });
+                      setSuccess('Logo téléchargé avec succès !');
+                      setTimeout(() => setSuccess(''), 3000);
+                    } catch (error) {
+                      setError('Erreur lors du téléchargement du logo');
+                    }
+                  };
+                  reader.readAsDataURL(file);
+                }
+              }}
+              style={{ display: 'none' }}
+              id="logo-upload"
+            />
+            
+            {!settings.logo_url ? (
+              <label htmlFor="logo-upload" style={{ cursor: 'pointer', display: 'block' }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📤</div>
+                <div style={{ fontSize: '16px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                  Glissez-déposez votre logo ici
+                </div>
+                <div style={{ fontSize: '14px', color: '#6b7280' }}>
+                  ou cliquez pour sélectionner un fichier
+                </div>
+                <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '8px' }}>
+                  PNG, JPG, SVG (max 2MB)
+                </div>
+              </label>
+            ) : (
+              <div>
+                <img
+                  src={settings.logo_url}
+                  alt="Logo"
+                  style={{
+                    maxWidth: '200px',
+                    maxHeight: '120px',
+                    objectFit: 'contain',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    marginBottom: '16px'
+                  }}
+                  onError={() => setError('Impossible de charger l\'image à cette URL')}
+                />
+                <br />
+                <label htmlFor="logo-upload" style={{
+                  display: 'inline-block',
+                  background: '#3b82f6',
+                  color: 'white',
+                  padding: '10px 20px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: '600',
+                  fontSize: '14px'
+                }}>
+                  🔄 Changer le logo
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettings(prev => ({ ...prev, logo_url: '' }));
+                    axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, { logo_url: '' });
+                  }}
+                  style={{
+                    background: '#ef4444',
+                    color: 'white',
+                    border: 'none',
+                    padding: '10px 20px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    marginLeft: '12px'
+                  }}
+                >
+                  🗑️ Supprimer
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Company Info */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>🏢 Informations de l'entreprise</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Nom de l'entreprise *</label>
+              <input
+                type="text"
+                value={settings.company_name}
+                onChange={(e) => setSettings(prev => ({ ...prev, company_name: e.target.value }))}
+                required
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Email *</label>
+              <input
+                type="email"
+                value={settings.email}
+                onChange={(e) => setSettings(prev => ({ ...prev, email: e.target.value }))}
+                required
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Téléphone</label>
+              <input
+                type="tel"
+                value={settings.phone || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, phone: e.target.value }))}
+                placeholder="(514) 555-1234"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Adresse complète</label>
+              <input
+                type="text"
+                value={settings.address || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, address: e.target.value }))}
+                placeholder="123 Rue Principale"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Ville</label>
+              <input
+                type="text"
+                value={settings.city || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, city: e.target.value }))}
+                placeholder="Montréal"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Code postal</label>
+              <input
+                type="text"
+                value={settings.postal_code || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, postal_code: e.target.value }))}
+                placeholder="H1A 1A1"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Pays</label>
+              <input
+                type="text"
+                value={settings.country || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, country: e.target.value }))}
+                placeholder="Canada"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Tax Numbers */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>📊 Numéros de taxes canadiens</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>TPS (Fédéral)</label>
+              <input
+                type="text"
+                value={settings.gst_number || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, gst_number: e.target.value }))}
+                placeholder="123456789 RT0001"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                Ex: 123456789 RT0001
+              </p>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>TVQ (Québec)</label>
+              <input
+                type="text"
+                value={settings.pst_number || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, pst_number: e.target.value }))}
+                placeholder="1234567890 TQ0001"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                Ex: 1234567890 TQ0001
+              </p>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>HST (Ontario)</label>
+              <input
+                type="text"
+                value={settings.hst_number || ''}
+                onChange={(e) => setSettings(prev => ({ ...prev, hst_number: e.target.value }))}
+                placeholder="123456789 RT0001"
+                style={{
+                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
+                  borderRadius: '8px', boxSizing: 'border-box'
+                }}
+              />
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                Ex: 123456789 RT0001
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Save Button */}
+        <div style={{ textAlign: 'center' }}>
+          <button
+            type="submit"
+            disabled={saving}
+            style={{
+              background: saving ? '#9ca3af' : 'linear-gradient(135deg, #10b981, #047857)',
+              color: 'white', border: 'none', padding: '16px 32px',
+              borderRadius: '12px', cursor: saving ? 'not-allowed' : 'pointer',
+              fontSize: '16px', fontWeight: '700'
+            }}
+          >
+            {saving ? 'Sauvegarde...' : '💾 Sauvegarder tous les paramètres'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+// Change Password Page
+const ChangePasswordPage = () => {
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (newPassword !== confirmPassword) {
+      setError('Les mots de passe ne correspondent pas');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/auth/change-password`, {
+        old_password: oldPassword,
+        new_password: newPassword
+      });
+
+      setSuccess('Mot de passe modifié avec succès !');
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors du changement de mot de passe');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+      <h1 style={{ fontSize: '32px', fontWeight: '800', marginBottom: '24px' }}>🔒 Changer le mot de passe</h1>
+
+      {error && (
+        <div style={{
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          color: '#991b1b',
+          padding: '16px',
+          borderRadius: '8px',
+          marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div style={{
+          background: '#f0fdf4',
+          border: '1px solid #bbf7d0',
+          color: '#166534',
+          padding: '16px',
+          borderRadius: '8px',
+          marginBottom: '20px'
+        }}>
+          {success}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} style={{
+        background: 'white',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+        padding: '32px'
       }}>
-        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 'bold' }}>FacturePro</h1>
-        <div style={{ display: 'flex', gap: '20px' }}>
-          <button onClick={() => navigate('/dashboard')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Dashboard</button>
-          <button onClick={() => navigate('/clients')} style={{ background: 'transparent', color: 'rgba(255,255,255,0.8)', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Clients</button>
-          <button style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px' }}>Paramètres</button>
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+            Ancien mot de passe
+          </label>
+          <input
+            type="password"
+            value={oldPassword}
+            onChange={(e) => setOldPassword(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
         </div>
-        <button onClick={logout} style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', cursor: 'pointer' }}>Déconnexion</button>
-      </nav>
 
-      <div style={{ padding: '32px', textAlign: 'center' }}>
-        <div style={{ fontSize: '80px', marginBottom: '24px' }}>⚙️</div>
-        <h2 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', marginBottom: '16px' }}>Paramètres</h2>
-        <p style={{ color: '#6b7280', fontSize: '18px' }}>Configuration de l'entreprise - En développement</p>
-      </div>
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+            Nouveau mot de passe
+          </label>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: '32px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+            Confirmer le nouveau mot de passe
+          </label>
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: '100%',
+            background: loading ? '#9ca3af' : '#3b82f6',
+            color: 'white',
+            border: 'none',
+            padding: '16px',
+            borderRadius: '8px',
+            fontSize: '16px',
+            fontWeight: '700',
+            cursor: loading ? 'not-allowed' : 'pointer'
+          }}
+        >
+          {loading ? 'Modification en cours...' : '🔐 Changer le mot de passe'}
+        </button>
+      </form>
     </div>
   );
 };
 
-// Products Page
-const ProductsPage = ({ navigate, user, logout }) => {
+// Billing Page
+const BillingPage = () => {
+  const { user } = useAuth();
+  const [subscription, setSubscription] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSubscription = async () => {
+      try {
+        const response = await axios.get(`${BACKEND_URL}/api/subscription/info`);
+        setSubscription(response.data);
+      } catch (error) {
+        console.error('Error fetching subscription:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSubscription();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px' }}>
+        <p>Chargement...</p>
+      </div>
+    );
+  }
+
+  const getStatusBadge = (status) => {
+    const styles = {
+      active: { background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0' },
+      trial: { background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' },
+      expired: { background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }
+    };
+
+    const labels = {
+      active: '✅ Actif',
+      trial: '⏳ Période d\'essai',
+      expired: '❌ Expiré'
+    };
+
+    return (
+      <span style={{
+        ...styles[status],
+        padding: '6px 16px',
+        borderRadius: '20px',
+        fontSize: '14px',
+        fontWeight: '600',
+        display: 'inline-block'
+      }}>
+        {labels[status]}
+      </span>
+    );
+  };
+
   return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
-      <div style={{ padding: '32px', textAlign: 'center' }}>
-        <h2>Produits - En développement</h2>
+    <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+      <h1 style={{ fontSize: '32px', fontWeight: '800', marginBottom: '24px' }}>💳 Facturation</h1>
+
+      {/* Current Subscription */}
+      <div style={{
+        background: 'white',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+        padding: '32px',
+        marginBottom: '24px'
+      }}>
+        <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '20px' }}>Abonnement actuel</h2>
+
+        <div style={{ marginBottom: '16px' }}>
+          <p style={{ color: '#6b7280', marginBottom: '8px' }}>Statut</p>
+          {getStatusBadge(subscription?.subscription_status)}
+        </div>
+
+        {subscription?.is_lifetime_free && (
+          <div style={{
+            background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
+            color: 'white',
+            padding: '20px',
+            borderRadius: '8px',
+            marginTop: '20px'
+          }}>
+            <h3 style={{ fontSize: '20px', fontWeight: '700', margin: '0 0 8px 0' }}>🎉 Accès Gratuit à Vie</h3>
+            <p style={{ margin: 0 }}>Vous bénéficiez d'un accès illimité et gratuit à toutes les fonctionnalités !</p>
+          </div>
+        )}
+
+        {subscription?.subscription_plan && !subscription?.is_lifetime_free && (
+          <div style={{ marginTop: '20px' }}>
+            <p style={{ color: '#6b7280', marginBottom: '8px' }}>Plan</p>
+            <p style={{ fontSize: '20px', fontWeight: '700' }}>
+              {subscription.subscription_plan === 'monthly' ? 'Mensuel - 15 $/mois' : 'Annuel - 162 $/an'}
+            </p>
+          </div>
+        )}
+
+        {subscription?.trial_end_date && (
+          <div style={{ marginTop: '20px' }}>
+            <p style={{ color: '#6b7280', marginBottom: '8px' }}>Fin de la période d'essai</p>
+            <p style={{ fontSize: '18px', fontWeight: '600' }}>
+              {new Date(subscription.trial_end_date).toLocaleDateString('fr-FR')}
+            </p>
+          </div>
+        )}
       </div>
+
+      {/* Plans Available */}
+      {!subscription?.is_lifetime_free && subscription?.subscription_status === 'trial' && (
+        <div style={{
+          background: 'white',
+          border: '1px solid #e2e8f0',
+          borderRadius: '12px',
+          padding: '32px'
+        }}>
+          <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '20px' }}>Plans disponibles</h2>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            {/* Monthly Plan */}
+            <div style={{
+              border: '2px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '24px',
+              textAlign: 'center'
+            }}>
+              <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '12px' }}>Mensuel</h3>
+              <p style={{ fontSize: '32px', fontWeight: '800', color: '#3b82f6', margin: '16px 0' }}>
+                15 $<span style={{ fontSize: '16px', fontWeight: '400' }}>/mois</span>
+              </p>
+              <p style={{ color: '#6b7280', marginBottom: '20px' }}>Sans engagement</p>
+              <button style={{
+                width: '100%',
+                background: '#3b82f6',
+                color: 'white',
+                border: 'none',
+                padding: '12px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}>
+                Choisir
+              </button>
+            </div>
+
+            {/* Yearly Plan */}
+            <div style={{
+              border: '2px solid #10b981',
+              borderRadius: '12px',
+              padding: '24px',
+              textAlign: 'center',
+              position: 'relative'
+            }}>
+              <div style={{
+                position: 'absolute',
+                top: '-12px',
+                right: '20px',
+                background: '#10b981',
+                color: 'white',
+                padding: '4px 12px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: '700'
+              }}>
+                ÉCONOMISEZ 10%
+              </div>
+              <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '12px' }}>Annuel</h3>
+              <p style={{ fontSize: '32px', fontWeight: '800', color: '#10b981', margin: '16px 0' }}>
+                162 $<span style={{ fontSize: '16px', fontWeight: '400' }}>/an</span>
+              </p>
+              <p style={{ color: '#6b7280', marginBottom: '20px' }}>13.50 $/mois</p>
+              <button style={{
+                width: '100%',
+                background: '#10b981',
+                color: 'white',
+                border: 'none',
+                padding: '12px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}>
+                Choisir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default App;
+const ExportPage = () => (
+  <div style={{ textAlign: 'center', padding: '60px' }}>
+    <div style={{ fontSize: '80px', marginBottom: '24px' }}>📊</div>
+    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Exports</h2>
+    <p style={{ color: '#6b7280', fontSize: '18px' }}>Exportez vos données en PDF, Excel, CSV</p>
+  </div>
+);
+
+// Main App with Provider
+function AppWithAuth() {
+  return (
+    <AuthProvider>
+      <App />
+    </AuthProvider>
+  );
+}
+
+export default AppWithAuth;
