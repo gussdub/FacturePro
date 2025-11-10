@@ -3639,22 +3639,714 @@ const QuotesPage = () => {
     </div>
   );
 };
-const EmployeesPage = () => (
-  <div style={{ textAlign: 'center', padding: '60px' }}>
-    <div style={{ fontSize: '80px', marginBottom: '24px' }}>👨‍💼</div>
-    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Employés</h2>
-    <p style={{ color: '#6b7280', fontSize: '18px' }}>Gérez vos employés et leurs informations</p>
-  </div>
-);
+const EmployeesPage = () => {
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState(null);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    first_name: '',
+    last_name: '',
+    email: '',
+    phone: '',
+    position: '',
+    salary: '',
+    hire_date: new Date().toISOString().split('T')[0]
+  });
 
-const ExpensesPage = () => (
-  <div style={{ textAlign: 'center', padding: '60px' }}>
-    <div style={{ fontSize: '80px', marginBottom: '24px' }}>💳</div>
-    <h2 style={{ fontSize: '28px', margin: '0 0 16px 0' }}>Dépenses</h2>
-    <p style={{ color: '#6b7280', fontSize: '18px' }}>Système de dépenses et remboursements</p>
-  </div>
-);
+  useEffect(() => {
+    fetchEmployees();
+  }, []);
 
+  const fetchEmployees = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/employees`);
+      setEmployees(response.data);
+    } catch (error) {
+      setError('Erreur lors du chargement des employés');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openModal = (employee = null) => {
+    if (employee) {
+      setEditingEmployee(employee);
+      setFormData({
+        first_name: employee.first_name,
+        last_name: employee.last_name,
+        email: employee.email,
+        phone: employee.phone || '',
+        position: employee.position || '',
+        salary: employee.salary || '',
+        hire_date: employee.hire_date?.split('T')[0] || new Date().toISOString().split('T')[0]
+      });
+    } else {
+      setEditingEmployee(null);
+      setFormData({
+        first_name: '',
+        last_name: '',
+        email: '',
+        phone: '',
+        position: '',
+        salary: '',
+        hire_date: new Date().toISOString().split('T')[0]
+      });
+    }
+    setShowModal(true);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    try {
+      if (editingEmployee) {
+        await axios.put(`${BACKEND_URL}/api/employees/${editingEmployee.id}`, formData);
+        setSuccess('Employé modifié avec succès');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/employees`, formData);
+        setSuccess('Employé ajouté avec succès');
+      }
+      setShowModal(false);
+      fetchEmployees();
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la sauvegarde');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cet employé ?')) return;
+    try {
+      await axios.delete(`${BACKEND_URL}/api/employees/${id}`);
+      setSuccess('Employé supprimé');
+      fetchEmployees();
+    } catch (error) {
+      setError('Erreur lors de la suppression');
+    }
+  };
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '60px' }}>Chargement...</div>;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>👨‍💼 Employés</h1>
+          <p style={{ color: '#6b7280', margin: 0 }}>Gérez vos employés et leurs informations</p>
+        </div>
+        <button
+          onClick={() => openModal()}
+          style={{
+            background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+            color: 'white',
+            border: 'none',
+            padding: '14px 28px',
+            borderRadius: '12px',
+            cursor: 'pointer',
+            fontWeight: '700',
+            fontSize: '15px',
+            boxShadow: '0 4px 12px rgba(245,158,11,0.4)'
+          }}
+        >
+          ➕ Nouvel Employé
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {success}
+        </div>
+      )}
+
+      <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ background: '#f8fafc' }}>
+            <tr>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Nom</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Email</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Poste</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Téléphone</th>
+              <th style={{ padding: '16px', textAlign: 'center', fontWeight: '600', color: '#374151' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {employees.length === 0 ? (
+              <tr>
+                <td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>
+                  Aucun employé. Ajoutez-en un pour commencer !
+                </td>
+              </tr>
+            ) : (
+              employees.map(employee => (
+                <tr key={employee.id} style={{ borderTop: '1px solid #e5e7eb' }}>
+                  <td style={{ padding: '16px', fontWeight: '600' }}>{employee.first_name} {employee.last_name}</td>
+                  <td style={{ padding: '16px' }}>{employee.email}</td>
+                  <td style={{ padding: '16px', color: '#6b7280' }}>{employee.position || '-'}</td>
+                  <td style={{ padding: '16px', color: '#6b7280' }}>{employee.phone || '-'}</td>
+                  <td style={{ padding: '16px', textAlign: 'center' }}>
+                    <button
+                      onClick={() => openModal(employee)}
+                      style={{ background: '#f59e0b', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => handleDelete(employee.id)}
+                      style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                    >
+                      🗑️
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {showModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }} onClick={() => setShowModal(false)}>
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '600px',
+              padding: '32px'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ margin: '0 0 24px 0', fontSize: '24px', fontWeight: '700' }}>
+              {editingEmployee ? '✏️ Modifier l\'employé' : '➕ Nouvel employé'}
+            </h2>
+
+            <form onSubmit={handleSubmit}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Prénom *</label>
+                  <input
+                    type="text"
+                    value={formData.first_name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, first_name: e.target.value }))}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Nom *</label>
+                  <input
+                    type="text"
+                    value={formData.last_name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, last_name: e.target.value }))}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Email *</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
+                  required
+                  style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Téléphone</label>
+                  <input
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData(prev => ({ ...prev, phone: e.target.value }))}
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Poste</label>
+                  <input
+                    type="text"
+                    value={formData.position}
+                    onChange={(e) => setFormData(prev => ({ ...prev, position: e.target.value }))}
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Salaire annuel</label>
+                  <input
+                    type="number"
+                    value={formData.salary}
+                    onChange={(e) => setFormData(prev => ({ ...prev, salary: e.target.value }))}
+                    min="0"
+                    step="1000"
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Date d'embauche</label>
+                  <input
+                    type="date"
+                    value={formData.hire_date}
+                    onChange={(e) => setFormData(prev => ({ ...prev, hire_date: e.target.value }))}
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  style={{
+                    flex: 1,
+                    background: '#f3f4f6',
+                    color: '#374151',
+                    border: 'none',
+                    padding: '14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    flex: 1,
+                    background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '700'
+                  }}
+                >
+                  {editingEmployee ? '💾 Enregistrer' : '➕ Ajouter'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ExpensesPage = () => {
+  const [expenses, setExpenses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [editingExpense, setEditingExpense] = useState(null);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [formData, setFormData] = useState({
+    category: '',
+    amount: '',
+    description: '',
+    date: new Date().toISOString().split('T')[0],
+    receipt_url: ''
+  });
+
+  useEffect(() => {
+    fetchExpenses();
+  }, []);
+
+  const fetchExpenses = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/expenses`);
+      setExpenses(response.data);
+    } catch (error) {
+      setError('Erreur lors du chargement des dépenses');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openModal = (expense = null) => {
+    if (expense) {
+      setEditingExpense(expense);
+      setFormData({
+        category: expense.category,
+        amount: expense.amount,
+        description: expense.description,
+        date: expense.date?.split('T')[0] || new Date().toISOString().split('T')[0],
+        receipt_url: expense.receipt_url || ''
+      });
+    } else {
+      setEditingExpense(null);
+      setFormData({
+        category: '',
+        amount: '',
+        description: '',
+        date: new Date().toISOString().split('T')[0],
+        receipt_url: ''
+      });
+    }
+    setShowModal(true);
+  };
+
+  const handleFileUpload = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setFormData(prev => ({ ...prev, receipt_url: e.target.result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    try {
+      if (editingExpense) {
+        await axios.put(`${BACKEND_URL}/api/expenses/${editingExpense.id}`, formData);
+        setSuccess('Dépense modifiée avec succès');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/expenses`, formData);
+        setSuccess('Dépense ajoutée avec succès');
+      }
+      setShowModal(false);
+      fetchExpenses();
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de la sauvegarde');
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette dépense ?')) return;
+    try {
+      await axios.delete(`${BACKEND_URL}/api/expenses/${id}`);
+      setSuccess('Dépense supprimée');
+      fetchExpenses();
+    } catch (error) {
+      setError('Erreur lors de la suppression');
+    }
+  };
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('fr-CA', { style: 'currency', currency: 'CAD' }).format(amount || 0);
+  };
+
+  if (loading) return <div style={{ textAlign: 'center', padding: '60px' }}>Chargement...</div>;
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
+        <div>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>💳 Dépenses</h1>
+          <p style={{ color: '#6b7280', margin: 0 }}>Gérez vos dépenses professionnelles</p>
+        </div>
+        <button
+          onClick={() => openModal()}
+          style={{
+            background: 'linear-gradient(135deg, #ec4899, #be185d)',
+            color: 'white',
+            border: 'none',
+            padding: '14px 28px',
+            borderRadius: '12px',
+            cursor: 'pointer',
+            fontWeight: '700',
+            fontSize: '15px',
+            boxShadow: '0 4px 12px rgba(236,72,153,0.4)'
+          }}
+        >
+          ➕ Nouvelle Dépense
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {success}
+        </div>
+      )}
+
+      <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ background: '#f8fafc' }}>
+            <tr>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Date</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Catégorie</th>
+              <th style={{ padding: '16px', textAlign: 'left', fontWeight: '600', color: '#374151' }}>Description</th>
+              <th style={{ padding: '16px', textAlign: 'right', fontWeight: '600', color: '#374151' }}>Montant</th>
+              <th style={{ padding: '16px', textAlign: 'center', fontWeight: '600', color: '#374151' }}>Justificatif</th>
+              <th style={{ padding: '16px', textAlign: 'center', fontWeight: '600', color: '#374151' }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {expenses.length === 0 ? (
+              <tr>
+                <td colSpan="6" style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>
+                  Aucune dépense. Ajoutez-en une pour commencer !
+                </td>
+              </tr>
+            ) : (
+              expenses.map(expense => (
+                <tr key={expense.id} style={{ borderTop: '1px solid #e5e7eb' }}>
+                  <td style={{ padding: '16px' }}>{new Date(expense.date).toLocaleDateString('fr-FR')}</td>
+                  <td style={{ padding: '16px', fontWeight: '600' }}>{expense.category}</td>
+                  <td style={{ padding: '16px', color: '#6b7280' }}>{expense.description}</td>
+                  <td style={{ padding: '16px', textAlign: 'right', fontWeight: '600', color: '#ef4444' }}>
+                    {formatCurrency(expense.amount)}
+                  </td>
+                  <td style={{ padding: '16px', textAlign: 'center' }}>
+                    {expense.receipt_url ? (
+                      <a href={expense.receipt_url} target="_blank" rel="noopener noreferrer" style={{ color: '#3b82f6' }}>
+                        📎 Voir
+                      </a>
+                    ) : (
+                      <span style={{ color: '#9ca3af' }}>-</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '16px', textAlign: 'center' }}>
+                    <button
+                      onClick={() => openModal(expense)}
+                      style={{ background: '#ec4899', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', marginRight: '8px' }}
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => handleDelete(expense.id)}
+                      style={{ background: '#ef4444', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer' }}
+                    >
+                      🗑️
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {showModal && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }} onClick={() => setShowModal(false)}>
+          <div
+            style={{
+              background: 'white',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '600px',
+              padding: '32px'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ margin: '0 0 24px 0', fontSize: '24px', fontWeight: '700' }}>
+              {editingExpense ? '✏️ Modifier la dépense' : '➕ Nouvelle dépense'}
+            </h2>
+
+            <form onSubmit={handleSubmit}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Catégorie *</label>
+                  <select
+                    value={formData.category}
+                    onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value }))}
+                    required
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  >
+                    <option value="">Sélectionner</option>
+                    <option value="Bureau">Bureau</option>
+                    <option value="Déplacement">Déplacement</option>
+                    <option value="Repas">Repas</option>
+                    <option value="Matériel">Matériel</option>
+                    <option value="Logiciel">Logiciel</option>
+                    <option value="Formation">Formation</option>
+                    <option value="Autre">Autre</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Montant *</label>
+                  <input
+                    type="number"
+                    value={formData.amount}
+                    onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
+                    required
+                    min="0"
+                    step="0.01"
+                    style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Date *</label>
+                <input
+                  type="date"
+                  value={formData.date}
+                  onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+                  required
+                  style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Description *</label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
+                  required
+                  rows="3"
+                  style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Justificatif (reçu, facture)</label>
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.style.borderColor = '#ec4899';
+                    e.currentTarget.style.background = '#fdf2f8';
+                  }}
+                  onDragLeave={(e) => {
+                    e.currentTarget.style.borderColor = '#d1d5db';
+                    e.currentTarget.style.background = '#f9fafb';
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.style.borderColor = '#d1d5db';
+                    e.currentTarget.style.background = '#f9fafb';
+                    const file = e.dataTransfer.files[0];
+                    if (file && (file.type.startsWith('image/') || file.type === 'application/pdf')) {
+                      handleFileUpload(file);
+                    }
+                  }}
+                  style={{
+                    border: '2px dashed #d1d5db',
+                    borderRadius: '8px',
+                    padding: '24px',
+                    textAlign: 'center',
+                    background: '#f9fafb',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) handleFileUpload(file);
+                    }}
+                    style={{ display: 'none' }}
+                    id="receipt-upload"
+                  />
+                  
+                  {!formData.receipt_url ? (
+                    <label htmlFor="receipt-upload" style={{ cursor: 'pointer', display: 'block' }}>
+                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>📎</div>
+                      <div style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>
+                        Glissez-déposez ou cliquez pour sélectionner
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                        PNG, JPG, PDF (max 5MB)
+                      </div>
+                    </label>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize: '32px', marginBottom: '8px' }}>✅</div>
+                      <div style={{ fontSize: '14px', fontWeight: '600', color: '#10b981' }}>
+                        Justificatif ajouté
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, receipt_url: '' }))}
+                        style={{
+                          background: '#ef4444',
+                          color: 'white',
+                          border: 'none',
+                          padding: '6px 16px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          marginTop: '8px',
+                          fontSize: '12px'
+                        }}
+                      >
+                        🗑️ Retirer
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  style={{
+                    flex: 1,
+                    background: '#f3f4f6',
+                    color: '#374151',
+                    border: 'none',
+                    padding: '14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  style={{
+                    flex: 1,
+                    background: 'linear-gradient(135deg, #ec4899, #be185d)',
+                    color: 'white',
+                    border: 'none',
+                    padding: '14px',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '700'
+                  }}
+                >
+                  {editingExpense ? '💾 Enregistrer' : '➕ Ajouter'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
     company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
@@ -4502,8 +5194,247 @@ const ExportPage = () => (
   </div>
 );
 
-// Main App with Provider
-function AppWithAuth() {
+const ExportPage = () => {
+  const [dataType, setDataType] = useState('invoices');
+  const [format, setFormat] = useState('csv');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const handleExport = async () => {
+    setError('');
+    setSuccess('');
+    setLoading(true);
+
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/${dataType}`, {
+        params: { start_date: startDate, end_date: endDate }
+      });
+      
+      const data = response.data;
+      
+      if (data.length === 0) {
+        setError('Aucune donnée à exporter pour cette période');
+        setLoading(false);
+        return;
+      }
+
+      if (format === 'csv') {
+        // Export CSV
+        const headers = Object.keys(data[0]).filter(key => key !== '_id' && key !== 'user_id');
+        const csvContent = [
+          headers.join(','),
+          ...data.map(row => headers.map(h => `"${row[h] || ''}"`).join(','))
+        ].join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${dataType}_${new Date().toISOString().split('T')[0]}.csv`;
+        link.click();
+        setSuccess(`Fichier CSV téléchargé avec succès (${data.length} éléments)`);
+      } else {
+        // Export JSON
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${dataType}_${new Date().toISOString().split('T')[0]}.json`;
+        link.click();
+        setSuccess(`Fichier JSON téléchargé avec succès (${data.length} éléments)`);
+      }
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de l\'export');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+      <div style={{ marginBottom: '32px' }}>
+        <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>📊 Exports</h1>
+        <p style={{ color: '#6b7280', margin: 0 }}>Exportez vos données en CSV ou JSON</p>
+      </div>
+
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+          {success}
+        </div>
+      )}
+
+      <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '32px' }}>
+        {/* Data Type Selection */}
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ display: 'block', marginBottom: '12px', fontWeight: '600', fontSize: '16px' }}>
+            📁 Type de données
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+            {[
+              { value: 'invoices', label: '📄 Factures', icon: '📄' },
+              { value: 'quotes', label: '📝 Soumissions', icon: '📝' },
+              { value: 'clients', label: '👥 Clients', icon: '👥' },
+              { value: 'products', label: '📦 Produits', icon: '📦' },
+              { value: 'employees', label: '👨‍💼 Employés', icon: '👨‍💼' },
+              { value: 'expenses', label: '💳 Dépenses', icon: '💳' }
+            ].map(type => (
+              <button
+                key={type.value}
+                type="button"
+                onClick={() => setDataType(type.value)}
+                style={{
+                  padding: '16px',
+                  border: dataType === type.value ? '2px solid #3b82f6' : '1px solid #d1d5db',
+                  background: dataType === type.value ? '#eff6ff' : 'white',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                  fontWeight: '600',
+                  fontSize: '14px'
+                }}
+              >
+                <div style={{ fontSize: '24px', marginBottom: '4px' }}>{type.icon}</div>
+                {type.label.replace(type.icon + ' ', '')}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Date Range */}
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ display: 'block', marginBottom: '12px', fontWeight: '600', fontSize: '16px' }}>
+            📅 Période
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', color: '#6b7280' }}>
+                Date début
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '8px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontSize: '14px', color: '#6b7280' }}>
+                Date fin
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: '8px',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+          </div>
+          <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '8px' }}>
+            Laissez vide pour exporter toutes les données
+          </p>
+        </div>
+
+        {/* Format Selection */}
+        <div style={{ marginBottom: '32px' }}>
+          <label style={{ display: 'block', marginBottom: '12px', fontWeight: '600', fontSize: '16px' }}>
+            💾 Format d'export
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <button
+              type="button"
+              onClick={() => setFormat('csv')}
+              style={{
+                padding: '16px',
+                border: format === 'csv' ? '2px solid #10b981' : '1px solid #d1d5db',
+                background: format === 'csv' ? '#f0fdf4' : 'white',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontWeight: '600'
+              }}
+            >
+              <div style={{ fontSize: '24px', marginBottom: '4px' }}>📊</div>
+              <div>CSV (Excel)</div>
+              <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '400' }}>
+                Compatible avec Excel, Google Sheets
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFormat('json')}
+              style={{
+                padding: '16px',
+                border: format === 'json' ? '2px solid #10b981' : '1px solid #d1d5db',
+                background: format === 'json' ? '#f0fdf4' : 'white',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontWeight: '600'
+              }}
+            >
+              <div style={{ fontSize: '24px', marginBottom: '4px' }}>🔧</div>
+              <div>JSON</div>
+              <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '400' }}>
+                Format technique pour développeurs
+              </div>
+            </button>
+          </div>
+        </div>
+
+        {/* Export Button */}
+        <button
+          onClick={handleExport}
+          disabled={loading}
+          style={{
+            width: '100%',
+            background: loading ? '#9ca3af' : 'linear-gradient(135deg, #10b981, #059669)',
+            color: 'white',
+            border: 'none',
+            padding: '18px',
+            borderRadius: '12px',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            fontWeight: '700',
+            fontSize: '16px',
+            boxShadow: loading ? 'none' : '0 4px 12px rgba(16,185,129,0.4)'
+          }}
+        >
+          {loading ? '⏳ Export en cours...' : '📥 Exporter les données'}
+        </button>
+
+        {/* Info Box */}
+        <div style={{
+          marginTop: '24px',
+          padding: '16px',
+          background: '#f0f9ff',
+          border: '1px solid #bae6fd',
+          borderRadius: '8px'
+        }}>
+          <p style={{ margin: 0, fontSize: '14px', color: '#0369a1' }}>
+            💡 <strong>Astuce :</strong> Les exports CSV peuvent être ouverts directement dans Excel ou Google Sheets pour analyse et traitement.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
   return (
     <AuthProvider>
       <App />
