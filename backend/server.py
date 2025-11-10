@@ -238,7 +238,7 @@ async def health():
             "database": "connected", 
             "users_count": users_count,
             "stripe": "configured" if STRIPE_API_KEY else "not configured",
-            "sendgrid": "configured" if SENDGRID_API_KEY else "not configured"
+            "resend": "configured" if RESEND_API_KEY else "not configured"
         }
     except Exception as e:
         return {"status": "unhealthy", "database": "error", "error": str(e)}
