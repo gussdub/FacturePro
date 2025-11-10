@@ -5427,6 +5427,9 @@ const ExportPage = () => {
     </div>
   );
 };
+
+// Main App with Provider
+function AppWithAuth() {
   return (
     <AuthProvider>
       <App />
