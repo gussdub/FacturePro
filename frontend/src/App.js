@@ -2854,40 +2854,102 @@ const SettingsPage = () => {
         }}>
           <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>🖼️ Logo de l'entreprise</h3>
           
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '16px', alignItems: 'end' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>URL du logo</label>
-              <input
-                type="url"
-                value={settings.logo_url || ''}
-                onChange={(e) => setSettings(prev => ({ ...prev, logo_url: e.target.value }))}
-                placeholder="https://exemple.com/votre-logo.png"
-                style={{
-                  width: '100%', padding: '12px', border: '1px solid #d1d5db',
-                  borderRadius: '8px', boxSizing: 'border-box'
-                }}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={handleLogoSave}
-              style={{
-                background: '#3b82f6', color: 'white', border: 'none',
-                padding: '12px 20px', borderRadius: '8px', cursor: 'pointer',
-                fontWeight: '600'
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.currentTarget.style.borderColor = '#3b82f6';
+              e.currentTarget.style.background = '#eff6ff';
+            }}
+            onDragLeave={(e) => {
+              e.currentTarget.style.borderColor = '#d1d5db';
+              e.currentTarget.style.background = '#f9fafb';
+            }}
+            onDrop={async (e) => {
+              e.preventDefault();
+              e.currentTarget.style.borderColor = '#d1d5db';
+              e.currentTarget.style.background = '#f9fafb';
+              
+              const file = e.dataTransfer.files[0];
+              if (file && file.type.startsWith('image/')) {
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                  const base64Logo = event.target.result;
+                  setSettings(prev => ({ ...prev, logo_url: base64Logo }));
+                  // Auto-save after upload
+                  try {
+                    await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+                      logo_url: base64Logo
+                    });
+                    setSuccess('Logo téléchargé avec succès !');
+                    setTimeout(() => setSuccess(''), 3000);
+                  } catch (error) {
+                    setError('Erreur lors du téléchargement du logo');
+                  }
+                };
+                reader.readAsDataURL(file);
+              }
+            }}
+            style={{
+              border: '2px dashed #d1d5db',
+              borderRadius: '12px',
+              padding: '32px',
+              textAlign: 'center',
+              background: '#f9fafb',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              position: 'relative'
+            }}
+          >
+            <input
+              type="file"
+              accept="image/*"
+              onChange={async (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                  const reader = new FileReader();
+                  reader.onload = async (event) => {
+                    const base64Logo = event.target.result;
+                    setSettings(prev => ({ ...prev, logo_url: base64Logo }));
+                    // Auto-save after upload
+                    try {
+                      await axios.post(`${BACKEND_URL}/api/settings/company/upload-logo`, {
+                        logo_url: base64Logo
+                      });
+                      setSuccess('Logo téléchargé avec succès !');
+                      setTimeout(() => setSuccess(''), 3000);
+                    } catch (error) {
+                      setError('Erreur lors du téléchargement du logo');
+                    }
+                  };
+                  reader.readAsDataURL(file);
+                }
               }}
-            >
-              💾 Sauvegarder logo
-            </button>
-          </div>
-          
-          {settings.logo_url && (
-            <div style={{ marginTop: '16px', textAlign: 'center' }}>
-              <img
-                src={settings.logo_url}
-                alt="Logo aperçu"
-                style={{
-                  maxWidth: '120px', maxHeight: '120px', objectFit: 'contain',
+              style={{ display: 'none' }}
+              id="logo-upload"
+            />
+            
+            {!settings.logo_url ? (
+              <label htmlFor="logo-upload" style={{ cursor: 'pointer', display: 'block' }}>
+                <div style={{ fontSize: '48px', marginBottom: '12px' }}>📤</div>
+                <div style={{ fontSize: '16px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                  Glissez-déposez votre logo ici
+                </div>
+                <div style={{ fontSize: '14px', color: '#6b7280' }}>
+                  ou cliquez pour sélectionner un fichier
+                </div>
+                <div style={{ fontSize: '12px', color: '#9ca3af', marginTop: '8px' }}>
+                  PNG, JPG, SVG (max 2MB)
+                </div>
+              </label>
+            ) : (
+              <div>
+                <img
+                  src={settings.logo_url}
+                  alt="Logo"
+                  style={{
+                    maxWidth: '200px',
+                    maxHeight: '120px',
+                    objectFit: 'contain',
                   border: '1px solid #e5e7eb', borderRadius: '8px'
                 }}
                 onError={() => setError('Impossible de charger l\'image à cette URL')}
