@@ -91,6 +91,70 @@ class Client(BaseModel):
 class SubscriptionRequest(BaseModel):
     plan: str  # "monthly" or "yearly"
 
+class InvoiceItem(BaseModel):
+    description: str
+    quantity: float
+    unit_price: float
+    tax_rate: float = 0.0
+
+class Invoice(BaseModel):
+    id: str
+    user_id: str
+    invoice_number: str
+    client_id: str
+    client_name: str
+    client_email: str
+    client_address: Optional[str] = None
+    items: List[InvoiceItem]
+    subtotal: float
+    tax_total: float
+    discount: float = 0.0
+    total: float
+    status: str = "draft"  # draft, sent, paid, overdue
+    issue_date: datetime
+    due_date: datetime
+    notes: Optional[str] = None
+    created_at: datetime
+
+class Quote(BaseModel):
+    id: str
+    user_id: str
+    quote_number: str
+    client_id: str
+    client_name: str
+    client_email: str
+    client_address: Optional[str] = None
+    items: List[InvoiceItem]
+    subtotal: float
+    tax_total: float
+    discount: float = 0.0
+    total: float
+    status: str = "draft"  # draft, sent, accepted, rejected
+    valid_until: datetime
+    notes: Optional[str] = None
+    created_at: datetime
+
+class Employee(BaseModel):
+    id: str
+    user_id: str
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str] = None
+    position: Optional[str] = None
+    salary: Optional[float] = None
+    hire_date: Optional[datetime] = None
+    is_active: bool = True
+
+class Expense(BaseModel):
+    id: str
+    user_id: str
+    category: str
+    amount: float
+    description: str
+    date: datetime
+    receipt_url: Optional[str] = None
+
 # Email Service
 async def send_email(to_email: str, subject: str, html_content: str):
     """Send email via Resend"""
