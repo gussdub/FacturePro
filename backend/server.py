@@ -38,9 +38,6 @@ security = HTTPBearer()
 mongo_client = None
 db = None
 
-# Stripe client
-stripe_checkout = None
-
 # Subscription Plans
 PLANS = {
     "monthly": {
