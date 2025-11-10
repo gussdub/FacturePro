@@ -1056,6 +1056,59 @@ async def delete_expense(expense_id: str, current_user: User = Depends(get_curre
     await db.expenses.delete_one({"id": expense_id, "user_id": current_user.id})
     return {"message": "Dépense supprimée"}
 
+# Trial Expiration Checker
+@app.post("/api/admin/check-trial-expirations")
+async def check_trial_expirations(background_tasks: BackgroundTasks):
+    """Check for trials expiring in 7 days and send reminders"""
+    try:
+        # Get users with trials expiring in 7 days
+        seven_days_from_now = datetime.now(timezone.utc) + timedelta(days=7)
+        seven_days_range_start = seven_days_from_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        seven_days_range_end = seven_days_range_start + timedelta(days=1)
+        
+        users_to_notify = []
+        cursor = db.users.find({
+            "subscription_status": "trial",
+            "trial_end_date": {
+                "$gte": seven_days_range_start,
+                "$lt": seven_days_range_end
+            },
+            "is_lifetime_free": False
+        })
+        
+        async for user in cursor:
+            users_to_notify.append(user)
+            
+        # Send reminder emails
+        for user in users_to_notify:
+            days_remaining = 7
+            background_tasks.add_task(
+                send_trial_end_notification,
+                user['email'],
+                days_remaining
+            )
+        
+        return {
+            "message": f"{len(users_to_notify)} reminder(s) sent",
+            "users_notified": len(users_to_notify)
+        }
+        
+    except Exception as e:
+        print(f"Trial check error: {e}")
+        return {"error": str(e)}
+
+# Get subscription info for current user
+@app.get("/api/subscription/info")
+async def get_subscription_info(current_user: User = Depends(get_current_user)):
+    """Get current user's subscription information"""
+    return {
+        "subscription_status": current_user.subscription_status,
+        "subscription_plan": current_user.subscription_plan,
+        "trial_end_date": current_user.trial_end_date.isoformat() if current_user.trial_end_date else None,
+        "is_lifetime_free": current_user.is_lifetime_free,
+        "plans_available": PLANS
+    }
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
