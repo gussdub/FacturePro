@@ -5265,14 +5265,6 @@ const ExportPage = () => {
   };
 
   return (
-    } catch (error) {
-      setError(error.response?.data?.detail || 'Erreur lors de l\'export');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
     <div style={{ maxWidth: '800px', margin: '0 auto' }}>
       <div style={{ marginBottom: '32px' }}>
         <h1 style={{ fontSize: '32px', fontWeight: '800', margin: '0 0 8px 0' }}>📊 Exports</h1>
