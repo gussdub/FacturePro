@@ -1076,7 +1076,7 @@ const LoginPage = () => {
                 conditions d'utilisation
               </a>{' '}
               et notre{' '}
-              <a href="#" style={{ color: '#4338ca', textDecoration: 'none' }}>
+              <a href="#" style={{ color: '#0d9488', textDecoration: 'none' }}>
                 politique de confidentialité
               </a>
             </div>
