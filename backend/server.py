@@ -984,6 +984,36 @@ async def create_quote(quote_data: dict, current_user: User = Depends(get_curren
     new_quote.pop('_id', None)
     return new_quote
 
+@app.put("/api/quotes/{quote_id}")
+async def update_quote(
+    quote_id: str,
+    quote_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Update quote"""
+    # Recalculate totals
+    items = quote_data.get("items", [])
+    subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
+    taxTotal = sum(item["quantity"] * item["unit_price"] * item.get("tax_rate", 0) / 100 for item in items)
+    discount = quote_data.get("discount", 0)
+    total = subtotal + taxTotal - discount
+    
+    update_data = {
+        **quote_data,
+        "subtotal": subtotal,
+        "tax_total": taxTotal,
+        "total": total
+    }
+    
+    await db.quotes.update_one(
+        {"id": quote_id, "user_id": current_user.id},
+        {"$set": update_data}
+    )
+    
+    quote = await db.quotes.find_one({"id": quote_id})
+    quote.pop('_id', None)
+    return quote
+
 @app.delete("/api/quotes/{quote_id}")
 async def delete_quote(quote_id: str, current_user: User = Depends(get_current_user)):
     """Delete quote"""
