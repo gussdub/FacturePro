@@ -3402,7 +3402,7 @@ const QuotesPage = () => {
                       >
                         📧
                       </button>
-                      {quote.status === 'accepted' && (
+                      {quote.status !== 'rejected' && (
                         <button
                           onClick={async () => {
                             if (window.confirm('Convertir cette soumission en facture ?')) {
