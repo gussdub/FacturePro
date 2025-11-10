@@ -368,9 +368,9 @@ const Layout = ({ currentRoute, navigate, children }) => {
                   padding: '14px 16px',
                   margin: '4px 0',
                   background: item.current 
-                    ? 'rgba(59, 130, 246, 0.2)' 
+                    ? 'rgba(20, 184, 166, 0.25)' 
                     : 'transparent',
-                  color: item.current ? '#60a5fa' : '#cbd5e1',
+                  color: item.current ? '#5eead4' : '#cbd5e1',
                   border: 'none',
                   borderRadius: '10px',
                   cursor: 'pointer',
