@@ -3273,6 +3273,357 @@ const SettingsPage = () => {
   );
 };
 
+// Change Password Page
+const ChangePasswordPage = () => {
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+
+    if (newPassword !== confirmPassword) {
+      setError('Les mots de passe ne correspondent pas');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setError('Le mot de passe doit contenir au moins 6 caractères');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      await axios.post(`${BACKEND_URL}/api/auth/change-password`, {
+        old_password: oldPassword,
+        new_password: newPassword
+      });
+
+      setSuccess('Mot de passe modifié avec succès !');
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors du changement de mot de passe');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+      <h1 style={{ fontSize: '32px', fontWeight: '800', marginBottom: '24px' }}>🔒 Changer le mot de passe</h1>
+
+      {error && (
+        <div style={{
+          background: '#fef2f2',
+          border: '1px solid #fecaca',
+          color: '#991b1b',
+          padding: '16px',
+          borderRadius: '8px',
+          marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div style={{
+          background: '#f0fdf4',
+          border: '1px solid #bbf7d0',
+          color: '#166534',
+          padding: '16px',
+          borderRadius: '8px',
+          marginBottom: '20px'
+        }}>
+          {success}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} style={{
+        background: 'white',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+        padding: '32px'
+      }}>
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+            Ancien mot de passe
+          </label>
+          <input
+            type="password"
+            value={oldPassword}
+            onChange={(e) => setOldPassword(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: '24px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+            Nouveau mot de passe
+          </label>
+          <input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: '32px' }}>
+          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>
+            Confirmer le nouveau mot de passe
+          </label>
+          <input
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '12px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              fontSize: '16px',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: '100%',
+            background: loading ? '#9ca3af' : '#3b82f6',
+            color: 'white',
+            border: 'none',
+            padding: '16px',
+            borderRadius: '8px',
+            fontSize: '16px',
+            fontWeight: '700',
+            cursor: loading ? 'not-allowed' : 'pointer'
+          }}
+        >
+          {loading ? 'Modification en cours...' : '🔐 Changer le mot de passe'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+// Billing Page
+const BillingPage = () => {
+  const { user } = useAuth();
+  const [subscription, setSubscription] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSubscription = async () => {
+      try {
+        const response = await axios.get(`${BACKEND_URL}/api/subscription/info`);
+        setSubscription(response.data);
+      } catch (error) {
+        console.error('Error fetching subscription:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSubscription();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px' }}>
+        <p>Chargement...</p>
+      </div>
+    );
+  }
+
+  const getStatusBadge = (status) => {
+    const styles = {
+      active: { background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0' },
+      trial: { background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' },
+      expired: { background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' }
+    };
+
+    const labels = {
+      active: '✅ Actif',
+      trial: '⏳ Période d\'essai',
+      expired: '❌ Expiré'
+    };
+
+    return (
+      <span style={{
+        ...styles[status],
+        padding: '6px 16px',
+        borderRadius: '20px',
+        fontSize: '14px',
+        fontWeight: '600',
+        display: 'inline-block'
+      }}>
+        {labels[status]}
+      </span>
+    );
+  };
+
+  return (
+    <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+      <h1 style={{ fontSize: '32px', fontWeight: '800', marginBottom: '24px' }}>💳 Facturation</h1>
+
+      {/* Current Subscription */}
+      <div style={{
+        background: 'white',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+        padding: '32px',
+        marginBottom: '24px'
+      }}>
+        <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '20px' }}>Abonnement actuel</h2>
+
+        <div style={{ marginBottom: '16px' }}>
+          <p style={{ color: '#6b7280', marginBottom: '8px' }}>Statut</p>
+          {getStatusBadge(subscription?.subscription_status)}
+        </div>
+
+        {subscription?.is_lifetime_free && (
+          <div style={{
+            background: 'linear-gradient(135deg, #fbbf24, #f59e0b)',
+            color: 'white',
+            padding: '20px',
+            borderRadius: '8px',
+            marginTop: '20px'
+          }}>
+            <h3 style={{ fontSize: '20px', fontWeight: '700', margin: '0 0 8px 0' }}>🎉 Accès Gratuit à Vie</h3>
+            <p style={{ margin: 0 }}>Vous bénéficiez d'un accès illimité et gratuit à toutes les fonctionnalités !</p>
+          </div>
+        )}
+
+        {subscription?.subscription_plan && !subscription?.is_lifetime_free && (
+          <div style={{ marginTop: '20px' }}>
+            <p style={{ color: '#6b7280', marginBottom: '8px' }}>Plan</p>
+            <p style={{ fontSize: '20px', fontWeight: '700' }}>
+              {subscription.subscription_plan === 'monthly' ? 'Mensuel - 15 $/mois' : 'Annuel - 162 $/an'}
+            </p>
+          </div>
+        )}
+
+        {subscription?.trial_end_date && (
+          <div style={{ marginTop: '20px' }}>
+            <p style={{ color: '#6b7280', marginBottom: '8px' }}>Fin de la période d'essai</p>
+            <p style={{ fontSize: '18px', fontWeight: '600' }}>
+              {new Date(subscription.trial_end_date).toLocaleDateString('fr-FR')}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Plans Available */}
+      {!subscription?.is_lifetime_free && subscription?.subscription_status === 'trial' && (
+        <div style={{
+          background: 'white',
+          border: '1px solid #e2e8f0',
+          borderRadius: '12px',
+          padding: '32px'
+        }}>
+          <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '20px' }}>Plans disponibles</h2>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            {/* Monthly Plan */}
+            <div style={{
+              border: '2px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '24px',
+              textAlign: 'center'
+            }}>
+              <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '12px' }}>Mensuel</h3>
+              <p style={{ fontSize: '32px', fontWeight: '800', color: '#3b82f6', margin: '16px 0' }}>
+                15 $<span style={{ fontSize: '16px', fontWeight: '400' }}>/mois</span>
+              </p>
+              <p style={{ color: '#6b7280', marginBottom: '20px' }}>Sans engagement</p>
+              <button style={{
+                width: '100%',
+                background: '#3b82f6',
+                color: 'white',
+                border: 'none',
+                padding: '12px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}>
+                Choisir
+              </button>
+            </div>
+
+            {/* Yearly Plan */}
+            <div style={{
+              border: '2px solid #10b981',
+              borderRadius: '12px',
+              padding: '24px',
+              textAlign: 'center',
+              position: 'relative'
+            }}>
+              <div style={{
+                position: 'absolute',
+                top: '-12px',
+                right: '20px',
+                background: '#10b981',
+                color: 'white',
+                padding: '4px 12px',
+                borderRadius: '12px',
+                fontSize: '12px',
+                fontWeight: '700'
+              }}>
+                ÉCONOMISEZ 10%
+              </div>
+              <h3 style={{ fontSize: '20px', fontWeight: '700', marginBottom: '12px' }}>Annuel</h3>
+              <p style={{ fontSize: '32px', fontWeight: '800', color: '#10b981', margin: '16px 0' }}>
+                162 $<span style={{ fontSize: '16px', fontWeight: '400' }}>/an</span>
+              </p>
+              <p style={{ color: '#6b7280', marginBottom: '20px' }}>13.50 $/mois</p>
+              <button style={{
+                width: '100%',
+                background: '#10b981',
+                color: 'white',
+                border: 'none',
+                padding: '12px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '600'
+              }}>
+                Choisir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ExportPage = () => (
   <div style={{ textAlign: 'center', padding: '60px' }}>
     <div style={{ fontSize: '80px', marginBottom: '24px' }}>📊</div>
