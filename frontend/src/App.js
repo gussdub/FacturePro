@@ -2161,7 +2161,11 @@ const ProductsPage = () => {
           </div>
         </div>
         <button
-          onClick={() => setShowForm(true)}
+          onClick={() => {
+            setEditingProduct(null);
+            setFormData({ name: '', description: '', unit_price: '', unit: 'unité', category: '' });
+            setShowForm(true);
+          }}
           style={{
             background: 'linear-gradient(135deg, #10b981, #047857)',
             color: 'white', border: 'none', padding: '14px 28px',
