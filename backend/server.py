@@ -1109,11 +1109,17 @@ async def get_subscription_info(current_user: User = Depends(get_current_user)):
         "plans_available": PLANS
     }
 
-# CORS
+# CORS Configuration
+CORS_ORIGINS = os.environ.get('CORS_ORIGINS', '*')
+if CORS_ORIGINS == '*':
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [origin.strip() for origin in CORS_ORIGINS.split(',')]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
