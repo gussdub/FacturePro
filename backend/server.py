@@ -446,8 +446,8 @@ async def get_checkout_status(
 ):
     """Check Stripe checkout session status"""
     try:
-        # Get status from Stripe
-        checkout_status = await stripe_checkout.get_checkout_status(session_id)
+        # Get status from Stripe using official API
+        session = stripe_lib.checkout.Session.retrieve(session_id)
         
         # Find transaction
         transaction = await db.payment_transactions.find_one({"session_id": session_id})
@@ -456,7 +456,7 @@ async def get_checkout_status(
             raise HTTPException(404, "Transaction non trouvée")
         
         # If payment is successful and not already processed
-        if (checkout_status.payment_status == "paid" and 
+        if (session.payment_status == "paid" and 
             transaction.get("payment_status") != "paid"):
             
             # Update transaction
