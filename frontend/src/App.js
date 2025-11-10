@@ -1036,7 +1036,7 @@ const LoginPage = () => {
                   type="button"
                   onClick={() => setShowForgotPassword(true)}
                   style={{
-                    background: 'none', border: 'none', color: '#4338ca',
+                    background: 'none', border: 'none', color: '#0d9488',
                     fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
                   }}
                 >
