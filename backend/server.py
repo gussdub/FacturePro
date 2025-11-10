@@ -10,8 +10,7 @@ from typing import Optional, List, Dict
 import uuid
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+import resend
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout, 
     CheckoutSessionResponse, 
@@ -27,8 +26,11 @@ MONGO_URL = os.environ.get('MONGO_URL')
 DB_NAME = os.environ.get('DB_NAME', 'facturepro')
 JWT_SECRET = os.environ.get('JWT_SECRET', 'default-secret')
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
-SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'noreply@facturepro.ca')
+
+# Initialize Resend
+resend.api_key = RESEND_API_KEY
 
 # FastAPI app
 app = FastAPI(title="FacturePro API", version="3.0.0")
