@@ -663,7 +663,44 @@ async def create_product(product_data: dict, current_user: User = Depends(get_cu
     new_product.pop('_id', None)
     return new_product
 
-# Placeholder routes
+# Password Change Route
+@app.post("/api/auth/change-password")
+async def change_password(
+    password_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Change user password"""
+    try:
+        old_password = password_data.get("old_password")
+        new_password = password_data.get("new_password")
+        
+        if not old_password or not new_password:
+            raise HTTPException(400, "Ancien et nouveau mot de passe requis")
+        
+        # Get user from DB
+        user = await db.users.find_one({"id": current_user.id})
+        if not user:
+            raise HTTPException(404, "Utilisateur non trouvé")
+        
+        # Verify old password
+        if not verify_password(old_password, user["hashed_password"]):
+            raise HTTPException(401, "Ancien mot de passe incorrect")
+        
+        # Update password
+        await db.users.update_one(
+            {"id": current_user.id},
+            {"$set": {"hashed_password": hash_password(new_password)}}
+        )
+        
+        return {"message": "Mot de passe modifié avec succès"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Change password error: {e}")
+        raise HTTPException(500, "Erreur lors du changement de mot de passe")
+
+# Placeholder routes (will be fully implemented)
 @app.get("/api/invoices")
 async def get_invoices(current_user: User = Depends(get_current_user)):
     return []
