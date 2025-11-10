@@ -2308,7 +2308,7 @@ const ProductsPage = () => {
             width: '100%', maxWidth: '500px'
           }}>
             <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>
-              📦 Nouveau Produit/Service
+              {editingProduct ? '✏️ Modifier Produit/Service' : '📦 Nouveau Produit/Service'}
             </h3>
             
             <form onSubmit={handleSubmit}>
