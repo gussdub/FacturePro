@@ -567,6 +567,13 @@ async def create_checkout_session(
         if current_user.is_lifetime_free:
             raise HTTPException(400, "Vous avez un accès gratuit à vie")
         
+        # Check if user has extended free access
+        if current_user.subscription_plan == "free_extended":
+            trial_end = current_user.trial_end_date
+            if trial_end and trial_end > datetime.now(timezone.utc):
+                end_date = trial_end.strftime('%d/%m/%Y')
+                raise HTTPException(400, f"Vous avez un accès gratuit jusqu'au {end_date}")
+        
         # Validate plan
         if subscription_request.plan not in PLANS:
             raise HTTPException(400, "Plan invalide")
