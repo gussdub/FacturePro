@@ -5211,15 +5211,60 @@ const ExportPage = () => {
         link.download = `${dataType}_${new Date().toISOString().split('T')[0]}.csv`;
         link.click();
         setSuccess(`Fichier CSV téléchargé avec succès (${data.length} éléments)`);
-      } else {
-        // Export JSON
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      } else if (format === 'pdf') {
+        // Export PDF - Simple HTML to PDF conversion
+        const headers = Object.keys(data[0]).filter(key => key !== '_id' && key !== 'user_id');
+        
+        // Create HTML content for PDF
+        let htmlContent = `
+          <html>
+            <head>
+              <meta charset="utf-8">
+              <style>
+                body { font-family: Arial, sans-serif; padding: 20px; }
+                h1 { color: #0d9488; margin-bottom: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                th { background: #0d9488; color: white; padding: 12px; text-align: left; border: 1px solid #ddd; }
+                td { padding: 10px; border: 1px solid #ddd; }
+                tr:nth-child(even) { background-color: #f9fafb; }
+                .header { margin-bottom: 30px; }
+                .date { color: #6b7280; font-size: 14px; }
+              </style>
+            </head>
+            <body>
+              <div class="header">
+                <h1>FacturePro - Export ${dataType}</h1>
+                <p class="date">Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}</p>
+                <p>Nombre d'éléments: ${data.length}</p>
+              </div>
+              <table>
+                <thead>
+                  <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+                </thead>
+                <tbody>
+                  ${data.map(row => `<tr>${headers.map(h => `<td>${row[h] || '-'}</td>`).join('')}</tr>`).join('')}
+                </tbody>
+              </table>
+            </body>
+          </html>
+        `;
+        
+        // Create a blob with HTML content
+        const blob = new Blob([htmlContent], { type: 'text/html' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
-        link.download = `${dataType}_${new Date().toISOString().split('T')[0]}.json`;
+        link.download = `${dataType}_${new Date().toISOString().split('T')[0]}.html`;
         link.click();
-        setSuccess(`Fichier JSON téléchargé avec succès (${data.length} éléments)`);
+        setSuccess(`Document HTML téléchargé avec succès (${data.length} éléments) - Ouvrez-le et imprimez en PDF depuis votre navigateur`);
       }
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de l\'export');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
     } catch (error) {
       setError(error.response?.data?.detail || 'Erreur lors de l\'export');
     } finally {
