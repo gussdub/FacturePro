@@ -2105,18 +2105,41 @@ const ProductsPage = () => {
     setError(''); setSuccess('');
 
     try {
-      await axios.post(`${BACKEND_URL}/api/products`, {
-        ...formData,
-        unit_price: parseFloat(formData.unit_price)
-      });
+      if (editingProduct) {
+        // Update existing product
+        await axios.put(`${BACKEND_URL}/api/products/${editingProduct.id}`, {
+          ...formData,
+          unit_price: parseFloat(formData.unit_price)
+        });
+        setSuccess('Produit modifié avec succès');
+      } else {
+        // Create new product
+        await axios.post(`${BACKEND_URL}/api/products`, {
+          ...formData,
+          unit_price: parseFloat(formData.unit_price)
+        });
+        setSuccess('Produit créé avec succès');
+      }
       
-      setSuccess('Produit créé avec succès');
       setShowForm(false);
+      setEditingProduct(null);
       setFormData({ name: '', description: '', unit_price: '', unit: 'unité', category: '' });
       fetchProducts();
     } catch (error) {
-      setError('Erreur lors de la création du produit');
+      setError(editingProduct ? 'Erreur lors de la modification' : 'Erreur lors de la création du produit');
     }
+  };
+
+  const handleEdit = (product) => {
+    setEditingProduct(product);
+    setFormData({
+      name: product.name,
+      description: product.description || '',
+      unit_price: product.unit_price,
+      unit: product.unit,
+      category: product.category || ''
+    });
+    setShowForm(true);
   };
 
   const formatCurrency = (amount) => {
