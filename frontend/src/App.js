@@ -4071,6 +4071,74 @@ const SettingsPage = () => {
           </div>
         </div>
 
+        {/* Brand Colors */}
+        <div style={{
+          background: 'white', border: '1px solid #e2e8f0',
+          borderRadius: '12px', padding: '24px', marginBottom: '24px'
+        }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>🎨 Couleurs de marque</h3>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Couleur principale</label>
+              <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px' }}>
+                Utilisée dans les factures et soumissions
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <input
+                  type="color"
+                  value={settings.primary_color || '#3B82F6'}
+                  onChange={(e) => setSettings(prev => ({ ...prev, primary_color: e.target.value }))}
+                  style={{
+                    width: '80px',
+                    height: '50px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '8px',
+                    cursor: 'pointer'
+                  }}
+                />
+                <div>
+                  <p style={{ margin: 0, fontWeight: '600', color: settings.primary_color || '#3B82F6' }}>
+                    {settings.primary_color || '#3B82F6'}
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#6b7280' }}>
+                    Factures & Soumissions
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Couleur secondaire</label>
+              <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '8px' }}>
+                Pour les accents et boutons
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <input
+                  type="color"
+                  value={settings.secondary_color || '#1F2937'}
+                  onChange={(e) => setSettings(prev => ({ ...prev, secondary_color: e.target.value }))}
+                  style={{
+                    width: '80px',
+                    height: '50px',
+                    border: '2px solid #e2e8f0',
+                    borderRadius: '8px',
+                    cursor: 'pointer'
+                  }}
+                />
+                <div>
+                  <p style={{ margin: 0, fontWeight: '600', color: settings.secondary_color || '#1F2937' }}>
+                    {settings.secondary_color || '#1F2937'}
+                  </p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#6b7280' }}>
+                    Textes & accents
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Save Button */}
         <div style={{ textAlign: 'center' }}>
           <button
