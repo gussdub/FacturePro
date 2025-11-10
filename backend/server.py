@@ -387,13 +387,24 @@ async def create_checkout_session(
         origin = request.headers.get("origin", "http://localhost:3000")
         
         # Create success and cancel URLs
-        success_url = f"{origin}/subscription/success?session_id={{{{CHECKOUT_SESSION_ID}}}}"
+        success_url = f"{origin}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}"
         cancel_url = f"{origin}/subscription"
         
-        # Create checkout session
-        checkout_request = CheckoutSessionRequest(
-            amount=plan["price"],
-            currency="cad",
+        # Create Stripe checkout session using official API
+        session = stripe_lib.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'cad',
+                    'unit_amount': int(plan["price"] * 100),  # Convert to cents
+                    'product_data': {
+                        'name': plan["name"],
+                        'description': f'{plan["interval"]}ly subscription'
+                    }
+                },
+                'quantity': 1
+            }],
+            mode='payment',
             success_url=success_url,
             cancel_url=cancel_url,
             metadata={
@@ -403,12 +414,10 @@ async def create_checkout_session(
             }
         )
         
-        session = await stripe_checkout.create_checkout_session(checkout_request)
-        
         # Create payment transaction record
         transaction = {
             "id": str(uuid.uuid4()),
-            "session_id": session.session_id,
+            "session_id": session.id,
             "user_id": current_user.id,
             "user_email": current_user.email,
             "amount": plan["price"],
@@ -421,7 +430,7 @@ async def create_checkout_session(
         
         await db.payment_transactions.insert_one(transaction)
         
-        return {"url": session.url, "session_id": session.session_id}
+        return {"url": session.url, "session_id": session.id}
         
     except HTTPException:
         raise
