@@ -5355,21 +5355,21 @@ const ExportPage = () => {
             </button>
             <button
               type="button"
-              onClick={() => setFormat('json')}
+              onClick={() => setFormat('pdf')}
               style={{
                 padding: '16px',
-                border: format === 'json' ? '2px solid #10b981' : '1px solid #d1d5db',
-                background: format === 'json' ? '#f0fdf4' : 'white',
+                border: format === 'pdf' ? '2px solid #10b981' : '1px solid #d1d5db',
+                background: format === 'pdf' ? '#f0fdf4' : 'white',
                 borderRadius: '8px',
                 cursor: 'pointer',
                 textAlign: 'left',
                 fontWeight: '600'
               }}
             >
-              <div style={{ fontSize: '24px', marginBottom: '4px' }}>🔧</div>
-              <div>JSON</div>
+              <div style={{ fontSize: '24px', marginBottom: '4px' }}>📄</div>
+              <div>PDF</div>
               <div style={{ fontSize: '12px', color: '#6b7280', fontWeight: '400' }}>
-                Format technique pour développeurs
+                Format universel pour documents
               </div>
             </button>
           </div>
