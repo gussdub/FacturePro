@@ -1095,6 +1095,24 @@ async def create_expense(expense_data: dict, current_user: User = Depends(get_cu
     new_expense.pop('_id', None)
     return new_expense
 
+@app.put("/api/expenses/{expense_id}")
+async def update_expense(
+    expense_id: str,
+    expense_data: dict,
+    current_user: User = Depends(get_current_user)
+):
+    """Update expense"""
+    if expense_data.get('date'):
+        expense_data['date'] = datetime.fromisoformat(expense_data['date'])
+    
+    await db.expenses.update_one(
+        {"id": expense_id, "user_id": current_user.id},
+        {"$set": expense_data}
+    )
+    expense = await db.expenses.find_one({"id": expense_id})
+    expense.pop('_id', None)
+    return expense
+
 @app.delete("/api/expenses/{expense_id}")
 async def delete_expense(expense_id: str, current_user: User = Depends(get_current_user)):
     """Delete expense"""
