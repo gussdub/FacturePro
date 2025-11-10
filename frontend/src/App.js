@@ -334,53 +334,18 @@ const Layout = ({ currentRoute, navigate, children }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{
               width: '48px', height: '48px',
-              background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+              background: 'transparent',
               borderRadius: '12px',
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}>
-              {settings?.logo_url ? (
-                <img 
-                  src={settings.logo_url} 
-                  alt="Logo" 
-                  style={{
-                    width: '32px', height: '32px',
-                    objectFit: 'contain', borderRadius: '6px'
-                  }}
-                  onError={(e) => {
-                    e.target.style.display = 'none';
-                    e.target.nextSibling.style.display = 'block';
-                  }}
-                />
-              ) : null}
-              <svg 
-                width="32" 
-                height="32" 
-                viewBox="0 0 40 40" 
-                fill="none"
-                style={{ display: settings?.logo_url ? 'none' : 'block' }}
-              >
-                {/* Document/Invoice shape */}
-                <rect x="10" y="6" width="20" height="28" rx="2" fill="url(#gradient1)" />
-                {/* Wavy bottom edge for invoice effect */}
-                <path d="M10 34 L12 32 L14 34 L16 32 L18 34 L20 32 L22 34 L24 32 L26 34 L28 32 L30 34 V32 H10 Z" fill="url(#gradient2)" />
-                {/* Lines on invoice */}
-                <line x1="14" y1="12" x2="26" y2="12" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.9"/>
-                <line x1="14" y1="16" x2="26" y2="16" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7"/>
-                <line x1="14" y1="20" x2="22" y2="20" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7"/>
-                {/* Dollar sign */}
-                <circle cx="20" cy="26" r="3.5" fill="white" opacity="0.95"/>
-                <text x="20" y="28.5" fontSize="6" fontWeight="bold" fill="#3b82f6" textAnchor="middle" fontFamily="Arial, sans-serif">$</text>
-                <defs>
-                  <linearGradient id="gradient1" x1="10" y1="6" x2="30" y2="34" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stopColor="#3b82f6"/>
-                    <stop offset="100%" stopColor="#1e40af"/>
-                  </linearGradient>
-                  <linearGradient id="gradient2" x1="10" y1="32" x2="30" y2="34" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stopColor="#1e40af"/>
-                    <stop offset="100%" stopColor="#1e3a8a"/>
-                  </linearGradient>
-                </defs>
-              </svg>
+              <img 
+                src="https://customer-assets.emergentagent.com/job_62508191-52e7-42df-afe2-c04e90de23a9/artifacts/ey3nqz8l_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg" 
+                alt="FacturePro Logo" 
+                style={{
+                  width: '48px', height: '48px',
+                  objectFit: 'contain', borderRadius: '12px'
+                }}
+              />
             </div>
             <div>
               <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
