@@ -437,6 +437,104 @@ async def login(credentials: UserLogin):
         print(f"Login error: {e}")
         raise HTTPException(500, "Échec de la connexion")
 
+@app.post("/api/auth/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    """Send password reset code via email"""
+    try:
+        user = await db.users.find_one({"email": request.email})
+        if not user:
+            # Don't reveal if email exists or not for security
+            return {"message": "Si l'email existe, un code de réinitialisation a été envoyé"}
+        
+        # Generate 6-digit reset code
+        reset_code = str(uuid.uuid4().int)[:6]
+        reset_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+        
+        # Store reset code in database
+        await db.password_resets.update_one(
+            {"email": request.email},
+            {
+                "$set": {
+                    "reset_code": reset_code,
+                    "expiry": reset_expiry,
+                    "used": False
+                }
+            },
+            upsert=True
+        )
+        
+        # Send email with reset code
+        try:
+            resend.Emails.send({
+                "from": SENDER_EMAIL,
+                "to": request.email,
+                "subject": "Code de réinitialisation - FacturePro",
+                "html": f"""
+                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #0d9488;">Réinitialisation de mot de passe</h2>
+                    <p>Vous avez demandé la réinitialisation de votre mot de passe FacturePro.</p>
+                    <p>Votre code de réinitialisation est :</p>
+                    <div style="background: #f0fdfa; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                        <h1 style="color: #0d9488; letter-spacing: 8px; margin: 0;">{reset_code}</h1>
+                    </div>
+                    <p>Ce code expirera dans 1 heure.</p>
+                    <p>Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+                    <p style="color: #6b7280; font-size: 12px;">FacturePro - Solution de facturation</p>
+                </div>
+                """
+            })
+        except Exception as e:
+            print(f"Error sending reset email: {e}")
+            raise HTTPException(500, "Erreur lors de l'envoi de l'email")
+        
+        return {"message": "Si l'email existe, un code de réinitialisation a été envoyé"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Forgot password error: {e}")
+        raise HTTPException(500, "Erreur lors de la génération du code")
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    """Reset password using code"""
+    try:
+        # Find reset code
+        reset_record = await db.password_resets.find_one({
+            "email": request.email,
+            "reset_code": request.reset_code,
+            "used": False
+        })
+        
+        if not reset_record:
+            raise HTTPException(400, "Code invalide ou expiré")
+        
+        # Check expiry
+        if reset_record["expiry"] < datetime.now(timezone.utc):
+            raise HTTPException(400, "Code expiré")
+        
+        # Update password
+        hashed = hash_password(request.new_password)
+        await db.users.update_one(
+            {"email": request.email},
+            {"$set": {"hashed_password": hashed}}
+        )
+        
+        # Mark reset code as used
+        await db.password_resets.update_one(
+            {"email": request.email, "reset_code": request.reset_code},
+            {"$set": {"used": True}}
+        )
+        
+        return {"message": "Mot de passe réinitialisé avec succès"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Reset password error: {e}")
+        raise HTTPException(500, "Erreur lors de la réinitialisation")
+
 # Subscription & Payment Routes
 @app.post("/api/subscription/create-checkout")
 async def create_checkout_session(
