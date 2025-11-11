@@ -432,8 +432,8 @@ try:
 except Exception as e:
     log_test("Update Company Settings", False, f"Exception: {str(e)}")
 
-# Test 17: Upload Logo URL
-print("\n🔍 TEST 17: Upload Logo URL")
+# Test 17: Upload Logo URL and Set Primary Color
+print("\n🔍 TEST 17: Upload Logo URL and Set Primary Color")
 try:
     logo_data = {
         "logo_url": "https://example.com/logo.png"
@@ -451,6 +451,24 @@ try:
         log_test("Upload Logo URL", True, f"Logo URL saved: {result.get('logo_url')}")
     else:
         log_test("Upload Logo URL", False, f"Status: {response.status_code}, Response: {response.text}")
+        
+    # Also set primary color for branding
+    settings_data = {
+        "primary_color": "#2563eb"
+    }
+    
+    response = requests.put(
+        f"{BACKEND_URL}/settings/company",
+        json=settings_data,
+        headers=headers,
+        timeout=10
+    )
+    
+    if response.status_code == 200:
+        log_test("Set Primary Color", True, "Primary color set to #2563eb")
+    else:
+        log_test("Set Primary Color", False, f"Status: {response.status_code}")
+        
 except Exception as e:
     log_test("Upload Logo URL", False, f"Exception: {str(e)}")
 
