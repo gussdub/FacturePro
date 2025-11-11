@@ -2285,33 +2285,60 @@ async def accept_quote_by_token(token: str):
             settings = await db.company_settings.find_one({"user_id": quote["user_id"]})
             company_name = settings.get('company_name', user['company_name']) if settings else user['company_name']
             
-            confirmation_html = f"""
-            <html>
-                <body style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-                    <div style="background: linear-gradient(135deg, #10b981, #059669); padding: 30px; border-radius: 12px 12px 0 0;">
-                        <h1 style="color: white; margin: 0;">🎉 Soumission Acceptée !</h1>
-                    </div>
-                    
-                    <div style="padding: 30px; background: white; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
-                        <p style="font-size: 16px;">Bonjour {company_name},</p>
-                        <p>Excellente nouvelle ! Votre client <strong>{quote['client_name']}</strong> a accepté la soumission suivante :</p>
-                        
-                        <div style="background: #f0fdf4; padding: 20px; border-radius: 8px; border-left: 4px solid #10b981; margin: 20px 0;">
-                            <p style="margin: 5px 0;"><strong>Numéro:</strong> {quote['quote_number']}</p>
-                            <p style="margin: 5px 0;"><strong>Client:</strong> {quote['client_name']}</p>
-                            <p style="margin: 5px 0;"><strong>Email:</strong> {quote['client_email']}</p>
-                            <p style="margin: 5px 0;"><strong>Montant:</strong> {quote['total']:.2f} $</p>
-                        </div>
-                        
-                        <p style="margin-top: 30px;">Vous pouvez maintenant convertir cette soumission en facture depuis votre tableau de bord.</p>
-                        
-                        <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
-                        
-                        <p style="color: #6b7280; font-size: 12px;">FacturePro - Solution de facturation</p>
-                    </div>
-                </body>
-            </html>
+            content = f"""
+            <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                Bonjour <strong>{company_name}</strong>,
+            </p>
+            <p style="font-size: 18px; color: #10b981; font-weight: 700; line-height: 1.8;">
+                🎉 Excellente nouvelle ! Votre client a accepté votre soumission !
+            </p>
+            <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                Votre client <strong>{quote['client_name']}</strong> vient d'accepter la soumission suivante :
+            </p>
+            
+            <div style="background: linear-gradient(135deg, #f0fdf4, #dcfce7); border: 3px solid #10b981; padding: 24px; border-radius: 12px; margin: 24px 0;">
+                <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                        <td style="padding: 8px 0; color: #166534; font-weight: 600;">Numéro de soumission</td>
+                        <td style="padding: 8px 0; text-align: right; color: #166534; font-size: 18px; font-weight: 700;">{quote['quote_number']}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #166534;">Client</td>
+                        <td style="padding: 8px 0; text-align: right; color: #166534; font-weight: 600;">{quote['client_name']}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px 0; color: #166534;">Email</td>
+                        <td style="padding: 8px 0; text-align: right; color: #166534; font-weight: 600;">{quote['client_email']}</td>
+                    </tr>
+                    <tr>
+                        <td colspan="2" style="padding: 12px 0 0 0; border-top: 2px solid #10b981;"></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 12px 0 0 0; color: #166534; font-size: 18px; font-weight: 700;">Montant Total</td>
+                        <td style="padding: 12px 0 0 0; text-align: right; color: #10b981; font-size: 24px; font-weight: 800;">{quote['total']:.2f} $</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 16px; border-radius: 8px; margin: 24px 0;">
+                <p style="margin: 0; font-size: 15px; color: #1e40af;">
+                    💼 <strong>Prochaine étape :</strong> Convertissez cette soumission en facture depuis votre tableau de bord FacturePro.
+                </p>
+            </div>
+            
+            <p style="font-size: 16px; color: #374151; margin-top: 32px;">
+                Félicitations pour cette nouvelle vente !
+            </p>
+            <p style="font-size: 14px; color: #6b7280;">
+                L'équipe FacturePro
+            </p>
             """
+            
+            confirmation_html = create_email_template(
+                "🎉 Soumission Acceptée !",
+                content,
+                {"text": "📊 Voir mon tableau de bord", "url": "https://www.facturepro.ca/dashboard"}
+            )
             
             try:
                 resend.Emails.send({
