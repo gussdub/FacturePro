@@ -374,19 +374,16 @@ def create_email_template(
                                 <table width="100%" cellpadding="0" cellspacing="0">
                                     <tr>
                                         <td align="center">
-                                            <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 700; color: #0d9488;">
-                                                FacturePro
+                                            <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 700; color: {primary_color};">
+                                                {company_name}
                                             </p>
                                             <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">
                                                 📞 450-33-3648
                                             </p>
                                             <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">
-                                                ✉️ <a href="mailto:info@facturepro.ca" style="color: #0d9488; text-decoration: none;">info@facturepro.ca</a>
+                                                ✉️ <a href="mailto:info@facturepro.ca" style="color: {primary_color}; text-decoration: none;">info@facturepro.ca</a>
                                             </p>
-                                            <p style="margin: 20px 0 0 0; font-size: 12px; color: #9ca3af;">
-                                                Vous recevez cet email car vous utilisez FacturePro.
-                                            </p>
-                                            <p style="margin: 8px 0 0 0; font-size: 12px;">
+                                            <p style="margin: 20px 0 0 0; font-size: 12px;">
                                                 <a href="#" style="color: #9ca3af; text-decoration: underline;">Se désabonner des notifications</a>
                                             </p>
                                         </td>
