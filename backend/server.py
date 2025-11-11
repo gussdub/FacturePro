@@ -2179,6 +2179,18 @@ async def create_quote(quote_data: dict, current_user: User = Depends(get_curren
     count = await db.quotes.count_documents({"user_id": current_user.id})
     quote_number = f"QUO-{count + 1:05d}"
     
+    # Get client details if client_id is provided
+    client_name = quote_data.get("client_name")
+    client_email = quote_data.get("client_email")
+    client_address = quote_data.get("client_address")
+    
+    if quote_data.get("client_id") and not client_name:
+        client = await db.clients.find_one({"id": quote_data["client_id"], "user_id": current_user.id})
+        if client:
+            client_name = client.get("name")
+            client_email = client.get("email")
+            client_address = client.get("address")
+    
     # Calculate totals
     items = quote_data.get("items", [])
     subtotal = sum(item["quantity"] * item["unit_price"] for item in items)
@@ -2192,9 +2204,9 @@ async def create_quote(quote_data: dict, current_user: User = Depends(get_curren
         "user_id": current_user.id,
         "quote_number": quote_number,
         "client_id": quote_data.get("client_id"),
-        "client_name": quote_data.get("client_name"),
-        "client_email": quote_data.get("client_email"),
-        "client_address": quote_data.get("client_address"),
+        "client_name": client_name,
+        "client_email": client_email,
+        "client_address": client_address,
         "items": items,
         "subtotal": subtotal,
         "tax_total": tax_total,
