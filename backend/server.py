@@ -294,7 +294,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             subscription_status=user_doc.get("subscription_status", "trial"),
             trial_end_date=user_doc.get("trial_end_date"),
             subscription_plan=user_doc.get("subscription_plan"),
-            is_lifetime_free=user_doc.get("is_lifetime_free", False)
+            is_lifetime_free=user_doc.get("is_lifetime_free", False),
+            stripe_customer_id=user_doc.get("stripe_customer_id"),
+            stripe_subscription_id=user_doc.get("stripe_subscription_id")
         )
     except Exception as e:
         print(f"Auth error: {e}")
