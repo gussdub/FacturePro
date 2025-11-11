@@ -484,6 +484,8 @@ const Layout = ({ currentRoute, navigate, children }) => {
     fetchSettings();
   }, []);
 
+  const isSuperAdmin = user?.email === 'gussdub@gmail.com';
+  
   const navigation = [
     { name: 'Tableau de bord', href: '/dashboard', icon: '📊', current: currentRoute === '/dashboard' },
     { name: 'Clients', href: '/clients', icon: '👥', current: currentRoute === '/clients' },
@@ -494,6 +496,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
     { name: 'Dépenses', href: '/expenses', icon: '💳', current: currentRoute === '/expenses' },
     { name: 'Exports', href: '/export', icon: '📊', current: currentRoute === '/export' },
     { name: 'Paramètres', href: '/settings', icon: '⚙️', current: currentRoute === '/settings' },
+    ...(isSuperAdmin ? [{ name: 'Super-Admin', href: '/super-admin', icon: '👑', current: currentRoute === '/super-admin' }] : [])
   ];
 
   return (
