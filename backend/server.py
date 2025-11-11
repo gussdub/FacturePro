@@ -2460,7 +2460,7 @@ async def send_quote_email(
         import base64
         resend.Emails.send({
             "from": SENDER_EMAIL,
-            "to": quote['client_email'],
+            "to": [quote['client_email']],
             "subject": f"Soumission #{quote['quote_number']} - {company_name}",
             "html": html_content,
             "attachments": [{
