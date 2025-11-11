@@ -8,7 +8,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load from backend directory
+load_dotenv('/app/backend/.env')
 
 MONGO_URL = os.environ.get('MONGO_URL')
 DB_NAME = os.environ.get('DB_NAME', 'facturepro')
