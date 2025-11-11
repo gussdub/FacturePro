@@ -74,6 +74,9 @@ backend:
       - working: true
         agent: "testing"
         comment: "✅ COMPREHENSIVE SUCCESS: Password reset email customization fully functional with custom branding. Verified: (1) Logo URL, primary color, and company name retrieval from company_settings collection, (2) Custom email template generation with create_email_template function using logo_url, primary_color, and company_name parameters, (3) Reset code properly stored in password_resets collection with expiry, (4) Resend API email sending with correct 'to' field format (array), (5) Primary color applied to reset code display box styling, (6) Security measures working (no email enumeration). All database operations verified. Email template includes branded header with logo/company initials, custom colors, and professional styling. 100% pass rate (9/9 tests)."
+      - working: true
+        agent: "testing"
+        comment: "✅ LOGO VERIFICATION COMPLETE: Tested password reset email with specific FacturePro logo URL (https://customer-assets.emergentagent.com/job_facturepro/artifacts/y8rea1ms_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg). Verified: (1) Logo URL correctly stored in company_settings database, (2) Password reset email sent successfully to gussdub@gmail.com via Resend API, (3) Backend logs confirm logo URL retrieval and email sending, (4) create_email_template function called with correct parameters (logo_url, primary_color #0d9488, company_name), (5) Email template generation working with custom branding. All 8 verification tests passed (100% pass rate). Logo should display correctly in email header instead of company initials."
 
   - task: "Clients CRUD Operations"
     implemented: true
