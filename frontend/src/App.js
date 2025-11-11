@@ -5776,6 +5776,88 @@ const BillingPage = () => {
             </p>
           </div>
         )}
+
+        {/* Cancel Subscription Button */}
+        {!subscription?.is_lifetime_free && subscription?.subscription_status !== 'cancelled' && (
+          <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid #e5e7eb' }}>
+            <button
+              onClick={() => {
+                if (window.confirm('Êtes-vous sûr de vouloir annuler votre abonnement ? Vous pourrez toujours utiliser FacturePro jusqu\'à la fin de votre période payée.')) {
+                  const reason = prompt('Pouvez-vous nous dire pourquoi vous annulez ? (optionnel)');
+                  const feedback = prompt('Des suggestions pour nous améliorer ? (optionnel)');
+                  
+                  axios.post(`${BACKEND_URL}/api/subscription/cancel`, { reason, feedback })
+                    .then(response => {
+                      alert(`Votre abonnement a été annulé. Vous pouvez continuer à utiliser FacturePro jusqu'au ${new Date(response.data.effective_until).toLocaleDateString('fr-FR')}`);
+                      window.location.reload();
+                    })
+                    .catch(error => {
+                      alert(error.response?.data?.detail || 'Erreur lors de l\'annulation');
+                    });
+                }
+              }}
+              style={{
+                background: '#fef2f2',
+                color: '#dc2626',
+                border: '1px solid #fecaca',
+                padding: '12px 24px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '600',
+                fontSize: '14px'
+              }}
+            >
+              ⚠️ Annuler mon abonnement
+            </button>
+            <p style={{ color: '#6b7280', fontSize: '12px', marginTop: '8px' }}>
+              Votre compte restera actif jusqu'à la fin de votre période payée
+            </p>
+          </div>
+        )}
+
+        {/* Reactivation Option */}
+        {subscription?.subscription_status === 'cancelled' && subscription?.cancellation_effective && (
+          <div style={{
+            marginTop: '24px',
+            background: '#fffbeb',
+            border: '1px solid #fcd34d',
+            borderRadius: '8px',
+            padding: '20px'
+          }}>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', fontWeight: '700', color: '#92400e' }}>
+              Abonnement Annulé
+            </h3>
+            <p style={{ margin: '0 0 16px 0', color: '#78350f', fontSize: '14px' }}>
+              Votre compte reste actif jusqu'au {new Date(subscription.cancellation_effective).toLocaleDateString('fr-FR')}
+            </p>
+            <button
+              onClick={() => {
+                if (window.confirm('Voulez-vous réactiver votre abonnement ?')) {
+                  axios.post(`${BACKEND_URL}/api/subscription/reactivate`)
+                    .then(() => {
+                      alert('Votre abonnement a été réactivé avec succès !');
+                      window.location.reload();
+                    })
+                    .catch(error => {
+                      alert(error.response?.data?.detail || 'Erreur lors de la réactivation');
+                    });
+                }
+              }}
+              style={{
+                background: '#10b981',
+                color: 'white',
+                border: 'none',
+                padding: '10px 20px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: '600',
+                fontSize: '14px'
+              }}
+            >
+              ✅ Réactiver mon abonnement
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Plans Available */}
