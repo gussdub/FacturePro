@@ -434,6 +434,9 @@ def generate_invoice_pdf(invoice_data: dict, company_name: str, logo_url: str = 
     due_date = invoice_data.get('due_date', '').strftime('%d/%m/%Y') if isinstance(invoice_data.get('due_date'), datetime) else invoice_data.get('due_date', '')
     valid_until = invoice_data.get('valid_until', '').strftime('%d/%m/%Y') if isinstance(invoice_data.get('valid_until'), datetime) else ''
     
+    # Define apostrophe for f-string
+    apostrophe = "'"
+    
     html_content = f"""
     <!DOCTYPE html>
     <html>
