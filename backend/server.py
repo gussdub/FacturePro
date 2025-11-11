@@ -334,6 +334,9 @@ def create_email_template(
         </div>
         """
     
+    # Background color for email body
+    bg_lighter = f"{primary_color}1a"  # Add alpha for very light background
+    
     return f"""
     <!DOCTYPE html>
     <html lang="fr">
