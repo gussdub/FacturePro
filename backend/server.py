@@ -403,6 +403,138 @@ def create_email_template(
     </html>
     """
 
+# PDF Generation Helper
+def generate_invoice_pdf(invoice_data: dict, company_name: str, logo_url: str = None, primary_color: str = "#0d9488") -> bytes:
+    """Generate PDF from invoice/quote data"""
+    from weasyprint import HTML
+    import io
+    
+    # Build items table
+    items_html = ""
+    for item in invoice_data['items']:
+        item_total = item['quantity'] * item['unit_price']
+        items_html += f"""
+        <tr>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb;">{item['description']}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center;">{item['quantity']}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: right;">{item['unit_price']:.2f} $</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600; color: {primary_color};">{item_total:.2f} $</td>
+        </tr>
+        """
+    
+    # Logo HTML
+    logo_html = f'<img src="{logo_url}" style="width: 100px; height: 100px; border-radius: 12px;">' if logo_url else f'<div style="font-size: 32px; font-weight: 800; color: {primary_color};">{company_name}</div>'
+    
+    # Document type
+    doc_type = "FACTURE" if 'invoice_number' in invoice_data else "SOUMISSION"
+    doc_number = invoice_data.get('invoice_number') or invoice_data.get('quote_number')
+    
+    # Dates
+    issue_date = invoice_data.get('issue_date', datetime.now(timezone.utc)).strftime('%d/%m/%Y') if isinstance(invoice_data.get('issue_date'), datetime) else invoice_data.get('issue_date', '')
+    due_date = invoice_data.get('due_date', '').strftime('%d/%m/%Y') if isinstance(invoice_data.get('due_date'), datetime) else invoice_data.get('due_date', '')
+    valid_until = invoice_data.get('valid_until', '').strftime('%d/%m/%Y') if isinstance(invoice_data.get('valid_until'), datetime) else ''
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            @page {{ size: A4; margin: 2cm; }}
+            body {{ font-family: Arial, sans-serif; margin: 0; padding: 20px; }}
+            .header {{ display: flex; justify-content: space-between; margin-bottom: 40px; border-bottom: 3px solid {primary_color}; padding-bottom: 20px; }}
+            .logo {{ flex: 1; }}
+            .doc-info {{ flex: 1; text-align: right; }}
+            .doc-title {{ font-size: 32px; font-weight: 800; color: {primary_color}; margin-bottom: 8px; }}
+            .doc-number {{ font-size: 18px; color: #374151; }}
+            .addresses {{ display: flex; justify-content: space-between; margin: 30px 0; }}
+            .address-block {{ flex: 1; }}
+            .address-title {{ font-weight: 700; color: #6b7280; margin-bottom: 8px; }}
+            table {{ width: 100%; border-collapse: collapse; margin: 30px 0; }}
+            th {{ background: {primary_color}; color: white; padding: 12px; text-align: left; font-weight: 600; }}
+            td {{ padding: 12px; border-bottom: 1px solid #e5e7eb; }}
+            .totals {{ margin-left: auto; width: 300px; margin-top: 20px; }}
+            .totals tr td {{ border: none; padding: 8px; }}
+            .total-row {{ font-size: 20px; font-weight: 800; color: {primary_color}; border-top: 2px solid {primary_color}; }}
+            .footer {{ margin-top: 50px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">
+                {logo_html}
+                <div style="margin-top: 16px; font-size: 18px; font-weight: 700; color: {primary_color};">{company_name}</div>
+            </div>
+            <div class="doc-info">
+                <div class="doc-title">{doc_type}</div>
+                <div class="doc-number">#{doc_number}</div>
+                <div style="margin-top: 16px; color: #6b7280;">Date: {issue_date}</div>
+                {'<div style="color: #6b7280;">Échéance: ' + due_date + '</div>' if due_date else ''}
+                {'<div style="color: #6b7280;">Valide jusqu\'au: ' + valid_until + '</div>' if valid_until else ''}
+            </div>
+        </div>
+        
+        <div class="addresses">
+            <div class="address-block">
+                <div class="address-title">De:</div>
+                <strong>{company_name}</strong><br>
+                📞 450-33-3648<br>
+                ✉️ info@facturepro.ca
+            </div>
+            <div class="address-block" style="text-align: right;">
+                <div class="address-title">À:</div>
+                <strong>{invoice_data['client_name']}</strong><br>
+                ✉️ {invoice_data['client_email']}<br>
+                {invoice_data.get('client_address', '')}
+            </div>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Description</th>
+                    <th style="text-align: center; width: 80px;">Qté</th>
+                    <th style="text-align: right; width: 120px;">Prix unitaire</th>
+                    <th style="text-align: right; width: 120px;">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {items_html}
+            </tbody>
+        </table>
+        
+        <table class="totals">
+            <tr>
+                <td>Sous-total:</td>
+                <td style="text-align: right; font-weight: 600;">{invoice_data['subtotal']:.2f} $</td>
+            </tr>
+            <tr>
+                <td>Taxes:</td>
+                <td style="text-align: right; font-weight: 600;">{invoice_data['tax_total']:.2f} $</td>
+            </tr>
+            <tr class="total-row">
+                <td>TOTAL:</td>
+                <td style="text-align: right;">{invoice_data['total']:.2f} $</td>
+            </tr>
+        </table>
+        
+        {f'<div style="margin-top: 30px; padding: 16px; background: #f9fafb; border-radius: 8px;"><strong>Notes:</strong><br>{invoice_data["notes"]}</div>' if invoice_data.get('notes') else ''}
+        
+        <div class="footer">
+            <strong style="color: {primary_color};">{company_name}</strong><br>
+            📞 450-33-3648 | ✉️ info@facturepro.ca<br>
+            Merci de votre confiance !
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Generate PDF
+    pdf_file = io.BytesIO()
+    HTML(string=html_content).write_pdf(pdf_file)
+    pdf_file.seek(0)
+    return pdf_file.read()
+
 # Utility functions
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
