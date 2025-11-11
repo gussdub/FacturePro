@@ -265,6 +265,108 @@ async def send_payment_success_email(user_email: str, plan_name: str, amount: fl
     
     await send_email(user_email, subject, html_content)
 
+# Email Template Helper
+def create_email_template(title: str, content: str, cta_button: dict = None) -> str:
+    """
+    Create professional email template with FacturePro branding
+    
+    Args:
+        title: Email title
+        content: Main HTML content
+        cta_button: Optional dict with 'text' and 'url' keys
+    """
+    button_html = ""
+    if cta_button:
+        button_html = f"""
+        <div style="text-align: center; margin: 40px 0;">
+            <a href="{cta_button['url']}" 
+               style="display: inline-block; 
+                      background: linear-gradient(135deg, #0d9488, #06b6d4); 
+                      color: white; 
+                      padding: 16px 40px; 
+                      text-decoration: none; 
+                      border-radius: 12px; 
+                      font-weight: 700; 
+                      font-size: 16px;
+                      box-shadow: 0 4px 15px rgba(13, 148, 136, 0.4);">
+                {cta_button['text']}
+            </a>
+        </div>
+        """
+    
+    return f"""
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title}</title>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f0fdfa;">
+        <!-- Main Container -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f0fdfa; padding: 40px 20px;">
+            <tr>
+                <td align="center">
+                    <!-- Email Content Card -->
+                    <table width="600" cellpadding="0" cellspacing="0" style="background-color: white; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; max-width: 100%;">
+                        
+                        <!-- Header with Logo and Gradient -->
+                        <tr>
+                            <td style="background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%); padding: 40px 30px; text-align: center;">
+                                <img src="https://customer-assets.emergentagent.com/job_62508191-52e7-42df-afe2-c04e90de23a9/artifacts/ey3nqz8l_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg" 
+                                     alt="FacturePro Logo" 
+                                     width="80" 
+                                     height="80" 
+                                     style="border-radius: 12px; margin-bottom: 16px;">
+                                <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px;">
+                                    {title}
+                                </h1>
+                            </td>
+                        </tr>
+                        
+                        <!-- Content Body -->
+                        <tr>
+                            <td style="padding: 40px 30px;">
+                                {content}
+                                {button_html}
+                            </td>
+                        </tr>
+                        
+                        <!-- Footer -->
+                        <tr>
+                            <td style="background-color: #f9fafb; padding: 30px; border-top: 1px solid #e5e7eb;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td align="center">
+                                            <p style="margin: 0 0 16px 0; font-size: 18px; font-weight: 700; color: #0d9488;">
+                                                FacturePro
+                                            </p>
+                                            <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">
+                                                📞 450-33-3648
+                                            </p>
+                                            <p style="margin: 0 0 8px 0; font-size: 14px; color: #6b7280;">
+                                                ✉️ <a href="mailto:info@facturepro.ca" style="color: #0d9488; text-decoration: none;">info@facturepro.ca</a>
+                                            </p>
+                                            <p style="margin: 20px 0 0 0; font-size: 12px; color: #9ca3af;">
+                                                Vous recevez cet email car vous utilisez FacturePro.
+                                            </p>
+                                            <p style="margin: 8px 0 0 0; font-size: 12px;">
+                                                <a href="#" style="color: #9ca3af; text-decoration: underline;">Se désabonner des notifications</a>
+                                            </p>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                        
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
 # Utility functions
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
