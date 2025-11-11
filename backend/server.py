@@ -587,6 +587,194 @@ async def reset_password(request: ResetPasswordRequest):
         print(f"Reset password error: {e}")
         raise HTTPException(500, "Erreur lors de la réinitialisation")
 
+# Super-Admin Routes
+@app.get("/api/admin/stats")
+async def get_admin_stats(admin: User = Depends(get_super_admin)):
+    """Get admin dashboard statistics"""
+    try:
+        # Total users
+        total_users = await db.users.count_documents({})
+        
+        # Active subscribers
+        active_subs = await db.users.count_documents({
+            "subscription_status": "active",
+            "is_lifetime_free": False,
+            "subscription_plan": {"$in": ["monthly", "yearly"]}
+        })
+        
+        # Trial users
+        trial_users = await db.users.count_documents({"subscription_status": "trial"})
+        
+        # Cancelled users
+        cancelled_users = await db.users.count_documents({"subscription_status": "cancelled"})
+        
+        # Free users (lifetime + extended)
+        free_users = await db.users.count_documents({
+            "$or": [
+                {"is_lifetime_free": True},
+                {"subscription_plan": "free_extended"}
+            ]
+        })
+        
+        # Calculate revenue
+        monthly_subs = await db.users.count_documents({"subscription_plan": "monthly", "subscription_status": "active"})
+        yearly_subs = await db.users.count_documents({"subscription_plan": "yearly", "subscription_status": "active"})
+        
+        mrr = monthly_subs * 15  # Monthly Recurring Revenue
+        arr = (monthly_subs * 15 * 12) + (yearly_subs * 162)  # Annual Recurring Revenue
+        
+        # Recent signups (last 7 days)
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        recent_signups = await db.users.count_documents({
+            "created_at": {"$gte": seven_days_ago}
+        })
+        
+        # Recent cancellations (last 30 days)
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        recent_cancellations = await db.users.count_documents({
+            "subscription_status": "cancelled",
+            "cancelled_at": {"$gte": thirty_days_ago}
+        })
+        
+        # Get list of free access users
+        free_access_users = await db.users.find({
+            "$or": [
+                {"is_lifetime_free": True},
+                {"subscription_plan": "free_extended"}
+            ]
+        }).to_list(length=100)
+        
+        free_list = []
+        for user in free_access_users:
+            free_list.append({
+                "email": user["email"],
+                "company_name": user["company_name"],
+                "type": "Lifetime" if user.get("is_lifetime_free") else "Extended",
+                "expires": user.get("trial_end_date").isoformat() if user.get("trial_end_date") else None,
+                "created_at": user.get("created_at").isoformat() if user.get("created_at") else None
+            })
+        
+        return {
+            "total_users": total_users,
+            "active_subscribers": active_subs,
+            "trial_users": trial_users,
+            "cancelled_users": cancelled_users,
+            "free_users": free_users,
+            "mrr": mrr,
+            "arr": arr,
+            "recent_signups": recent_signups,
+            "recent_cancellations": recent_cancellations,
+            "free_access_list": free_list
+        }
+        
+    except Exception as e:
+        print(f"Error getting admin stats: {e}")
+        raise HTTPException(500, "Erreur lors de la récupération des statistiques")
+
+@app.get("/api/admin/users")
+async def search_users(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    admin: User = Depends(get_super_admin)
+):
+    """Search and filter users"""
+    try:
+        query = {}
+        
+        if search:
+            query["$or"] = [
+                {"email": {"$regex": search, "$options": "i"}},
+                {"company_name": {"$regex": search, "$options": "i"}}
+            ]
+        
+        if status:
+            if status == "free":
+                query["$or"] = [
+                    {"is_lifetime_free": True},
+                    {"subscription_plan": "free_extended"}
+                ]
+            else:
+                query["subscription_status"] = status
+        
+        users = await db.users.find(query).sort("created_at", -1).limit(100).to_list(length=100)
+        
+        user_list = []
+        for user in users:
+            user_list.append({
+                "id": user["id"],
+                "email": user["email"],
+                "company_name": user["company_name"],
+                "subscription_status": user.get("subscription_status", "trial"),
+                "subscription_plan": user.get("subscription_plan"),
+                "is_lifetime_free": user.get("is_lifetime_free", False),
+                "trial_end_date": user.get("trial_end_date").isoformat() if user.get("trial_end_date") else None,
+                "created_at": user.get("created_at").isoformat() if user.get("created_at") else None
+            })
+        
+        return {"users": user_list}
+        
+    except Exception as e:
+        print(f"Error searching users: {e}")
+        raise HTTPException(500, "Erreur lors de la recherche")
+
+@app.post("/api/admin/grant-free-access")
+async def grant_free_access(
+    request: GrantFreeAccessRequest,
+    admin: User = Depends(get_super_admin)
+):
+    """Grant free access to a user"""
+    try:
+        user = await db.users.find_one({"email": request.email})
+        if not user:
+            raise HTTPException(404, "Utilisateur non trouvé")
+        
+        update_data = {}
+        
+        if request.free_until == "lifetime":
+            update_data = {
+                "is_lifetime_free": True,
+                "subscription_status": "active",
+                "subscription_plan": "lifetime",
+                "trial_end_date": None
+            }
+        elif request.free_until:
+            # Parse date
+            try:
+                expiry_date = datetime.fromisoformat(request.free_until.replace('Z', '+00:00'))
+                update_data = {
+                    "subscription_status": "active",
+                    "subscription_plan": "free_extended",
+                    "trial_end_date": expiry_date,
+                    "is_lifetime_free": False
+                }
+            except:
+                raise HTTPException(400, "Format de date invalide")
+        else:
+            raise HTTPException(400, "Date d'expiration ou 'lifetime' requis")
+        
+        await db.users.update_one(
+            {"email": request.email},
+            {"$set": update_data}
+        )
+        
+        # Log the action
+        await db.admin_actions.insert_one({
+            "action": "grant_free_access",
+            "admin_email": admin.email,
+            "target_email": request.email,
+            "free_until": request.free_until,
+            "reason": request.reason,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        return {"message": f"Accès gratuit accordé à {request.email}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error granting free access: {e}")
+        raise HTTPException(500, "Erreur lors de l'attribution de la gratuité")
+
 # Subscription & Payment Routes
 @app.post("/api/subscription/create-checkout")
 async def create_checkout_session(
