@@ -966,11 +966,128 @@ async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
                         }}
                     )
         
+        # Handle subscription cancelled/deleted
+        elif event['type'] in ['customer.subscription.deleted', 'customer.subscription.updated']:
+            subscription = event['data']['object']
+            customer_id = subscription.get('customer')
+            
+            # Find user by Stripe customer ID if stored
+            # For now, we'll handle cancellation through our API endpoint
+            pass
+        
         return {"status": "success"}
         
     except Exception as e:
         print(f"Webhook error: {e}")
         return {"status": "error", "message": str(e)}
+
+@app.post("/api/subscription/cancel")
+async def cancel_subscription(
+    request: CancellationRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Cancel user subscription"""
+    try:
+        # Check if user has an active subscription
+        if current_user.subscription_status not in ["active", "trial"]:
+            raise HTTPException(400, "Aucun abonnement actif à annuler")
+        
+        if current_user.is_lifetime_free:
+            raise HTTPException(400, "Impossible d'annuler un accès gratuit à vie")
+        
+        # Calculate cancellation date (end of current period)
+        now = datetime.now(timezone.utc)
+        
+        # For trial users, cancel immediately
+        if current_user.subscription_status == "trial":
+            cancellation_effective = now
+        else:
+            # For paid users, calculate next billing date (assume monthly for simplicity)
+            # In production, you'd get this from Stripe subscription
+            if current_user.subscription_plan == "monthly":
+                cancellation_effective = now + timedelta(days=30)
+            elif current_user.subscription_plan == "yearly":
+                cancellation_effective = now + timedelta(days=365)
+            else:
+                cancellation_effective = now
+        
+        # Update user
+        await db.users.update_one(
+            {"id": current_user.id},
+            {
+                "$set": {
+                    "subscription_status": "cancelled",
+                    "cancellation_date": now,
+                    "cancellation_effective": cancellation_effective,
+                    "cancellation_reason": request.reason,
+                    "cancellation_feedback": request.feedback,
+                    "cancelled_at": now
+                }
+            }
+        )
+        
+        # TODO: Cancel Stripe subscription if exists
+        # This would require storing Stripe subscription ID with user
+        
+        # Log cancellation
+        await db.cancellations.insert_one({
+            "user_id": current_user.id,
+            "email": current_user.email,
+            "reason": request.reason,
+            "feedback": request.feedback,
+            "cancelled_at": now,
+            "effective_until": cancellation_effective
+        })
+        
+        return {
+            "message": "Abonnement annulé avec succès",
+            "effective_until": cancellation_effective.isoformat(),
+            "days_remaining": (cancellation_effective - now).days
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Cancellation error: {e}")
+        raise HTTPException(500, "Erreur lors de l'annulation")
+
+@app.post("/api/subscription/reactivate")
+async def reactivate_subscription(current_user: User = Depends(get_current_user)):
+    """Reactivate a cancelled subscription"""
+    try:
+        user_doc = await db.users.find_one({"id": current_user.id})
+        
+        if user_doc.get("subscription_status") != "cancelled":
+            raise HTTPException(400, "L'abonnement n'est pas annulé")
+        
+        # Check if cancellation is still pending (not yet effective)
+        cancellation_effective = user_doc.get("cancellation_effective")
+        if cancellation_effective and cancellation_effective > datetime.now(timezone.utc):
+            # Reactivate immediately
+            await db.users.update_one(
+                {"id": current_user.id},
+                {
+                    "$set": {
+                        "subscription_status": "active"
+                    },
+                    "$unset": {
+                        "cancellation_date": "",
+                        "cancellation_effective": "",
+                        "cancellation_reason": "",
+                        "cancellation_feedback": ""
+                    }
+                }
+            )
+            
+            return {"message": "Abonnement réactivé avec succès"}
+        else:
+            raise HTTPException(400, "Votre période d'abonnement est terminée. Veuillez souscrire à nouveau.")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Reactivation error: {e}")
+        raise HTTPException(500, "Erreur lors de la réactivation")
 
 # Client Routes
 @app.get("/api/clients")
