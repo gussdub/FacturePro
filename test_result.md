@@ -135,6 +135,18 @@ backend:
         agent: "testing"
         comment: "✅ Company settings working: GET /api/settings/company retrieves settings, PUT /api/settings/company updates settings with upsert, POST /api/settings/company/upload-logo saves logo URL. All operations persist correctly in MongoDB Atlas."
 
+  - task: "Email Customization for Quotes (send_quote_email endpoint)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ COMPREHENSIVE SUCCESS: POST /api/quotes/{quote_id}/send-email endpoint fully functional with custom branding and PDF attachment. Fixed multiple issues: (1) Corrected malformed SENDER_EMAIL in .env file, (2) Installed missing WeasyPrint dependencies (libpangoft2-1.0-0), (3) Fixed Resend API 'to' field format (must be array), (4) Enhanced quote creation to populate client_name and client_email from client_id. Email customization working: retrieves logo_url and primary_color from company_settings, generates branded PDF using generate_invoice_pdf function, sends email with PDF attachment via Resend, updates quote status to 'sent'. All functionality verified with comprehensive testing including branding, PDF generation (21995 bytes), and status updates."
+
 ## Frontend Tasks
 
 frontend:
