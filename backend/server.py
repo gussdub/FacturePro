@@ -298,6 +298,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         print(f"Auth error: {e}")
         raise HTTPException(401, "Invalid token")
 
+def is_super_admin(user: User) -> bool:
+    """Check if user is super admin"""
+    return user.email == "gussdub@gmail.com"
+
+async def get_super_admin(current_user: User = Depends(get_current_user)):
+    """Dependency to ensure user is super admin"""
+    if not is_super_admin(current_user):
+        raise HTTPException(403, "Accès refusé : Super-Admin uniquement")
+    return current_user
+
 # Routes
 @app.get("/")
 async def root():
