@@ -63,6 +63,18 @@ backend:
         agent: "testing"
         comment: "✅ Complete forgot password workflow tested: POST /api/auth/forgot-password generates reset token, POST /api/auth/reset-password updates password in MongoDB Atlas. Both endpoints working correctly."
 
+  - task: "Password Reset Email Customization with Logo"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ COMPREHENSIVE SUCCESS: Password reset email customization fully functional with custom branding. Verified: (1) Logo URL, primary color, and company name retrieval from company_settings collection, (2) Custom email template generation with create_email_template function using logo_url, primary_color, and company_name parameters, (3) Reset code properly stored in password_resets collection with expiry, (4) Resend API email sending with correct 'to' field format (array), (5) Primary color applied to reset code display box styling, (6) Security measures working (no email enumeration). All database operations verified. Email template includes branded header with logo/company initials, custom colors, and professional styling. 100% pass rate (9/9 tests)."
+
   - task: "Clients CRUD Operations"
     implemented: true
     working: true
