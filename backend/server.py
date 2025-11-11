@@ -956,52 +956,109 @@ async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
         body = await request.body()
         signature = request.headers.get("Stripe-Signature")
         
-        # Note: For production, you should verify the webhook signature
-        # For now, we'll just parse the event
+        # Parse event
         import json
         event = json.loads(body)
+        
+        print(f"Received Stripe webhook: {event['type']}")
         
         # Handle checkout.session.completed event
         if event['type'] == 'checkout.session.completed':
             session = event['data']['object']
             session_id = session['id']
+            subscription_id = session.get('subscription')
+            customer_id = session.get('customer')
             
-            # Find transaction
-            transaction = await db.payment_transactions.find_one({"session_id": session_id})
+            # Update user with subscription info
+            user_id = session['metadata'].get("user_id")
+            plan = session['metadata'].get("plan")
             
-            if transaction and transaction.get("payment_status") != "paid":
-                # Update transaction
-                await db.payment_transactions.update_one(
-                    {"session_id": session_id},
-                    {"$set": {
-                        "payment_status": "paid",
-                        "status": "completed",
-                        "paid_at": datetime.now(timezone.utc)
-                    }}
+            if user_id:
+                update_data = {
+                    "subscription_status": "active",
+                    "subscription_plan": plan,
+                    "is_active": True,
+                    "stripe_customer_id": customer_id
+                }
+                
+                if subscription_id:
+                    update_data["stripe_subscription_id"] = subscription_id
+                
+                await db.users.update_one(
+                    {"id": user_id},
+                    {"$set": update_data}
                 )
                 
-                # Update user
-                user_id = session['metadata'].get("user_id")
-                plan = session['metadata'].get("plan")
-                
-                if user_id:
-                    await db.users.update_one(
-                        {"id": user_id},
-                        {"$set": {
-                            "subscription_status": "active",
-                            "subscription_plan": plan,
-                            "is_active": True
-                        }}
-                    )
+                print(f"User {user_id} subscription activated: {subscription_id}")
         
-        # Handle subscription cancelled/deleted
-        elif event['type'] in ['customer.subscription.deleted', 'customer.subscription.updated']:
+        # Handle subscription deleted (cancellation effective)
+        elif event['type'] == 'customer.subscription.deleted':
             subscription = event['data']['object']
-            customer_id = subscription.get('customer')
+            subscription_id = subscription['id']
             
-            # Find user by Stripe customer ID if stored
-            # For now, we'll handle cancellation through our API endpoint
-            pass
+            # Find user by subscription ID
+            user = await db.users.find_one({"stripe_subscription_id": subscription_id})
+            
+            if user:
+                await db.users.update_one(
+                    {"id": user["id"]},
+                    {"$set": {
+                        "subscription_status": "expired",
+                        "is_active": False
+                    }}
+                )
+                print(f"Subscription {subscription_id} expired for user {user['email']}")
+        
+        # Handle subscription updated (e.g., cancelled but still active)
+        elif event['type'] == 'customer.subscription.updated':
+            subscription = event['data']['object']
+            subscription_id = subscription['id']
+            status = subscription['status']
+            cancel_at_period_end = subscription.get('cancel_at_period_end', False)
+            
+            # Find user by subscription ID
+            user = await db.users.find_one({"stripe_subscription_id": subscription_id})
+            
+            if user:
+                update_data = {}
+                
+                if cancel_at_period_end:
+                    # Subscription will cancel at end of period
+                    cancel_at = subscription.get('cancel_at')
+                    if cancel_at:
+                        update_data["cancellation_effective"] = datetime.fromtimestamp(cancel_at, tz=timezone.utc)
+                        update_data["subscription_status"] = "cancelled"
+                
+                elif status == 'active':
+                    update_data["subscription_status"] = "active"
+                    update_data["is_active"] = True
+                
+                elif status in ['canceled', 'unpaid', 'past_due']:
+                    update_data["subscription_status"] = "expired"
+                    update_data["is_active"] = False
+                
+                if update_data:
+                    await db.users.update_one(
+                        {"id": user["id"]},
+                        {"$set": update_data}
+                    )
+                    print(f"Subscription {subscription_id} updated: {status}")
+        
+        # Handle failed payments
+        elif event['type'] == 'invoice.payment_failed':
+            invoice = event['data']['object']
+            customer_id = invoice.get('customer')
+            
+            user = await db.users.find_one({"stripe_customer_id": customer_id})
+            if user:
+                # Log failed payment
+                await db.payment_failures.insert_one({
+                    "user_id": user["id"],
+                    "email": user["email"],
+                    "failed_at": datetime.now(timezone.utc),
+                    "amount": invoice.get('amount_due', 0) / 100
+                })
+                print(f"Payment failed for user {user['email']}")
         
         return {"status": "success"}
         
