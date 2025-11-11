@@ -85,6 +85,15 @@ class Token(BaseModel):
     token_type: str = "bearer"
     user: User
 
+class CancellationRequest(BaseModel):
+    reason: Optional[str] = None
+    feedback: Optional[str] = None
+
+class GrantFreeAccessRequest(BaseModel):
+    email: EmailStr
+    free_until: Optional[str] = None  # ISO date string or "lifetime"
+    reason: Optional[str] = None
+
 class Client(BaseModel):
     id: str
     user_id: str
