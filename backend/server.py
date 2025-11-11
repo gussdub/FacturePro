@@ -1925,18 +1925,33 @@ async def send_invoice_email(
     </p>
     """
     
+    # Get customization from settings
+    logo_url = settings.get('logo_url') if settings else None
+    primary_color = settings.get('primary_color', '#0d9488') if settings else '#0d9488'
+    
     html_content = create_email_template(
         f"Facture #{invoice['invoice_number']}",
-        content
+        content,
+        logo_url=logo_url,
+        primary_color=primary_color,
+        company_name=company_name
     )
     
-    # Send email
-    background_tasks.add_task(
-        send_email,
-        invoice['client_email'],
-        f"Facture #{invoice['invoice_number']} - {current_user.company_name}",
-        html_content
-    )
+    # Generate PDF attachment
+    pdf_bytes = generate_invoice_pdf(invoice, company_name, logo_url, primary_color)
+    
+    # Send email with PDF attachment
+    import base64
+    resend.Emails.send({
+        "from": SENDER_EMAIL,
+        "to": invoice['client_email'],
+        "subject": f"Facture #{invoice['invoice_number']} - {company_name}",
+        "html": html_content,
+        "attachments": [{
+            "filename": f"Facture_{invoice['invoice_number']}.pdf",
+            "content": base64.b64encode(pdf_bytes).decode()
+        }]
+    })
     
     # Update invoice status to "sent"
     await db.invoices.update_one(
