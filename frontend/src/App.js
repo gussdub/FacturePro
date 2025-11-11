@@ -5241,6 +5241,437 @@ const ChangePasswordPage = () => {
 };
 
 // Billing Page
+// Super Admin Page
+const SuperAdminPage = () => {
+  const [stats, setStats] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, users, grants
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  
+  // Grant free access form
+  const [grantEmail, setGrantEmail] = useState('');
+  const [grantType, setGrantType] = useState('extended'); // extended or lifetime
+  const [grantUntil, setGrantUntil] = useState('');
+  const [grantReason, setGrantReason] = useState('');
+
+  useEffect(() => {
+    fetchStats();
+  }, []);
+
+  const fetchStats = async () => {
+    try {
+      const response = await axios.get(`${BACKEND_URL}/api/admin/stats`);
+      setStats(response.data);
+    } catch (error) {
+      setError('Erreur lors du chargement des statistiques');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const searchUsers = async () => {
+    try {
+      const params = {};
+      if (searchTerm) params.search = searchTerm;
+      if (filterStatus) params.status = filterStatus;
+      
+      const response = await axios.get(`${BACKEND_URL}/api/admin/users`, { params });
+      setUsers(response.data.users);
+    } catch (error) {
+      setError('Erreur lors de la recherche');
+    }
+  };
+
+  const handleGrantFreeAccess = async (e) => {
+    e.preventDefault();
+    setError(''); setSuccess('');
+    
+    try {
+      await axios.post(`${BACKEND_URL}/api/admin/grant-free-access`, {
+        email: grantEmail,
+        free_until: grantType === 'lifetime' ? 'lifetime' : grantUntil,
+        reason: grantReason
+      });
+      
+      setSuccess(`Accès gratuit accordé à ${grantEmail}`);
+      setGrantEmail('');
+      setGrantUntil('');
+      setGrantReason('');
+      fetchStats(); // Refresh stats
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Erreur lors de l\'attribution');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '60px' }}>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+        <p>Chargement...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ marginBottom: '32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+          <div style={{ fontSize: '32px', marginRight: '12px' }}>👑</div>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#1f2937', margin: 0 }}>
+            Super-Admin
+          </h1>
+        </div>
+        <p style={{ color: '#6b7280', margin: 0 }}>Tableau de bord administrateur</p>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', borderBottom: '2px solid #e5e7eb' }}>
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          style={{
+            padding: '12px 24px',
+            background: activeTab === 'dashboard' ? '#0d9488' : 'transparent',
+            color: activeTab === 'dashboard' ? 'white' : '#6b7280',
+            border: 'none',
+            borderBottom: activeTab === 'dashboard' ? '2px solid #0d9488' : 'none',
+            cursor: 'pointer',
+            fontWeight: '600',
+            fontSize: '14px'
+          }}
+        >
+          📊 Dashboard
+        </button>
+        <button
+          onClick={() => { setActiveTab('users'); searchUsers(); }}
+          style={{
+            padding: '12px 24px',
+            background: activeTab === 'users' ? '#0d9488' : 'transparent',
+            color: activeTab === 'users' ? 'white' : '#6b7280',
+            border: 'none',
+            borderBottom: activeTab === 'users' ? '2px solid #0d9488' : 'none',
+            cursor: 'pointer',
+            fontWeight: '600',
+            fontSize: '14px'
+          }}
+        >
+          👥 Utilisateurs
+        </button>
+        <button
+          onClick={() => setActiveTab('grants')}
+          style={{
+            padding: '12px 24px',
+            background: activeTab === 'grants' ? '#0d9488' : 'transparent',
+            color: activeTab === 'grants' ? 'white' : '#6b7280',
+            border: 'none',
+            borderBottom: activeTab === 'grants' ? '2px solid #0d9488' : 'none',
+            cursor: 'pointer',
+            fontWeight: '600',
+            fontSize: '14px'
+          }}
+        >
+          🎁 Gratuités
+        </button>
+      </div>
+
+      {/* Messages */}
+      {error && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca',
+          color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{
+          background: '#f0fdf4', border: '1px solid #bbf7d0',
+          color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px'
+        }}>
+          {success}
+        </div>
+      )}
+
+      {/* Tab Content */}
+      {activeTab === 'dashboard' && stats && (
+        <div>
+          {/* Stats Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '20px', marginBottom: '32px' }}>
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Total Utilisateurs</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#0d9488' }}>{stats.total_users}</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Abonnés Actifs</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#10b981' }}>{stats.active_subscribers}</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>En Essai</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#f59e0b' }}>{stats.trial_users}</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Désabonnés</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#ef4444' }}>{stats.cancelled_users}</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Comptes Gratuits</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#8b5cf6' }}>{stats.free_users}</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>MRR (Mensuel)</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#0d9488' }}>{stats.mrr} $</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>ARR (Annuel)</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#0d9488' }}>{stats.arr} $</div>
+            </div>
+            
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <div style={{ fontSize: '14px', color: '#6b7280', marginBottom: '8px' }}>Inscriptions (7j)</div>
+              <div style={{ fontSize: '32px', fontWeight: '800', color: '#10b981' }}>{stats.recent_signups}</div>
+            </div>
+          </div>
+
+          {/* Free Access Users List */}
+          {stats.free_access_list && stats.free_access_list.length > 0 && (
+            <div style={{ background: 'white', padding: '24px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>Utilisateurs avec Accès Gratuit</h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Email</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Entreprise</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Type</th>
+                      <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Expire</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.free_access_list.map((user, index) => (
+                      <tr key={index} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                        <td style={{ padding: '12px' }}>{user.email}</td>
+                        <td style={{ padding: '12px' }}>{user.company_name}</td>
+                        <td style={{ padding: '12px' }}>
+                          <span style={{
+                            background: user.type === 'Lifetime' ? '#dcfce7' : '#fef3c7',
+                            color: user.type === 'Lifetime' ? '#166534' : '#92400e',
+                            padding: '4px 8px',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: '600'
+                          }}>
+                            {user.type}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          {user.expires ? new Date(user.expires).toLocaleDateString('fr-FR') : 'Jamais'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'users' && (
+        <div>
+          {/* Search & Filters */}
+          <div style={{ background: 'white', padding: '20px', borderRadius: '12px', marginBottom: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '12px' }}>
+              <input
+                type="text"
+                placeholder="Rechercher par email ou nom d'entreprise..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px' }}
+              />
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                style={{ padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px' }}
+              >
+                <option value="">Tous les statuts</option>
+                <option value="active">Actifs</option>
+                <option value="trial">Essai</option>
+                <option value="cancelled">Désabonnés</option>
+                <option value="free">Gratuits</option>
+              </select>
+              <button
+                onClick={searchUsers}
+                style={{
+                  background: '#0d9488',
+                  color: 'white',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: '600'
+                }}
+              >
+                🔍 Rechercher
+              </button>
+            </div>
+          </div>
+
+          {/* Users Table */}
+          {users.length > 0 && (
+            <div style={{ background: 'white', padding: '20px', borderRadius: '12px', overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
+                    <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Email</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Entreprise</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Statut</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Plan</th>
+                    <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600' }}>Inscription</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr key={user.id} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                      <td style={{ padding: '12px' }}>{user.email}</td>
+                      <td style={{ padding: '12px' }}>{user.company_name}</td>
+                      <td style={{ padding: '12px' }}>
+                        <span style={{
+                          background: 
+                            user.subscription_status === 'active' ? '#dcfce7' :
+                            user.subscription_status === 'trial' ? '#fef3c7' : '#fef2f2',
+                          color:
+                            user.subscription_status === 'active' ? '#166534' :
+                            user.subscription_status === 'trial' ? '#92400e' : '#991b1b',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          fontSize: '12px'
+                        }}>
+                          {user.subscription_status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '12px' }}>{user.subscription_plan || 'N/A'}</td>
+                      <td style={{ padding: '12px' }}>
+                        {user.created_at ? new Date(user.created_at).toLocaleDateString('fr-FR') : 'N/A'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'grants' && (
+        <div style={{ background: 'white', padding: '32px', borderRadius: '12px', maxWidth: '600px' }}>
+          <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>Accorder un Accès Gratuit</h3>
+          
+          <form onSubmit={handleGrantFreeAccess}>
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Email de l'utilisateur *</label>
+              <input
+                type="email"
+                value={grantEmail}
+                onChange={(e) => setGrantEmail(e.target.value)}
+                required
+                placeholder="email@example.com"
+                style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Type de gratuité *</label>
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setGrantType('extended')}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    border: grantType === 'extended' ? '2px solid #0d9488' : '1px solid #d1d5db',
+                    background: grantType === 'extended' ? '#f0fdfa' : 'white',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  Jusqu'à une date
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGrantType('lifetime')}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    border: grantType === 'lifetime' ? '2px solid #0d9488' : '1px solid #d1d5db',
+                    background: grantType === 'lifetime' ? '#f0fdfa' : 'white',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontWeight: '600'
+                  }}
+                >
+                  À vie
+                </button>
+              </div>
+            </div>
+
+            {grantType === 'extended' && (
+              <div style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Date d'expiration *</label>
+                <input
+                  type="date"
+                  value={grantUntil}
+                  onChange={(e) => setGrantUntil(e.target.value)}
+                  required={grantType === 'extended'}
+                  style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
+
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Raison (optionnel)</label>
+              <textarea
+                value={grantReason}
+                onChange={(e) => setGrantReason(e.target.value)}
+                rows={3}
+                placeholder="Ex: Partenaire, Test, Sponsor..."
+                style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+            </div>
+
+            <button
+              type="submit"
+              style={{
+                width: '100%',
+                background: '#0d9488',
+                color: 'white',
+                border: 'none',
+                padding: '14px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontWeight: '700',
+                fontSize: '16px'
+              }}
+            >
+              🎁 Accorder l'accès gratuit
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const BillingPage = () => {
   const { user } = useAuth();
   const [subscription, setSubscription] = useState(null);
