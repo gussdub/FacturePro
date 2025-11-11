@@ -505,33 +505,82 @@ async def register(user_data: UserCreate, background_tasks: BackgroundTasks):
         # Send welcome email (background task)
         if not is_lifetime_free:
             if extended_free_until:
-                welcome_message = f"""
-                <html>
-                    <body style="font-family: Arial, sans-serif;">
-                        <h2>Bienvenue sur FacturePro !</h2>
-                        <p>Vous bénéficiez d'un accès gratuit jusqu'au <strong>{extended_free_until.strftime('%d/%m/%Y')}</strong>.</p>
-                        <p>Vous pouvez créer vos factures, gérer vos clients et bien plus encore.</p>
-                        <p>Profitez pleinement de toutes les fonctionnalités !</p>
-                    </body>
-                </html>
+                content = f"""
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    Bonjour <strong>{user_data.company_name}</strong>,
+                </p>
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    Bienvenue dans FacturePro ! 🎉 Nous sommes ravis de vous compter parmi nous.
+                </p>
+                <div style="background: linear-gradient(135deg, #fef3c7, #fde68a); border-left: 4px solid #f59e0b; padding: 20px; border-radius: 8px; margin: 24px 0;">
+                    <p style="margin: 0; font-size: 16px; color: #78350f; font-weight: 600;">
+                        🎁 Vous bénéficiez d'un accès gratuit jusqu'au <strong>{extended_free_until.strftime('%d %B %Y')}</strong>
+                    </p>
+                </div>
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    <strong>Que pouvez-vous faire avec FacturePro ?</strong>
+                </p>
+                <ul style="font-size: 15px; color: #374151; line-height: 1.8;">
+                    <li>✨ Créer des factures et soumissions professionnelles</li>
+                    <li>👥 Gérer vos clients facilement</li>
+                    <li>📦 Organiser votre catalogue de produits/services</li>
+                    <li>📊 Suivre vos revenus et dépenses</li>
+                    <li>📧 Envoyer automatiquement vos documents</li>
+                </ul>
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    Profitez pleinement de toutes les fonctionnalités !
+                </p>
+                <p style="font-size: 16px; color: #374151; margin-top: 32px;">
+                    Excellente journée,<br>
+                    <strong style="color: #0d9488;">L'équipe FacturePro</strong>
+                </p>
                 """
             else:
-                welcome_message = f"""
-                <html>
-                    <body style="font-family: Arial, sans-serif;">
-                        <h2>Bienvenue sur FacturePro !</h2>
-                        <p>Votre période d'essai gratuite de 14 jours commence maintenant.</p>
-                        <p>Vous pouvez créer vos factures, gérer vos clients et bien plus encore.</p>
-                        <p>Votre essai se termine le : <strong>{trial_end.strftime('%d/%m/%Y')}</strong></p>
-                    </body>
-                </html>
+                content = f"""
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    Bonjour <strong>{user_data.company_name}</strong>,
+                </p>
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    Bienvenue dans FacturePro ! 🎉 Nous sommes ravis de vous compter parmi nous.
+                </p>
+                <div style="background: linear-gradient(135deg, #dbeafe, #bfdbfe); border-left: 4px solid #3b82f6; padding: 20px; border-radius: 8px; margin: 24px 0;">
+                    <p style="margin: 0 0 8px 0; font-size: 16px; color: #1e3a8a; font-weight: 600;">
+                        🚀 Votre essai gratuit de 14 jours commence maintenant !
+                    </p>
+                    <p style="margin: 0; font-size: 14px; color: #1e40af;">
+                        Fin de l'essai : <strong>{trial_end.strftime('%d %B %Y')}</strong>
+                    </p>
+                </div>
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    <strong>Que pouvez-vous faire avec FacturePro ?</strong>
+                </p>
+                <ul style="font-size: 15px; color: #374151; line-height: 1.8;">
+                    <li>✨ Créer des factures et soumissions professionnelles</li>
+                    <li>👥 Gérer vos clients facilement</li>
+                    <li>📦 Organiser votre catalogue de produits/services</li>
+                    <li>📊 Suivre vos revenus et dépenses</li>
+                    <li>📧 Envoyer automatiquement vos documents</li>
+                </ul>
+                <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                    Explorez toutes les fonctionnalités sans engagement !
+                </p>
+                <p style="font-size: 16px; color: #374151; margin-top: 32px;">
+                    Excellente journée,<br>
+                    <strong style="color: #0d9488;">L'équipe FacturePro</strong>
+                </p>
                 """
+            
+            welcome_html = create_email_template(
+                "Bienvenue sur FacturePro !",
+                content,
+                {"text": "🚀 Commencer", "url": "http://localhost:3000/dashboard"}
+            )
             
             background_tasks.add_task(
                 send_email,
                 user_data.email,
-                "Bienvenue sur FacturePro !",
-                welcome_message
+                "🎉 Bienvenue sur FacturePro !",
+                welcome_html
             )
         
         user_obj = User(
