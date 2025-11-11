@@ -672,24 +672,44 @@ async def forgot_password(request: ForgotPasswordRequest):
         
         # Send email with reset code
         try:
+            content = f"""
+            <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                Bonjour,
+            </p>
+            <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                Vous avez demandé la réinitialisation de votre mot de passe FacturePro.
+            </p>
+            <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                Voici votre code de réinitialisation :
+            </p>
+            <div style="background: linear-gradient(135deg, #f0fdfa, #ccfbf1); border: 3px solid #0d9488; padding: 30px; border-radius: 12px; text-align: center; margin: 30px 0;">
+                <h1 style="color: #0d9488; letter-spacing: 12px; margin: 0; font-size: 48px; font-weight: 800;">
+                    {reset_code}
+                </h1>
+            </div>
+            <div style="background: #fef2f2; border-left: 4px solid #ef4444; padding: 16px; border-radius: 8px; margin: 24px 0;">
+                <p style="margin: 0; font-size: 14px; color: #991b1b;">
+                    ⏰ <strong>Important :</strong> Ce code expirera dans <strong>1 heure</strong>
+                </p>
+            </div>
+            <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+                Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email en toute sécurité.
+            </p>
+            <p style="font-size: 14px; color: #6b7280; margin-top: 32px;">
+                L'équipe FacturePro
+            </p>
+            """
+            
+            reset_html = create_email_template(
+                "Réinitialisation de mot de passe",
+                content
+            )
+            
             resend.Emails.send({
                 "from": SENDER_EMAIL,
                 "to": request.email,
-                "subject": "Code de réinitialisation - FacturePro",
-                "html": f"""
-                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-                    <h2 style="color: #0d9488;">Réinitialisation de mot de passe</h2>
-                    <p>Vous avez demandé la réinitialisation de votre mot de passe FacturePro.</p>
-                    <p>Votre code de réinitialisation est :</p>
-                    <div style="background: #f0fdfa; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
-                        <h1 style="color: #0d9488; letter-spacing: 8px; margin: 0;">{reset_code}</h1>
-                    </div>
-                    <p>Ce code expirera dans 1 heure.</p>
-                    <p>Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>
-                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
-                    <p style="color: #6b7280; font-size: 12px;">FacturePro - Solution de facturation</p>
-                </div>
-                """
+                "subject": "🔐 Code de réinitialisation - FacturePro",
+                "html": reset_html
             })
         except Exception as e:
             print(f"Error sending reset email: {e}")
