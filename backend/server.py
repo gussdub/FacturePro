@@ -2458,6 +2458,14 @@ async def send_quote_email(
         
         # Send email with PDF attachment
         import base64
+        
+        # Debug logging
+        print(f"📧 Sending quote email:")
+        print(f"   From: {SENDER_EMAIL}")
+        print(f"   To: {quote['client_email']}")
+        print(f"   Subject: Soumission #{quote['quote_number']} - {company_name}")
+        print(f"   PDF size: {len(pdf_bytes)} bytes")
+        
         resend.Emails.send({
             "from": SENDER_EMAIL,
             "to": [quote['client_email']],
