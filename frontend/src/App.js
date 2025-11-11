@@ -2845,6 +2845,70 @@ const InvoicesPage = () => {
                     </div>
                   </div>
 
+                  {/* Recurring Invoice */}
+                  <div style={{ 
+                    background: 'linear-gradient(135deg, #f0fdfa, #ccfbf1)', 
+                    border: '2px solid #0d9488', 
+                    borderRadius: '12px', 
+                    padding: '20px', 
+                    marginBottom: '20px' 
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
+                      <input
+                        type="checkbox"
+                        id="isRecurring"
+                        checked={formData.is_recurring || false}
+                        onChange={(e) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            is_recurring: e.target.checked,
+                            frequency: e.target.checked ? 'monthly' : null
+                          }));
+                        }}
+                        style={{ width: '20px', height: '20px', marginRight: '12px', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="isRecurring" style={{ fontWeight: '700', fontSize: '16px', color: '#0d9488', cursor: 'pointer' }}>
+                        🔄 Facture récurrente (automatique)
+                      </label>
+                    </div>
+                    
+                    {formData.is_recurring && (
+                      <div>
+                        <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: '#0f766e' }}>
+                          Fréquence de génération
+                        </label>
+                        <select
+                          value={formData.frequency || 'monthly'}
+                          onChange={(e) => setFormData(prev => ({ ...prev, frequency: e.target.value }))}
+                          style={{
+                            width: '100%',
+                            padding: '12px',
+                            border: '2px solid #0d9488',
+                            borderRadius: '8px',
+                            fontSize: '14px',
+                            fontWeight: '600',
+                            background: 'white'
+                          }}
+                        >
+                          <option value="weekly">📅 Hebdomadaire (chaque semaine)</option>
+                          <option value="monthly">📅 Mensuelle (chaque mois)</option>
+                          <option value="quarterly">📅 Trimestrielle (tous les 3 mois)</option>
+                          <option value="yearly">📅 Annuelle (chaque année)</option>
+                        </select>
+                        <p style={{ 
+                          margin: '12px 0 0 0', 
+                          fontSize: '13px', 
+                          color: '#0f766e',
+                          background: 'white',
+                          padding: '10px',
+                          borderRadius: '6px'
+                        }}>
+                          💡 <strong>Info :</strong> Cette facture servira de modèle et sera automatiquement générée et envoyée au client selon la fréquence choisie.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Tax Type */}
                   <div style={{ marginBottom: '20px' }}>
                     <label style={{ display: 'block', marginBottom: '8px', fontWeight: '600' }}>Type de taxes</label>
