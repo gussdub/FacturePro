@@ -887,7 +887,7 @@ async def forgot_password(request: ForgotPasswordRequest):
             
             resend.Emails.send({
                 "from": SENDER_EMAIL,
-                "to": request.email,
+                "to": [request.email],
                 "subject": "🔐 Code de réinitialisation - FacturePro",
                 "html": reset_html
             })
