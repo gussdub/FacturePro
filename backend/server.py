@@ -266,22 +266,62 @@ async def send_payment_success_email(user_email: str, plan_name: str, amount: fl
     await send_email(user_email, subject, html_content)
 
 # Email Template Helper
-def create_email_template(title: str, content: str, cta_button: dict = None) -> str:
+def create_email_template(
+    title: str, 
+    content: str, 
+    cta_button: dict = None,
+    logo_url: str = None,
+    primary_color: str = "#0d9488",
+    company_name: str = "FacturePro"
+) -> str:
     """
-    Create professional email template with FacturePro branding
+    Create professional email template with customizable branding
     
     Args:
         title: Email title
         content: Main HTML content
         cta_button: Optional dict with 'text' and 'url' keys
+        logo_url: Optional custom logo URL (if None, uses company name)
+        primary_color: Brand color (default teal)
+        company_name: Company name for footer
     """
+    # Calculate lighter shade for gradient
+    import re
+    # Simple gradient: darker to lighter
+    color_match = re.match(r'#([0-9a-fA-F]{6})', primary_color)
+    if color_match:
+        # Create a lighter version by adding 20 to each RGB component
+        r = min(255, int(color_match.group(1)[0:2], 16) + 20)
+        g = min(255, int(color_match.group(1)[2:4], 16) + 20)
+        b = min(255, int(color_match.group(1)[4:6], 16) + 20)
+        lighter_color = f"#{r:02x}{g:02x}{b:02x}"
+    else:
+        lighter_color = "#06b6d4"  # fallback
+    
+    # Logo or company name
+    logo_html = ""
+    if logo_url:
+        logo_html = f"""
+        <img src="{logo_url}" 
+             alt="{company_name} Logo" 
+             width="80" 
+             height="80" 
+             style="border-radius: 12px; margin-bottom: 16px;">
+        """
+    else:
+        logo_html = f"""
+        <div style="background: white; width: 80px; height: 80px; border-radius: 12px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px;">
+            <span style="font-size: 24px; font-weight: 800; color: {primary_color};">{company_name[:2].upper()}</span>
+        </div>
+        """
+    
     button_html = ""
     if cta_button:
         button_html = f"""
         <div style="text-align: center; margin: 40px 0;">
             <a href="{cta_button['url']}" 
                style="display: inline-block; 
-                      background: linear-gradient(135deg, #0d9488, #06b6d4); 
+                      background: linear-gradient(135deg, {primary_color}, {lighter_color}); 
                       color: white; 
                       padding: 16px 40px; 
                       text-decoration: none; 
