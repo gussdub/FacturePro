@@ -2495,7 +2495,9 @@ const InvoicesPage = () => {
         tax_type: invoice.tax_type || 'TPSTVQ',
         discount: invoice.discount || 0,
         notes: invoice.notes || '',
-        primary_color: invoice.primary_color || settings?.primary_color || '#3b82f6'
+        primary_color: invoice.primary_color || settings?.primary_color || '#3b82f6',
+        is_recurring: invoice.is_recurring || false,
+        frequency: invoice.frequency || null
       });
     } else {
       setEditingInvoice(null);
@@ -2507,7 +2509,9 @@ const InvoicesPage = () => {
         tax_type: 'TPSTVQ',
         discount: 0,
         notes: 'Paiement dû à réception de la facture.\nMerci de votre confiance !',
-        primary_color: settings?.primary_color || '#3b82f6'
+        primary_color: settings?.primary_color || '#3b82f6',
+        is_recurring: false,
+        frequency: null
       });
     }
     setShowModal(true);
