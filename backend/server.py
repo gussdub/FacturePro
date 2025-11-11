@@ -470,7 +470,7 @@ def generate_invoice_pdf(invoice_data: dict, company_name: str, logo_url: str = 
                 <div class="doc-number">#{doc_number}</div>
                 <div style="margin-top: 16px; color: #6b7280;">Date: {issue_date}</div>
                 {'<div style="color: #6b7280;">Échéance: ' + due_date + '</div>' if due_date else ''}
-                {'<div style="color: #6b7280;">Valide jusqu\'au: ' + valid_until + '</div>' if valid_until else ''}
+                {'<div style="color: #6b7280;">Valide jusqu' + "'" + 'au: ' + valid_until + '</div>' if valid_until else ''}
             </div>
         </div>
         
