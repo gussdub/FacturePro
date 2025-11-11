@@ -62,6 +62,8 @@ class User(BaseModel):
     trial_end_date: Optional[datetime] = None
     subscription_plan: Optional[str] = None  # monthly, yearly
     is_lifetime_free: bool = False
+    stripe_customer_id: Optional[str] = None
+    stripe_subscription_id: Optional[str] = None
 
 class UserCreate(BaseModel):
     email: EmailStr
