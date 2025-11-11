@@ -1162,7 +1162,21 @@ async def reactivate_subscription(current_user: User = Depends(get_current_user)
         # Check if cancellation is still pending (not yet effective)
         cancellation_effective = user_doc.get("cancellation_effective")
         if cancellation_effective and cancellation_effective > datetime.now(timezone.utc):
-            # Reactivate immediately
+            # Reactivate on Stripe if subscription exists
+            stripe_subscription_id = user_doc.get("stripe_subscription_id")
+            if stripe_subscription_id:
+                try:
+                    # Remove cancel_at_period_end flag
+                    stripe_lib.Subscription.modify(
+                        stripe_subscription_id,
+                        cancel_at_period_end=False
+                    )
+                    print(f"Stripe subscription {stripe_subscription_id} reactivated")
+                except Exception as stripe_error:
+                    print(f"Error reactivating Stripe subscription: {stripe_error}")
+                    raise HTTPException(500, "Erreur lors de la réactivation sur Stripe")
+            
+            # Update user
             await db.users.update_one(
                 {"id": current_user.id},
                 {
