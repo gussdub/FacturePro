@@ -1,0 +1,95 @@
+<analysis>
+The previous AI engineer successfully developed FacturePro, a full-stack application, from an MVP. The work involved extensive debugging, particularly migrating from Supabase to MongoDB and resolving persistent 401 errors. Core features like Stripe subscriptions (with free trial/lifetime free user), Resend for emails, and comprehensive UI/UX enhancements (logo upload, company info, password/billing pages, visual modals, expense management) were implemented. A major recent focus was a complete visual overhaul, harmonizing the app's aesthetic with a new teal/cyan logo, which involved updating the header, login page, favicon, and sidebar. Subsequently, critical functionalities like backend password reset, recurring invoices, quote-to-invoice conversion, 1-click quote acceptance via email, product/client editing, and automated unit price import were added. The Stripe integration was deepened to handle live payments, subscriptions, and webhooks. Most recently, the engineer began redesigning all emails with custom branding and PDF attachments. The immediate next task is to continue this email customization for submission-related emails.
+</analysis>
+
+<product_requirements>
+The user requires FacturePro to be a functional, deployable invoicing application. Key features include client/product management, invoice/quote creation with customizable PDF generation, JWT authentication, and a Stripe-based subscription model (14-day trial, monthly/annual plans,  as lifetime free,  free until end 2026). Email automation (via Resend) for welcome, password resets, invoices, and quote acceptances is crucial. UI/UX enhancements involve displaying company details, drag-and-drop logo upload, password change, billing page, and a professional, harmonized teal/cyan branding throughout the app. Functional modules for Employees, Expenses (with drag-and-drop receipts), and Export (CSV/PDF) are also required. Additionally, the user requested recurring invoices, 1-click quote-to-invoice conversion, email-based quote acceptance, and a super-admin dashboard for user/subscription management. All external integrations must use live keys and webhooks.
+</product_requirements>
+
+<key_technical_concepts>
+-   **Backend:** FastAPI, MongoDB (Motor), PyJWT, Bcrypt, Stripe, Resend, WeasyPrint (PDF generation), email-validator.
+-   **Frontend:** React, Tailwind CSS, Axios, jsPDF (for client-side PDF export fallback).
+-   **Deployment:** Docker/Kubernetes (Render, Vercel), Supervisor.
+-   **Patterns:** JWT authentication, environment variable management, API contract, CRUD, Webhooks.
+</key_technical_concepts>
+
+<code_architecture>
+The application uses a standard full-stack architecture.
+
+
+
+**Key Files & Changes:**
+
+-   :
+    -   **Importance:** Core backend logic, defining all API routes, handling user authentication, database operations, and integrations.
+    -   **Changes Made:**
+        -   Refactored from Supabase to MongoDB.
+        -   Integrated Stripe (for subscriptions) and Resend (for emails).
+        -   Added API endpoints for password reset, recurring invoices, quote-to-invoice conversion, quote acceptance, and admin functions (stats, user management).
+        -   Updated  model with Stripe customer/subscription IDs.
+        -   Implemented  function using  to create invoice/quote PDFs.
+        -   Introduced  for standardized, branded emails.
+        -   Rewrote Stripe webhook to handle , , ,  events.
+        -   Updated  and  to interact with Stripe API.
+        -   Added logic for extended free access for specific users.
+        -   Added  helper.
+
+-   :
+    -   **Importance:** Specifies Python dependencies.
+    -   **Changes Made:** Added , , , , , 
+-----
+
+WeasyPrint could not import some external libraries. Please carefully follow the installation steps before reporting an issue:
+https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#installation
+https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#troubleshooting 
+
+----- and their compatible versions.
+
+-   :
+    -   **Importance:** Stores critical backend environment variables.
+    -   **Changes Made:** Updated ,  (now live), , , , , , and added .
+
+-   :
+    -   **Importance:** Central React component for routing, UI, and API calls.
+    -   **Changes Made:**
+        -   Integrated a new logo (image-based) into the header, login/signup pages, and sidebar.
+        -   Harmonized all purple colors on the login page and sidebar to teal/cyan.
+        -   Implemented a public route for quote acceptance ().
+        -   Replaced JSON export with client-side HTML/PDF generation logic in the  module.
+        -   Added Envoyer and Convertir en facture buttons in the .
+        -   Modified Convertir en facture button visibility to be always available (except for rejected quotes).
+        -   Implemented Modifier button and logic for editing products in .
+        -   Fixed automatic import of  when selecting products in  and .
+        -   Added Super-Admin module/route, visible only to  in the sidebar.
+        -   Added Se désabonner button in .
+        -   Added recurrence fields (, ) to the invoice creation form.
+
+-   :
+    -   **Importance:** Main HTML entry point.
+    -   **Changes Made:** Updated favicon links and  to reflect the new teal logo.
+
+</code_architecture>
+
+<pending_tasks>
+-   Continue updating remaining email templates (specifically the  for submissions and other implied emails) to include user's logo, custom colors from settings, and attach the generated invoice/submission PDF.
+</pending_tasks>
+
+<current_work>
+Immediately prior to this summary, the AI engineer was deep into enhancing the email system for FacturePro. The user requested several improvements for emails sent to clients:
+1.  Remove the phrase vous recevez cet email car vous utilisez facturepro.
+2.  Insert the user's logo into emails.
+3.  Personalize email colors based on settings.
+4.  Attach the invoice/submission as a PDF.
+
+The AI engineer has already:
+-   Installed  for server-side PDF generation.
+-   Updated the  function in  to accept , , and .
+-   Created a  helper function in  to convert HTML content to PDF.
+-   Successfully updated the  endpoint in  to incorporate these features: fetching user's logo/colors, generating the invoice PDF, attaching it, and removing the specified phrase.
+
+The current work left off with the AI explicitly stating, Je vais continuer avec les soumissions et tous les autres emails restants, indicating it was about to apply the same branding and PDF attachment logic to the  endpoint for submissions and any other pending emails. The product now has live Stripe integration, a super-admin module, and a visually harmonized UI.
+</current_work>
+
+<optional_next_step>
+Continue implementing the custom branding and PDF attachment for the  endpoint.
+</optional_next_step>
