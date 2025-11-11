@@ -472,9 +472,70 @@ try:
 except Exception as e:
     log_test("Upload Logo URL", False, f"Exception: {str(e)}")
 
-# Test 18: Delete Client (cleanup)
+# Test 18: Send Quote Email with Custom Branding and PDF
+test_quote_id = None
 if test_client_id:
-    print("\n🔍 TEST 18: Delete Client")
+    print("\n🔍 TEST 18: Send Quote Email with Custom Branding and PDF")
+    try:
+        # First, create a quote for testing
+        quote_data = {
+            "client_id": test_client_id,
+            "valid_until": (datetime.now() + timedelta(days=30)).isoformat(),
+            "items": [
+                {
+                    "description": "Email Test Service - Custom Branding",
+                    "quantity": 2,
+                    "unit_price": 250.00,
+                    "total": 500.00
+                }
+            ],
+            "notes": "Test quote for email customization with PDF attachment"
+        }
+        
+        response = requests.post(
+            f"{BACKEND_URL}/quotes",
+            json=quote_data,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            quote = response.json()
+            test_quote_id = quote.get('id')
+            log_test("Create Quote for Email Test", True, f"Quote created: {quote.get('quote_number')}")
+            
+            # Now test sending the quote email
+            response = requests.post(
+                f"{BACKEND_URL}/quotes/{test_quote_id}/send-email",
+                headers=headers,
+                timeout=15
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                log_test("Send Quote Email with Custom Branding", True, f"Email sent: {result.get('message')}")
+                
+                # Verify quote status was updated to "sent"
+                response = requests.get(f"{BACKEND_URL}/quotes", headers=headers, timeout=10)
+                if response.status_code == 200:
+                    quotes = response.json()
+                    sent_quote = next((q for q in quotes if q.get('id') == test_quote_id), None)
+                    if sent_quote and sent_quote.get('status') == 'sent':
+                        log_test("Quote Status Update", True, "Quote status updated to 'sent'")
+                    else:
+                        log_test("Quote Status Update", False, f"Quote status: {sent_quote.get('status') if sent_quote else 'Not found'}")
+                        
+            else:
+                log_test("Send Quote Email with Custom Branding", False, f"Status: {response.status_code}, Response: {response.text}")
+        else:
+            log_test("Create Quote for Email Test", False, f"Status: {response.status_code}, Response: {response.text}")
+            
+    except Exception as e:
+        log_test("Send Quote Email with Custom Branding", False, f"Exception: {str(e)}")
+
+# Test 19: Delete Client (cleanup)
+if test_client_id:
+    print("\n🔍 TEST 19: Delete Client")
     try:
         response = requests.delete(
             f"{BACKEND_URL}/clients/{test_client_id}",
