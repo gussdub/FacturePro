@@ -447,6 +447,8 @@ function App() {
         return <ChangePasswordPage />;
       case '/billing':
         return <BillingPage />;
+      case '/super-admin':
+        return <SuperAdminPage />;
       default:
         return <Dashboard />;
     }
