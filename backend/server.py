@@ -1080,21 +1080,38 @@ async def cancel_subscription(
         if current_user.is_lifetime_free:
             raise HTTPException(400, "Impossible d'annuler un accès gratuit à vie")
         
-        # Calculate cancellation date (end of current period)
+        # Calculate cancellation date
         now = datetime.now(timezone.utc)
+        cancellation_effective = now
         
-        # For trial users, cancel immediately
+        # Cancel Stripe subscription if exists
+        if current_user.stripe_subscription_id:
+            try:
+                # Cancel at period end (user keeps access until end of billing period)
+                subscription = stripe_lib.Subscription.modify(
+                    current_user.stripe_subscription_id,
+                    cancel_at_period_end=True
+                )
+                
+                # Get the actual cancellation date from Stripe
+                if subscription.cancel_at:
+                    cancellation_effective = datetime.fromtimestamp(subscription.cancel_at, tz=timezone.utc)
+                
+                print(f"Stripe subscription {current_user.stripe_subscription_id} cancelled at period end")
+                
+            except Exception as stripe_error:
+                print(f"Error cancelling Stripe subscription: {stripe_error}")
+                # Continue with local cancellation even if Stripe fails
+        
+        # For trial users without Stripe subscription, cancel immediately
         if current_user.subscription_status == "trial":
             cancellation_effective = now
-        else:
-            # For paid users, calculate next billing date (assume monthly for simplicity)
-            # In production, you'd get this from Stripe subscription
+        elif not current_user.stripe_subscription_id:
+            # Fallback calculation if no Stripe subscription
             if current_user.subscription_plan == "monthly":
                 cancellation_effective = now + timedelta(days=30)
             elif current_user.subscription_plan == "yearly":
                 cancellation_effective = now + timedelta(days=365)
-            else:
-                cancellation_effective = now
         
         # Update user
         await db.users.update_one(
@@ -1110,9 +1127,6 @@ async def cancel_subscription(
                 }
             }
         )
-        
-        # TODO: Cancel Stripe subscription if exists
-        # This would require storing Stripe subscription ID with user
         
         # Log cancellation
         await db.cancellations.insert_one({
