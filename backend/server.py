@@ -1675,51 +1675,92 @@ async def send_invoice_email(
     # Get company settings for sender info
     settings = await db.company_settings.find_one({"user_id": current_user.id})
     
-    # Build email HTML
-    html_content = f"""
-    <html>
-        <body style="font-family: Arial, sans-serif;">
-            <h2>Facture #{invoice['invoice_number']}</h2>
-            <p>Bonjour {invoice['client_name']},</p>
-            <p>Veuillez trouver ci-joint votre facture.</p>
-            
-            <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
-                <thead>
-                    <tr style="background: #f3f4f6;">
-                        <th style="padding: 10px; text-align: left;">Description</th>
-                        <th style="padding: 10px; text-align: right;">Quantité</th>
-                        <th style="padding: 10px; text-align: right;">Prix unitaire</th>
-                        <th style="padding: 10px; text-align: right;">Total</th>
-                    </tr>
-                </thead>
-                <tbody>
-    """
-    
+    # Build invoice items table
+    items_html = ""
     for item in invoice['items']:
-        html_content += f"""
-                    <tr>
-                        <td style="padding: 10px; border-top: 1px solid #e5e7eb;">{item['description']}</td>
-                        <td style="padding: 10px; border-top: 1px solid #e5e7eb; text-align: right;">{item['quantity']}</td>
-                        <td style="padding: 10px; border-top: 1px solid #e5e7eb; text-align: right;">{item['unit_price']:.2f} $</td>
-                        <td style="padding: 10px; border-top: 1px solid #e5e7eb; text-align: right;">{item['quantity'] * item['unit_price']:.2f} $</td>
-                    </tr>
+        item_total = item['quantity'] * item['unit_price']
+        items_html += f"""
+        <tr>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; color: #374151;">{item['description']}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: center; color: #374151;">{item['quantity']}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: right; color: #374151;">{item['unit_price']:.2f} $</td>
+            <td style="padding: 12px; border-bottom: 1px solid #e5e7eb; text-align: right; color: #0d9488; font-weight: 600;">{item_total:.2f} $</td>
+        </tr>
         """
     
-    html_content += f"""
-                </tbody>
-            </table>
-            
-            <div style="text-align: right; margin: 20px 0;">
-                <p><strong>Sous-total:</strong> {invoice['subtotal']:.2f} $</p>
-                <p><strong>Taxes:</strong> {invoice['tax_total']:.2f} $</p>
-                <p><strong>Total:</strong> {invoice['total']:.2f} $</p>
-            </div>
-            
-            <p>Merci de votre confiance !</p>
-            <p><strong>{settings.get('company_name', current_user.company_name) if settings else current_user.company_name}</strong></p>
-        </body>
-    </html>
+    company_name = settings.get('company_name', current_user.company_name) if settings else current_user.company_name
+    due_date = invoice.get('due_date')
+    due_date_str = due_date.strftime('%d %B %Y') if isinstance(due_date, datetime) else 'N/A'
+    
+    content = f"""
+    <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+        Bonjour <strong>{invoice['client_name']}</strong>,
+    </p>
+    <p style="font-size: 16px; color: #374151; line-height: 1.8;">
+        Veuillez trouver ci-dessous votre facture.
+    </p>
+    
+    <div style="background: #f9fafb; padding: 16px; border-radius: 8px; margin: 24px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+                <td style="padding: 8px 0;">
+                    <strong style="color: #6b7280;">Facture N°</strong><br>
+                    <span style="font-size: 18px; color: #0d9488; font-weight: 700;">{invoice['invoice_number']}</span>
+                </td>
+                <td style="padding: 8px 0; text-align: right;">
+                    <strong style="color: #6b7280;">Date d'échéance</strong><br>
+                    <span style="font-size: 16px; color: #374151; font-weight: 600;">{due_date_str}</span>
+                </td>
+            </tr>
+        </table>
+    </div>
+    
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse; margin: 24px 0; border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb;">
+        <thead>
+            <tr style="background: linear-gradient(135deg, #0d9488, #06b6d4);">
+                <th style="padding: 14px; text-align: left; color: white; font-weight: 600;">Description</th>
+                <th style="padding: 14px; text-align: center; color: white; font-weight: 600;">Qté</th>
+                <th style="padding: 14px; text-align: right; color: white; font-weight: 600;">Prix unitaire</th>
+                <th style="padding: 14px; text-align: right; color: white; font-weight: 600;">Total</th>
+            </tr>
+        </thead>
+        <tbody style="background: white;">
+            {items_html}
+        </tbody>
+    </table>
+    
+    <div style="background: linear-gradient(135deg, #f0fdfa, #ccfbf1); border: 2px solid #0d9488; padding: 24px; border-radius: 12px; margin: 24px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+                <td style="padding: 6px 0; font-size: 16px; color: #374151;">Sous-total</td>
+                <td style="padding: 6px 0; text-align: right; font-size: 16px; color: #374151; font-weight: 600;">{invoice['subtotal']:.2f} $</td>
+            </tr>
+            <tr>
+                <td style="padding: 6px 0; font-size: 16px; color: #374151;">Taxes</td>
+                <td style="padding: 6px 0; text-align: right; font-size: 16px; color: #374151; font-weight: 600;">{invoice['tax_total']:.2f} $</td>
+            </tr>
+            <tr>
+                <td colspan="2" style="padding: 12px 0 0 0; border-top: 2px solid #0d9488;"></td>
+            </tr>
+            <tr>
+                <td style="padding: 12px 0 0 0; font-size: 20px; color: #0d9488; font-weight: 800;">TOTAL</td>
+                <td style="padding: 12px 0 0 0; text-align: right; font-size: 28px; color: #0d9488; font-weight: 800;">{invoice['total']:.2f} $</td>
+            </tr>
+        </table>
+    </div>
+    
+    <p style="font-size: 16px; color: #374151; margin-top: 32px;">
+        Merci de votre confiance !
+    </p>
+    <p style="font-size: 18px; color: #0d9488; font-weight: 700; margin: 8px 0;">
+        {company_name}
+    </p>
     """
+    
+    html_content = create_email_template(
+        f"Facture #{invoice['invoice_number']}",
+        content
+    )
     
     # Send email
     background_tasks.add_task(
