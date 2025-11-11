@@ -809,10 +809,30 @@ async def create_checkout_session(
         origin = request.headers.get("origin", "http://localhost:3000")
         
         # Create success and cancel URLs
-        success_url = f"{origin}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}"
-        cancel_url = f"{origin}/subscription"
+        success_url = f"{origin}/billing?success=true"
+        cancel_url = f"{origin}/billing"
         
-        # Create Stripe checkout session using official API
+        # Get or create Stripe customer
+        if current_user.stripe_customer_id:
+            customer_id = current_user.stripe_customer_id
+        else:
+            # Create new Stripe customer
+            customer = stripe_lib.Customer.create(
+                email=current_user.email,
+                name=current_user.company_name,
+                metadata={
+                    "user_id": current_user.id
+                }
+            )
+            customer_id = customer.id
+            
+            # Save customer ID to database
+            await db.users.update_one(
+                {"id": current_user.id},
+                {"$set": {"stripe_customer_id": customer_id}}
+            )
+        
+        # Create Stripe checkout session for subscription
         session = stripe_lib.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
@@ -821,12 +841,16 @@ async def create_checkout_session(
                     'unit_amount': int(plan["price"] * 100),  # Convert to cents
                     'product_data': {
                         'name': plan["name"],
-                        'description': f'{plan["interval"]}ly subscription'
+                        'description': f'Abonnement {plan["interval"]}'
+                    },
+                    'recurring': {
+                        'interval': 'month' if plan["interval"] == 'monthly' else 'year'
                     }
                 },
                 'quantity': 1
             }],
-            mode='payment',
+            mode='subscription',
+            customer=customer_id,
             success_url=success_url,
             cancel_url=cancel_url,
             metadata={
