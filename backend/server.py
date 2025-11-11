@@ -841,6 +841,12 @@ async def forgot_password(request: ForgotPasswordRequest):
             upsert=True
         )
         
+        # Get user settings for branding
+        settings = await db.company_settings.find_one({"user_id": user['id']})
+        logo_url = settings.get('logo_url') if settings else None
+        primary_color = settings.get('primary_color', '#0d9488') if settings else '#0d9488'
+        company_name = settings.get('company_name', user.get('company_name', 'FacturePro')) if settings else user.get('company_name', 'FacturePro')
+        
         # Send email with reset code
         try:
             content = f"""
@@ -853,8 +859,8 @@ async def forgot_password(request: ForgotPasswordRequest):
             <p style="font-size: 16px; color: #374151; line-height: 1.8;">
                 Voici votre code de réinitialisation :
             </p>
-            <div style="background: linear-gradient(135deg, #f0fdfa, #ccfbf1); border: 3px solid #0d9488; padding: 30px; border-radius: 12px; text-align: center; margin: 30px 0;">
-                <h1 style="color: #0d9488; letter-spacing: 12px; margin: 0; font-size: 48px; font-weight: 800;">
+            <div style="background: linear-gradient(135deg, #f0fdfa, #ccfbf1); border: 3px solid {primary_color}; padding: 30px; border-radius: 12px; text-align: center; margin: 30px 0;">
+                <h1 style="color: {primary_color}; letter-spacing: 12px; margin: 0; font-size: 48px; font-weight: 800;">
                     {reset_code}
                 </h1>
             </div>
@@ -867,13 +873,16 @@ async def forgot_password(request: ForgotPasswordRequest):
                 Si vous n'avez pas demandé cette réinitialisation, vous pouvez ignorer cet email en toute sécurité.
             </p>
             <p style="font-size: 14px; color: #6b7280; margin-top: 32px;">
-                L'équipe FacturePro
+                L'équipe {company_name}
             </p>
             """
             
             reset_html = create_email_template(
                 "Réinitialisation de mot de passe",
-                content
+                content,
+                logo_url=logo_url,
+                primary_color=primary_color,
+                company_name=company_name
             )
             
             resend.Emails.send({
