@@ -352,12 +352,8 @@ def create_email_template(
                         
                         <!-- Header with Logo and Gradient -->
                         <tr>
-                            <td style="background: linear-gradient(135deg, #0d9488 0%, #06b6d4 100%); padding: 40px 30px; text-align: center;">
-                                <img src="https://customer-assets.emergentagent.com/job_62508191-52e7-42df-afe2-c04e90de23a9/artifacts/ey3nqz8l_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg" 
-                                     alt="FacturePro Logo" 
-                                     width="80" 
-                                     height="80" 
-                                     style="border-radius: 12px; margin-bottom: 16px;">
+                            <td style="background: linear-gradient(135deg, {primary_color} 0%, {lighter_color} 100%); padding: 40px 30px; text-align: center;">
+                                {logo_html}
                                 <h1 style="color: white; margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -0.5px;">
                                     {title}
                                 </h1>
