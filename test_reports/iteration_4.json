@@ -1,0 +1,92 @@
+{
+  "summary": "Comprehensive testing of FacturePro Payment Tracking Dashboard with Overdue Invoice Reminders - All features working. Backend 12/12 tests passed, Frontend UI fully functional.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_overdue_features.py",
+    "/app/test_reports/pytest/overdue_tests.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_overdue_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12 tests passed)",
+    "frontend": "100% (all overdue tracking features work correctly)"
+  },
+  "test_credentials": {
+    "email": "gussdub@gmail.com",
+    "password": "testpass123"
+  },
+  "seed_data_creation": "1 overdue test invoice exists (INV-0001, due 2025-12-01, 122 days overdue, client: Service Incendie de Sutton, total: 862.31$)",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Payment tracking dashboard with overdue invoice reminders fully tested. New endpoints: GET /api/dashboard/overdue (returns overdue invoices with days_overdue, client info, last_reminded), POST /api/invoices/{id}/remind (sends reminder email with PDF attachment via Resend). Dashboard shows 'Suivi des paiements' section with overdue table, total badge, and 'Rappel' buttons. Resend free tier can only send to owner email (guillaume.dubeau@facturepro.ca).",
+  "tests_executed": {
+    "backend": {
+      "new_tests_added": [
+        "TestOverdueEndpoint::test_get_overdue_invoices_success - PASS",
+        "TestOverdueEndpoint::test_overdue_invoice_fields - PASS",
+        "TestOverdueEndpoint::test_overdue_sorted_by_days - PASS",
+        "TestOverdueEndpoint::test_overdue_requires_auth - PASS",
+        "TestOverdueEndpoint::test_total_overdue_calculation - PASS",
+        "TestReminderEndpoint::test_remind_requires_auth - PASS",
+        "TestReminderEndpoint::test_remind_invoice_not_found - PASS",
+        "TestReminderEndpoint::test_remind_missing_email - PASS",
+        "TestReminderEndpoint::test_remind_with_valid_email - PASS",
+        "TestReminderEndpoint::test_remind_updates_last_reminded - PASS",
+        "TestDashboardStats::test_dashboard_stats_includes_pending - PASS",
+        "TestInvoiceStatusUpdate::test_overdue_status_auto_set - PASS"
+      ],
+      "total_tests": "12 tests passed"
+    },
+    "frontend": {
+      "dashboard_overdue_tracker": {
+        "section_title": "PASS - 'Suivi des paiements' section visible",
+        "overdue_count_message": "PASS - Shows '1 facture(s) en retard — 862,31 $ impayé'",
+        "total_overdue_badge": "PASS - Shows '862,31 $' in red badge",
+        "overdue_table": {
+          "headers": "PASS - Facture, Client, Montant, Retard, Dernier rappel, Action",
+          "invoice_number": "PASS - Shows INV-0001",
+          "client_name": "PASS - Shows 'Service Incendie de Sutton'",
+          "amount": "PASS - Shows '862,31 $' in red",
+          "days_overdue_badge": "PASS - Shows '122j' badge",
+          "last_reminded_date": "PASS - Shows '2026-04-02'",
+          "rappel_button": "PASS - 'Rappel' button present and clickable"
+        },
+        "send_reminder": {
+          "button_click": "PASS - Button triggers API call",
+          "error_handling": "PASS - Shows error message for Resend free tier limitation",
+          "message_styling": "PASS - Error message has red background"
+        }
+      },
+      "regression_tests": {
+        "quotes_page": "PASS - Filter, sort, create form all working",
+        "invoices_page": "PASS - Filter, sort, create form, PDF/Email buttons all working",
+        "invoice_status_badge": "PASS - Shows 'En retard' status for overdue invoice"
+      }
+    }
+  },
+  "api_endpoints_tested": {
+    "new_endpoints": [
+      "GET /api/dashboard/overdue - Returns overdue invoices list with count, total_overdue, days_overdue, client info",
+      "POST /api/invoices/{id}/remind - Sends reminder email with PDF attachment via Resend"
+    ],
+    "verified_behavior": [
+      "Overdue endpoint auto-updates invoice status to 'overdue' when due_date < today",
+      "Remind endpoint updates last_reminded field on success",
+      "Overdue invoices sorted by days_overdue descending",
+      "Total overdue equals sum of all overdue invoice totals"
+    ]
+  },
+  "mocked_apis": "None - All APIs are real (Resend email with PDF attachment, MongoDB)",
+  "notes": "Resend free tier sender (onboarding@resend.dev) can only deliver to account owner's email (guillaume.dubeau@facturepro.ca). Reminder to other recipients will fail with 500 error but error is properly displayed in UI."
+}

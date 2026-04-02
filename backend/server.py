@@ -673,6 +673,78 @@ def get_stats(current_user: User = Depends(get_current_user_with_access)):
         "total_revenue": round(total_revenue, 2), "pending_invoices": pending_count
     }
 
+@app.get("/api/dashboard/overdue")
+def get_overdue_invoices(current_user: User = Depends(get_current_user_with_access)):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    invoices = list(db.invoices.find({"user_id": current_user.id, "status": {"$nin": ["paid"]}}, {"_id": 0}))
+    overdue = []
+    for inv in invoices:
+        raw_due = inv.get("due_date", "")
+        if isinstance(raw_due, datetime):
+            due = raw_due.strftime("%Y-%m-%d")
+        else:
+            due = str(raw_due)[:10] if raw_due else ""
+        if due and due < today:
+            days = (datetime.now(timezone.utc) - datetime.fromisoformat(due + "T00:00:00+00:00")).days
+            if inv.get("status") != "overdue":
+                db.invoices.update_one({"id": inv["id"]}, {"$set": {"status": "overdue"}})
+                inv["status"] = "overdue"
+            client = db.clients.find_one({"id": inv.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+            overdue.append({
+                "id": inv["id"],
+                "invoice_number": inv.get("invoice_number", ""),
+                "client_name": client.get("name", "Inconnu") if client else "Inconnu",
+                "client_email": client.get("email", "") if client else "",
+                "total": inv.get("total", 0),
+                "due_date": due,
+                "days_overdue": days,
+                "last_reminded": inv.get("last_reminded", ""),
+            })
+    overdue.sort(key=lambda x: x["days_overdue"], reverse=True)
+    total_overdue = sum(i["total"] for i in overdue)
+    return {"overdue_invoices": overdue, "total_overdue": round(total_overdue, 2), "count": len(overdue)}
+
+@app.post("/api/invoices/{invoice_id}/remind")
+def send_invoice_reminder(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+    if not RESEND_API_KEY:
+        raise HTTPException(500, "Email service not configured")
+    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": invoice.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+    to_email = body.get("to_email") or (client_info or {}).get("email")
+    if not to_email:
+        raise HTTPException(400, "Adresse email du destinataire requise")
+    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
+    pdf_bytes = pdf_buffer.read()
+    pdf_b64 = base64.b64encode(pdf_bytes).decode()
+    comp_name = settings.get('company_name', 'FacturePro')
+    inv_num = invoice.get('invoice_number', 'N/A')
+    due_date = invoice.get('due_date', '')[:10]
+    total = invoice.get('total', 0)
+    subject = f"Rappel: Facture {inv_num} en retard - {comp_name}"
+    message = (f"Bonjour,\n\n"
+               f"Nous vous rappelons que la facture {inv_num} d'un montant de {total:.2f} $ "
+               f"etait due le {due_date} et reste impayee.\n\n"
+               f"Veuillez trouver ci-joint une copie de la facture.\n\n"
+               f"Merci de proceder au paiement dans les meilleurs delais.\n\n"
+               f"Cordialement,\n{comp_name}")
+    params = {
+        "from": SENDER_EMAIL,
+        "to": [to_email],
+        "subject": subject,
+        "text": message,
+        "attachments": [{"filename": f"facture_{inv_num}.pdf", "content": pdf_b64}]
+    }
+    try:
+        r = resend.Emails.send(params)
+        db.invoices.update_one({"id": invoice_id}, {"$set": {"last_reminded": datetime.now(timezone.utc).isoformat()}})
+        return {"message": f"Rappel envoye a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
+    except Exception as e:
+        raise HTTPException(500, f"Erreur envoi rappel: {str(e)}")
+
 # ─── CSV Exports ───
 @app.get("/api/export/invoices/csv")
 def export_invoices_csv(current_user: User = Depends(get_current_user_with_access)):
