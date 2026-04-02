@@ -6,6 +6,7 @@ from pymongo import MongoClient
 import os
 import jwt
 import bcrypt
+import resend
 import requests as http_requests
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
@@ -14,7 +15,14 @@ import uuid
 import secrets
 import io
 import csv
+import base64
 from dotenv import load_dotenv
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch, mm
+from reportlab.lib.colors import HexColor
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 
 load_dotenv()
 
@@ -22,6 +30,11 @@ MONGO_URL = os.environ.get('MONGO_URL')
 DB_NAME = os.environ.get('DB_NAME')
 JWT_SECRET = os.environ.get('JWT_SECRET')
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 APP_NAME = "facturepro"
@@ -679,6 +692,326 @@ def export_expenses_csv(current_user: User = Depends(get_current_user_with_acces
     output.seek(0)
     return StreamingResponse(io.BytesIO(output.getvalue().encode("utf-8")),
         media_type="text/csv", headers={"Content-Disposition": "attachment; filename=depenses.csv"})
+
+
+# ─── PDF Generation ───
+def generate_document_pdf(doc_type, document, company_settings, client_info, products_list):
+    """Generate a professional PDF for a quote or invoice."""
+    buffer = io.BytesIO()
+    pdf = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch, leftMargin=0.6*inch, rightMargin=0.6*inch)
+
+    styles = getSampleStyleSheet()
+    teal = HexColor('#00A08C')
+    dark = HexColor('#1f2937')
+    gray = HexColor('#6b7280')
+
+    title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=28, textColor=teal, spaceAfter=4)
+    subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'], fontSize=11, textColor=gray)
+    company_style = ParagraphStyle('Company', parent=styles['Normal'], fontSize=10, textColor=dark, leading=14)
+    small_style = ParagraphStyle('Small', parent=styles['Normal'], fontSize=9, textColor=gray, leading=12)
+    right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=10, textColor=dark, alignment=TA_RIGHT)
+    terms_style = ParagraphStyle('Terms', parent=styles['Normal'], fontSize=8, textColor=gray, leading=11)
+
+    elements = []
+
+    # Header with company info
+    comp_name = company_settings.get('company_name', 'Mon Entreprise')
+    comp_email = company_settings.get('email', '')
+    comp_phone = company_settings.get('phone', '')
+    comp_address = company_settings.get('address', '')
+    comp_city = company_settings.get('city', '')
+
+    # Try to load logo
+    logo_elem = None
+    logo_url = company_settings.get('logo_url', '')
+    if logo_url:
+        try:
+            if logo_url.startswith('/api/files/'):
+                file_id = logo_url.split('/')[-1]
+                record = db.files.find_one({"id": file_id, "is_deleted": False})
+                if record:
+                    data, _ = get_object(record["storage_path"])
+                    logo_buf = io.BytesIO(data)
+                    logo_elem = RLImage(logo_buf, width=1.2*inch, height=1.2*inch)
+        except Exception:
+            pass
+
+    # Build header table
+    left_parts = []
+    if logo_elem:
+        left_parts.append(logo_elem)
+    left_parts.append(Paragraph(comp_name, ParagraphStyle('CompName', parent=styles['Normal'], fontSize=16, textColor=dark, fontName='Helvetica-Bold')))
+    if comp_address:
+        left_parts.append(Paragraph(comp_address, small_style))
+    if comp_city:
+        left_parts.append(Paragraph(comp_city, small_style))
+    if comp_email:
+        left_parts.append(Paragraph(comp_email, small_style))
+    if comp_phone:
+        left_parts.append(Paragraph(comp_phone, small_style))
+
+    gst = company_settings.get('gst_number', '')
+    pst = company_settings.get('pst_number', '')
+    if gst:
+        left_parts.append(Paragraph(f"TPS: {gst}", small_style))
+    if pst:
+        left_parts.append(Paragraph(f"TVQ: {pst}", small_style))
+
+    doc_label = "SOUMISSION" if doc_type == "quote" else "FACTURE"
+    doc_number = document.get('quote_number' if doc_type == 'quote' else 'invoice_number', 'N/A')
+
+    right_parts = []
+    right_parts.append(Paragraph(doc_label, ParagraphStyle('DocLabel', parent=styles['Normal'], fontSize=24, textColor=teal, alignment=TA_RIGHT, fontName='Helvetica-Bold')))
+    right_parts.append(Paragraph(f"No: {doc_number}", right_style))
+
+    issue_date = document.get('issue_date', '')[:10]
+    right_parts.append(Paragraph(f"Date: {issue_date}", right_style))
+
+    if doc_type == 'quote':
+        valid = document.get('valid_until', '')[:10]
+        if valid:
+            right_parts.append(Paragraph(f"Valide jusqu'au: {valid}", right_style))
+    else:
+        due = document.get('due_date', '')[:10]
+        if due:
+            right_parts.append(Paragraph(f"Echeance: {due}", right_style))
+
+    status_label = document.get('status', '')
+    if status_label:
+        right_parts.append(Spacer(1, 6))
+        right_parts.append(Paragraph(f"Statut: {status_label.upper()}", ParagraphStyle('Status', parent=styles['Normal'], fontSize=10, textColor=teal, alignment=TA_RIGHT, fontName='Helvetica-Bold')))
+
+    header_data = [[left_parts, right_parts]]
+    header_table = Table(header_data, colWidths=[3.5*inch, 3.5*inch])
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 0.3*inch))
+
+    # Client info
+    client_name = client_info.get('name', 'N/A') if client_info else 'N/A'
+    client_email = client_info.get('email', '') if client_info else ''
+    client_addr = client_info.get('address', '') if client_info else ''
+    client_city = client_info.get('city', '') if client_info else ''
+    client_postal = client_info.get('postal_code', '') if client_info else ''
+
+    bill_to = [Paragraph("<b>Facturer a:</b>", company_style)]
+    bill_to.append(Paragraph(client_name, ParagraphStyle('ClientName', parent=styles['Normal'], fontSize=12, textColor=dark, fontName='Helvetica-Bold')))
+    if client_addr:
+        bill_to.append(Paragraph(client_addr, small_style))
+    if client_city or client_postal:
+        bill_to.append(Paragraph(f"{client_city} {client_postal}".strip(), small_style))
+    if client_email:
+        bill_to.append(Paragraph(client_email, small_style))
+
+    client_table = Table([[bill_to]], colWidths=[7*inch])
+    client_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8fafb')),
+        ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+    ]))
+    elements.append(client_table)
+    elements.append(Spacer(1, 0.3*inch))
+
+    # Items table
+    items = document.get('items', [])
+    table_header = ['Description', 'Qte', 'Prix unitaire', 'Total']
+    table_data = [table_header]
+
+    for item in items:
+        qty = float(item.get('quantity', 1))
+        price = float(item.get('unit_price', 0))
+        total = qty * price
+        table_data.append([
+            Paragraph(item.get('description', ''), company_style),
+            f"{qty:.2f}",
+            f"{price:.2f} $",
+            f"{total:.2f} $"
+        ])
+
+    items_table = Table(table_data, colWidths=[3.5*inch, 1*inch, 1.5*inch, 1.5*inch])
+    items_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), teal),
+        ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [HexColor('#ffffff'), HexColor('#f9fafb')]),
+    ]))
+    elements.append(items_table)
+    elements.append(Spacer(1, 0.2*inch))
+
+    # Totals
+    subtotal = document.get('subtotal', 0)
+    gst_amt = document.get('gst_amount', 0)
+    pst_amt = document.get('pst_amount', 0)
+    hst_amt = document.get('hst_amount', 0)
+    total = document.get('total', 0)
+
+    totals_data = [['', 'Sous-total:', f"{subtotal:.2f} $"]]
+    province = document.get('province', 'QC')
+    if province == 'QC':
+        if gst_amt:
+            totals_data.append(['', 'TPS (5%):', f"{gst_amt:.2f} $"])
+        if pst_amt:
+            totals_data.append(['', 'TVQ (9.975%):', f"{pst_amt:.2f} $"])
+    elif province == 'ON' and hst_amt:
+        totals_data.append(['', 'TVH (13%):', f"{hst_amt:.2f} $"])
+    totals_data.append(['', 'TOTAL:', f"{total:.2f} $"])
+
+    totals_table = Table(totals_data, colWidths=[4.5*inch, 1.5*inch, 1.5*inch])
+    totals_table.setStyle(TableStyle([
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('FONTNAME', (1, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (1, -1), (-1, -1), 12),
+        ('TEXTCOLOR', (1, -1), (-1, -1), teal),
+        ('LINEABOVE', (1, -1), (-1, -1), 1.5, teal),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(totals_table)
+
+    # Notes
+    notes = document.get('notes', '')
+    if notes:
+        elements.append(Spacer(1, 0.3*inch))
+        elements.append(Paragraph("<b>Notes / Commentaires:</b>", company_style))
+        elements.append(Spacer(1, 4))
+        elements.append(Paragraph(notes, small_style))
+
+    # Terms
+    terms = document.get('terms', '')
+    if terms:
+        elements.append(Spacer(1, 0.3*inch))
+        elements.append(Paragraph("<b>Conditions generales:</b>", company_style))
+        elements.append(Spacer(1, 4))
+        elements.append(Paragraph(terms, terms_style))
+
+    # Footer
+    elements.append(Spacer(1, 0.5*inch))
+    elements.append(Paragraph(f"Merci pour votre confiance ! — {comp_name}", ParagraphStyle('Footer', parent=styles['Normal'], fontSize=10, textColor=teal, alignment=TA_CENTER)))
+
+    pdf.build(elements)
+    buffer.seek(0)
+    return buffer
+
+# ─── PDF Endpoints ───
+@app.get("/api/quotes/{quote_id}/pdf")
+def get_quote_pdf(quote_id: str, current_user: User = Depends(get_current_user_with_access)):
+    quote = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(404, "Quote not found")
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": quote.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+
+    pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
+    filename = f"soumission_{quote.get('quote_number', 'N-A')}.pdf"
+    return StreamingResponse(pdf_buffer, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+@app.get("/api/invoices/{invoice_id}/pdf")
+def get_invoice_pdf(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
+    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": invoice.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+
+    pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
+    filename = f"facture_{invoice.get('invoice_number', 'N-A')}.pdf"
+    return StreamingResponse(pdf_buffer, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+# ─── Email Sending ───
+@app.post("/api/quotes/{quote_id}/send")
+def send_quote_email(quote_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+    if not RESEND_API_KEY:
+        raise HTTPException(500, "Email service not configured")
+
+    quote = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(404, "Quote not found")
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": quote.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+
+    to_email = body.get("to_email") or (client_info or {}).get("email")
+    if not to_email:
+        raise HTTPException(400, "Adresse email du destinataire requise")
+
+    pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
+    pdf_bytes = pdf_buffer.read()
+    pdf_b64 = base64.b64encode(pdf_bytes).decode()
+
+    comp_name = settings.get('company_name', 'FacturePro')
+    quote_num = quote.get('quote_number', 'N/A')
+    subject = body.get("subject", f"Soumission {quote_num} - {comp_name}")
+    message = body.get("message", f"Bonjour,\n\nVeuillez trouver ci-joint la soumission {quote_num}.\n\nCordialement,\n{comp_name}")
+
+    params = {
+        "from": SENDER_EMAIL,
+        "to": [to_email],
+        "subject": subject,
+        "text": message,
+        "attachments": [{"filename": f"soumission_{quote_num}.pdf", "content": pdf_b64}]
+    }
+    try:
+        r = resend.Emails.send(params)
+        db.quotes.update_one({"id": quote_id}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
+        return {"message": f"Soumission envoyee a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
+    except Exception as e:
+        raise HTTPException(500, f"Erreur envoi email: {str(e)}")
+
+@app.post("/api/invoices/{invoice_id}/send")
+def send_invoice_email(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+    if not RESEND_API_KEY:
+        raise HTTPException(500, "Email service not configured")
+
+    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": invoice.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+
+    to_email = body.get("to_email") or (client_info or {}).get("email")
+    if not to_email:
+        raise HTTPException(400, "Adresse email du destinataire requise")
+
+    pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
+    pdf_bytes = pdf_buffer.read()
+    pdf_b64 = base64.b64encode(pdf_bytes).decode()
+
+    comp_name = settings.get('company_name', 'FacturePro')
+    inv_num = invoice.get('invoice_number', 'N/A')
+    subject = body.get("subject", f"Facture {inv_num} - {comp_name}")
+    message = body.get("message", f"Bonjour,\n\nVeuillez trouver ci-joint la facture {inv_num}.\n\nCordialement,\n{comp_name}")
+
+    params = {
+        "from": SENDER_EMAIL,
+        "to": [to_email],
+        "subject": subject,
+        "text": message,
+        "attachments": [{"filename": f"facture_{inv_num}.pdf", "content": pdf_b64}]
+    }
+    try:
+        r = resend.Emails.send(params)
+        db.invoices.update_one({"id": invoice_id}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
+        return {"message": f"Facture envoyee a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
+    except Exception as e:
+        raise HTTPException(500, f"Erreur envoi email: {str(e)}")
+
 
 # ─── Startup Seed ───
 @app.on_event("startup")

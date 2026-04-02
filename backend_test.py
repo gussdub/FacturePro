@@ -8,7 +8,7 @@ import json
 from datetime import datetime, timedelta
 
 # Configuration
-BACKEND_URL = "https://facture-pro-preview.preview.emergentagent.com/api"
+BACKEND_URL = "https://resend-factures.preview.emergentagent.com/api"
 TEST_EMAIL = "gussdub@gmail.com"
 TEST_PASSWORD = "testpass123"
 
