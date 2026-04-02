@@ -434,6 +434,12 @@ def create_quote(quote_data: dict, current_user: User = Depends(get_current_user
 def update_quote(quote_id: str, quote_data: dict, current_user: User = Depends(get_current_user_with_access)):
     for k in ("id", "user_id", "_id"):
         quote_data.pop(k, None)
+    if "items" in quote_data:
+        items = quote_data["items"]
+        subtotal = sum(float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) for item in items)
+        province = quote_data.get("province", "QC")
+        gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
+        quote_data.update({"subtotal": round(subtotal, 2), "gst_amount": gst, "pst_amount": pst, "hst_amount": hst, "total_tax": total_tax, "total": round(subtotal + total_tax, 2)})
     result = db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": quote_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Quote not found")

@@ -26,8 +26,8 @@ const InvoicesPage = () => {
   const [selectedProduct, setSelectedProduct] = useState('');
 
   const defaultForm = () => ({
-    client_id: '', due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-    items: [{ description: '', quantity: 1, unit_price: 0 }], province: 'QC', notes: ''
+    client_id: '', invoice_number: '', due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
+    items: [], province: 'QC', notes: ''
   });
   const [formData, setFormData] = useState(defaultForm());
 
@@ -84,7 +84,7 @@ const InvoicesPage = () => {
   };
 
   const removeItem = (i) => {
-    if (formData.items.length > 1) setFormData(prev => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }));
+    setFormData(prev => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }));
   };
 
   const addBlankItem = () => setFormData(prev => ({ ...prev, items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }] }));
@@ -104,12 +104,13 @@ const InvoicesPage = () => {
     const dueStr = typeof rawDue === 'string' ? rawDue.substring(0, 10) : '';
     setFormData({
       client_id: invoice.client_id || '',
+      invoice_number: invoice.invoice_number || '',
       due_date: dueStr,
       items: invoice.items && invoice.items.length > 0 ? invoice.items.map(it => ({
         description: it.description || '',
         quantity: it.quantity || 1,
         unit_price: it.unit_price || 0
-      })) : [{ description: '', quantity: 1, unit_price: 0 }],
+      })) : [],
       province: invoice.province || 'QC',
       notes: invoice.notes || ''
     });
@@ -124,6 +125,9 @@ const InvoicesPage = () => {
       ...formData,
       items: formData.items.map(it => ({ ...it, total: it.quantity * it.unit_price }))
     };
+    if (editingInvoice && formData.invoice_number) {
+      payload.invoice_number = formData.invoice_number;
+    }
     try {
       if (editingInvoice) {
         await axios.put(`${BACKEND_URL}/api/invoices/${editingInvoice.id}`, payload);
@@ -300,7 +304,7 @@ const InvoicesPage = () => {
               </h3>
             </div>
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                 <div>
                   <label style={labelStyle}>Client *</label>
                   <select data-testid="invoice-client-select" value={formData.client_id}
@@ -309,6 +313,14 @@ const InvoicesPage = () => {
                     {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
+                <div>
+                  <label style={labelStyle}>Numéro de facture {editingInvoice ? '' : '(auto si vide)'}</label>
+                  <input data-testid="invoice-number-input" type="text" value={formData.invoice_number}
+                    onChange={e => setFormData(prev => ({ ...prev, invoice_number: e.target.value }))}
+                    placeholder={editingInvoice ? editingInvoice.invoice_number : 'Ex: INV-0001'} style={inputStyle} />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
                   <label style={labelStyle}>Échéance *</label>
                   <input type="date" value={formData.due_date}
@@ -349,7 +361,11 @@ const InvoicesPage = () => {
                     <span>Description</span><span style={{ textAlign: 'center' }}>Qté</span>
                     <span style={{ textAlign: 'center' }}>Prix unit.</span><span style={{ textAlign: 'center' }}>Total</span><span></span>
                   </div>
-                  {formData.items.map((item, i) => (
+                  {formData.items.length === 0 ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '14px' }}>
+                      Sélectionnez un produit ou ajoutez un article manuellement
+                    </div>
+                  ) : formData.items.map((item, i) => (
                     <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', gap: '8px', padding: '10px 12px', background: i % 2 === 0 ? '#fff' : '#f9fafb', alignItems: 'center' }}>
                       <input data-testid={`inv-item-desc-${i}`} type="text" value={item.description}
                         onChange={e => updateItem(i, 'description', e.target.value)} required placeholder="Description"
@@ -363,8 +379,8 @@ const InvoicesPage = () => {
                       <div style={{ textAlign: 'center', fontWeight: '600', fontSize: '14px', color: '#008F7A' }}>
                         {formatCurrency(item.quantity * item.unit_price)}
                       </div>
-                      <button type="button" onClick={() => removeItem(i)} disabled={formData.items.length <= 1}
-                        style={{ background: 'none', border: 'none', color: formData.items.length <= 1 ? '#d1d5db' : '#ef4444', cursor: formData.items.length <= 1 ? 'default' : 'pointer', fontSize: '18px', padding: '0' }}>
+                      <button type="button" onClick={() => removeItem(i)}
+                        style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '18px', padding: '0' }}>
                         ×
                       </button>
                     </div>
