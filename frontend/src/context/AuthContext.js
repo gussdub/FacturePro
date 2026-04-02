@@ -15,9 +15,12 @@ export const AuthProvider = ({ children }) => {
       if (token) {
         try {
           axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+          const res = await axios.get(`${BACKEND_URL}/api/auth/me`);
+          setUser(res.data);
         } catch (error) {
           localStorage.removeItem('token');
           setToken(null);
+          delete axios.defaults.headers.common['Authorization'];
         }
       }
       setLoading(false);

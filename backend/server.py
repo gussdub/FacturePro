@@ -175,6 +175,10 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
     return get_current_user(credentials)
 
+@app.get("/api/auth/me")
+def get_me(current_user: User = Depends(get_current_user_with_access)):
+    return {"id": current_user.id, "email": current_user.email, "company_name": current_user.company_name}
+
 # ─── Health ───
 @app.get("/")
 def root():
