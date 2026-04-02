@@ -1,71 +1,50 @@
-# FacturePro - PRD (Product Requirements Document)
+# FacturePro - PRD
 
 ## Original Problem Statement
-Billing software "FacturePro" for Canadian businesses (French-language). Features include:
-- Authentication with JWT
-- Client management (CRUD)
-- Product catalog (CRUD)
-- Invoice generation with Canadian tax calculations (QC: GST 5% + PST 9.975%, ON: HST 13%)
-- Quote generation with conversion to invoices
-- Employee tracking
-- Expense tracking with status workflow
-- CSV exports for invoices and expenses
-- Company settings (logo, tax numbers, colors)
-- Dashboard with stats
-- Stripe subscription ($15/month CAD, 14-day trial) - exemption for gussdub@gmail.com
-- Forgot password workflow
+Billing software "FacturePro" for Canadian businesses (French-language).
 
-## Architecture (Post-Refactoring)
-- **Frontend**: React modular components on port 3000
-  - `src/App.js` - Main router (~60 lines)
-  - `src/config.js` - Shared constants (BACKEND_URL, LOGO_URL, formatCurrency)
-  - `src/context/AuthContext.js` - Auth provider
-  - `src/components/` - Layout, NotificationsDropdown, QuickActionCard, ForgotPasswordModal
-  - `src/pages/` - Dashboard, ClientsPage, ProductsPage, InvoicesPage, QuotesPage, EmployeesPage, ExpensesPage, SettingsPage, ExportPage, LoginPage
-- **Backend**: FastAPI with Motor (async MongoDB driver) on port 8001
-- **Database**: MongoDB (local in Emergent preview)
-- **Auth**: JWT tokens (24h expiry), bcrypt password hashing
-- **Brand Colors**: Teal #00A08C (primary), #47D2A7 (lighter), #008F7A (darker)
+## Architecture
+- **Frontend**: React modular (15 fichiers) on port 3000
+- **Backend**: FastAPI + pymongo sync on port 8001
+- **Database**: MongoDB
+- **Storage**: Emergent Object Storage (logos, recus)
+- **Brand Colors**: #00A08C, #47D2A7, #008F7A
 
-## What's Been Implemented (as of 2026-02-04)
-- [x] Full authentication (register, login, forgot-password, reset-password)
-- [x] Clients CRUD with search
-- [x] Products CRUD with soft delete
-- [x] Invoices CRUD with Canadian tax calculation (QC/ON)
-- [x] Quotes CRUD with tax calculation
-- [x] Employees CRUD with soft delete
-- [x] Expenses CRUD with approval workflow (pending/approved/rejected)
-- [x] Company Settings (get/update/logo upload via URL)
-- [x] Dashboard stats (clients, invoices, quotes, products, employees, expenses, revenue)
-- [x] CSV exports for invoices and expenses
-- [x] Seed data for gussdub@gmail.com account
-- [x] Export page with download buttons
-- [x] Brand colors (teal) and FacturePro logo integrated
-- [x] **REFACTORING COMPLETE**: Monolithic App.js (3000+ lines) -> 15 modular files
+## Implemented (2026-02-04)
+- [x] Auth (register, login, forgot-password, reset-password)
+- [x] Clients CRUD
+- [x] Products CRUD
+- [x] Invoices CRUD with Canadian taxes (QC/ON)
+- [x] Quotes CRUD + convert to invoice
+- [x] Employees CRUD
+- [x] Expenses CRUD with approval workflow
+- [x] Company Settings with drag-and-drop logo upload
+- [x] Dashboard stats
+- [x] CSV exports
+- [x] SVG logo (no external URL dependency)
+- [x] File upload via Emergent Object Storage
+- [x] Refactored monolith into modular components
+- [x] pymongo sync backend (works on Render + Emergent)
 
-## Testing Status
-- Backend: 40/40 tests passed (100%)
-- Frontend: 100% (all navigation, CRUD, auth, export flows validated)
+## Backlog
+### P1
+- Stripe subscription ($15/mois CAD, 14 jours trial, gussdub@gmail.com exempt)
+- Expense receipt file upload (drag & drop)
 
-## Prioritized Backlog
-
-### P1 (High Priority)
-- Stripe subscription integration ($15/month CAD, 14-day trial, gussdub@gmail.com exempt)
-- File uploads for logos and expense receipts (currently URL-only)
-
-### P2 (Medium)
-- Employee expense approval workflow (link expenses to invoices/reimbursements)
+### P2
+- PDF export for invoices
 - Quote-to-invoice conversion in UI
-- PDF export for invoices (ReportLab)
+- Employee expense approval workflow
 
-### P3 (Low)
+### P3
 - UI/UX polish
-- Preparation for custom domain deployment (facturepro.ca)
+- Custom domain deployment (facturepro.ca)
 
-## Key Files Reference
-- `/app/backend/server.py` - Complete backend
+## Key Files
+- `/app/backend/server.py` - Backend (pymongo sync)
 - `/app/frontend/src/App.js` - Router
-- `/app/frontend/src/config.js` - Config constants
+- `/app/frontend/src/config.js` - Config
 - `/app/frontend/src/context/AuthContext.js` - Auth
-- `/app/frontend/src/components/Layout.js` - Sidebar + header
-- `/app/frontend/src/pages/*.js` - All page components
+- `/app/frontend/src/components/` - Layout, FactureProLogo, etc.
+- `/app/frontend/src/pages/` - All pages
+- `/app/DEPLOYMENT_GUIDE.md` - Render deployment guide

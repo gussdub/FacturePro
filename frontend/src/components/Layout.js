@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
-import { BACKEND_URL, LOGO_URL } from '../config';
+import { BACKEND_URL } from '../config';
 import NotificationsDropdown from './NotificationsDropdown';
+import FactureProLogo from './FactureProLogo';
 
 const Layout = ({ currentRoute, navigate, children }) => {
   const { user, logout } = useAuth();
@@ -47,7 +48,10 @@ const Layout = ({ currentRoute, navigate, children }) => {
         <div style={{ padding: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '48px', height: '48px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              <img src={LOGO_URL} alt="FacturePro" style={{ width: '48px', height: '48px', objectFit: 'contain' }} />
+              {settings?.logo_url ? (
+                <img src={settings.logo_url.startsWith('/api') ? `${BACKEND_URL}${settings.logo_url}` : settings.logo_url} alt="Logo" style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '12px' }} onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }} />
+              ) : null}
+              <div style={{ display: settings?.logo_url ? 'none' : 'block' }}><FactureProLogo size={48} /></div>
             </div>
             <div>
               <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
@@ -91,7 +95,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
               borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '12px'
             }}>
               {settings?.logo_url ? (
-                <img src={settings.logo_url} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain', borderRadius: '50%' }} />
+                <img src={settings.logo_url.startsWith('/api') ? `${BACKEND_URL}${settings.logo_url}` : settings.logo_url} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain', borderRadius: '50%' }} />
               ) : (
                 <span style={{ color: 'white', fontSize: '16px', fontWeight: '700' }}>
                   {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
@@ -162,7 +166,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
                   borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}>
                   {settings?.logo_url ? (
-                    <img src={settings.logo_url} alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain', borderRadius: '50%' }} />
+                    <img src={settings.logo_url.startsWith('/api') ? `${BACKEND_URL}${settings.logo_url}` : settings.logo_url} alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain', borderRadius: '50%' }} />
                   ) : (
                     <span style={{ color: 'white', fontSize: '14px', fontWeight: '700' }}>
                       {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}

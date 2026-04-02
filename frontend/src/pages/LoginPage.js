@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { LOGO_URL } from '../config';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
+import FactureProLogo from '../components/FactureProLogo';
 
 const LoginPage = () => {
   const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
@@ -50,7 +50,7 @@ const LoginPage = () => {
 
         <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
           <div style={{ marginBottom: '32px' }}>
-            <img src={LOGO_URL} alt="FacturePro" style={{ width: '64px', height: '64px', objectFit: 'contain', marginBottom: '24px', borderRadius: '12px' }} />
+            <FactureProLogo size={64} />
             <h1 style={{ fontSize: '80px', fontWeight: 'bold', lineHeight: '1.1', margin: 0 }}>
               Simplifiez votre
               <span style={{ display: 'block', color: '#a7f3d0' }}>facturation</span>
@@ -87,7 +87,7 @@ const LoginPage = () => {
         <div style={{ width: '100%', maxWidth: '460px' }}>
           <div style={{ textAlign: 'center', marginBottom: '40px' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '88px', height: '88px', borderRadius: '24px', marginBottom: '24px', overflow: 'hidden' }}>
-              <img src={LOGO_URL} alt="FacturePro" style={{ width: '88px', height: '88px', objectFit: 'contain' }} />
+              <FactureProLogo size={88} />
             </div>
             <h1 style={{ fontSize: '36px', fontWeight: '800', color: '#1e293b', margin: '0 0 8px 0' }}>FacturePro</h1>
             <h2 style={{ fontSize: '22px', fontWeight: '600', color: '#475569', margin: '0 0 8px 0' }}>

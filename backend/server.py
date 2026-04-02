@@ -1,11 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pymongo import MongoClient
 import os
 import jwt
 import bcrypt
+import requests as http_requests
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional
@@ -20,6 +21,50 @@ load_dotenv()
 MONGO_URL = os.environ.get('MONGO_URL')
 DB_NAME = os.environ.get('DB_NAME')
 JWT_SECRET = os.environ.get('JWT_SECRET')
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+APP_NAME = "facturepro"
+storage_key = None
+
+def init_storage():
+    global storage_key
+    if storage_key:
+        return storage_key
+    if not EMERGENT_LLM_KEY:
+        print("WARNING: EMERGENT_LLM_KEY not set, file uploads disabled")
+        return None
+    try:
+        resp = http_requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+        resp.raise_for_status()
+        storage_key = resp.json()["storage_key"]
+        return storage_key
+    except Exception as e:
+        print(f"Storage init error: {e}")
+        return None
+
+def put_object(path, data, content_type):
+    key = init_storage()
+    if not key:
+        raise HTTPException(500, "Storage not available")
+    resp = http_requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+def get_object(path):
+    key = init_storage()
+    if not key:
+        raise HTTPException(500, "Storage not available")
+    resp = http_requests.get(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key}, timeout=60
+    )
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
@@ -513,6 +558,81 @@ def upload_logo(logo_data: dict, current_user: User = Depends(get_current_user_w
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": {"logo_url": logo_data.get("logo_url", "")}}, upsert=True)
     return {"message": "Logo saved", "logo_url": logo_data.get("logo_url", "")}
 
+# ─── File Upload/Download ───
+@app.post("/api/upload")
+def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(400, f"Type de fichier non supporte: {file.content_type}")
+
+    max_size = 5 * 1024 * 1024
+    data = file.file.read()
+    if len(data) > max_size:
+        raise HTTPException(400, "Fichier trop volumineux (max 5 MB)")
+
+    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
+    storage_path = f"{APP_NAME}/uploads/{current_user.id}/{uuid.uuid4()}.{ext}"
+
+    result = put_object(storage_path, data, file.content_type or "application/octet-stream")
+
+    file_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result.get("size", len(data)),
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    db.files.insert_one(file_doc)
+
+    return {"file_id": file_doc["id"], "storage_path": result["path"], "filename": file.filename}
+
+@app.get("/api/files/{file_id}")
+def download_file(file_id: str):
+    record = db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
+    if not record:
+        raise HTTPException(404, "File not found")
+    data, content_type = get_object(record["storage_path"])
+    return Response(content=data, media_type=record.get("content_type", content_type))
+
+@app.post("/api/settings/company/upload-logo-file")
+def upload_logo_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(400, "Seules les images sont acceptees (JPG, PNG, GIF, WebP)")
+
+    data = file.file.read()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(400, "Logo trop volumineux (max 2 MB)")
+
+    ext = file.filename.split(".")[-1] if "." in file.filename else "png"
+    storage_path = f"{APP_NAME}/logos/{current_user.id}/{uuid.uuid4()}.{ext}"
+
+    result = put_object(storage_path, data, file.content_type)
+
+    file_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result.get("size", len(data)),
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    db.files.insert_one(file_doc)
+
+    logo_url = f"/api/files/{file_doc['id']}"
+    db.company_settings.update_one(
+        {"user_id": current_user.id},
+        {"$set": {"logo_url": logo_url}},
+        upsert=True
+    )
+
+    return {"message": "Logo televerse avec succes", "logo_url": logo_url, "file_id": file_doc["id"]}
+
 # ─── Dashboard ───
 @app.get("/api/dashboard/stats")
 def get_stats(current_user: User = Depends(get_current_user_with_access)):
@@ -567,14 +687,23 @@ def seed_data():
         client.admin.command('ping')
         print("MongoDB connected successfully")
 
+        try:
+            init_storage()
+            print("Object storage initialized")
+        except Exception as e:
+            print(f"Storage init warning (uploads disabled): {e}")
+
         existing = db.users.find_one({"email": "gussdub@gmail.com"})
         if existing:
             uid = existing["id"]
-            pwd_exists = db.user_passwords.find_one({"user_id": uid})
-            if not pwd_exists:
+            pwd_doc = db.user_passwords.find_one({"user_id": uid})
+            if not pwd_doc:
                 db.user_passwords.insert_one({"user_id": uid, "hashed_password": hash_password("testpass123")})
-                print("Repaired missing password for gussdub@gmail.com")
-            print("gussdub@gmail.com already exists")
+                print("Created missing password for gussdub@gmail.com")
+            elif not verify_password("testpass123", pwd_doc["hashed_password"]):
+                db.user_passwords.update_one({"user_id": uid}, {"$set": {"hashed_password": hash_password("testpass123")}})
+                print("Fixed password for gussdub@gmail.com")
+            print("gussdub@gmail.com ready")
         else:
             user_id = str(uuid.uuid4())
             trial_end = (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
