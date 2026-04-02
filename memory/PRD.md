@@ -8,7 +8,7 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - **Backend**: FastAPI + pymongo sync on port 8001
 - **Database**: MongoDB Atlas
 - **Storage**: Emergent Object Storage (logos, recus)
-- **Email**: Resend (PDF attachments)
+- **Email**: Resend (PDF attachments, reminders)
 - **PDF**: ReportLab (professional layout with company logo)
 - **Brand Colors**: #00A08C, #47D2A7, #008F7A
 
@@ -27,11 +27,14 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - [x] File upload via Emergent Object Storage
 - [x] Refactored monolith into modular components
 - [x] pymongo sync backend (works on Render + Emergent)
-- [x] **Advanced Quotes page**: Product catalog quick-add, multi-line items, status badges (En attente/Envoyée/Acceptée/Refusée/Convertie), filter/sort, PDF download, email sending (Resend), convert to invoice
-- [x] **Advanced Invoices page**: Product catalog quick-add, multi-line items, status badges (Brouillon/Envoyée/Payée/En retard), filter/sort, PDF download, email sending (Resend)
+- [x] Advanced Quotes page: Product catalog quick-add, multi-line items, status badges, filter/sort, PDF download, email sending (Resend), convert to invoice
+- [x] Advanced Invoices page: Product catalog quick-add, multi-line items, status badges, filter/sort, PDF download, email sending (Resend)
 - [x] PDF generation with company logo, client info, item table, taxes, totals
 - [x] Email sending via Resend with PDF attachment
 - [x] Quote status management (PUT /api/quotes/{id}/status)
+- [x] **Payment tracking dashboard**: Overdue invoices table with days overdue, total impayé badge, send reminder button
+- [x] **Auto-status update**: Invoices auto-marked as 'overdue' when due_date passes
+- [x] **Reminder emails**: POST /api/invoices/{id}/remind sends payment reminder with PDF attachment via Resend
 
 ## Backlog
 ### P1
@@ -52,6 +55,7 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - `/app/frontend/src/config.js` - Config
 - `/app/frontend/src/context/AuthContext.js` - Auth
 - `/app/frontend/src/components/` - Layout, FactureProLogo, etc.
+- `/app/frontend/src/pages/Dashboard.js` - Dashboard with overdue tracker
 - `/app/frontend/src/pages/QuotesPage.js` - Advanced quotes page
 - `/app/frontend/src/pages/InvoicesPage.js` - Advanced invoices page
 - `/app/DEPLOYMENT_GUIDE.md` - Render deployment guide
@@ -63,4 +67,6 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - GET /api/quotes/{id}/pdf, GET /api/invoices/{id}/pdf
 - POST /api/quotes/{id}/send, POST /api/invoices/{id}/send
 - POST /api/quotes/{id}/convert
+- GET /api/dashboard/stats, GET /api/dashboard/overdue
+- POST /api/invoices/{id}/remind
 - POST /api/upload, GET /api/files/{id}
