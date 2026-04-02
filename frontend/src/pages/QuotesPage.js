@@ -16,6 +16,7 @@ const QuotesPage = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editingQuote, setEditingQuote] = useState(null);
   const [showEmailModal, setShowEmailModal] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -23,6 +24,7 @@ const QuotesPage = () => {
   const [sortBy, setSortBy] = useState('date_desc');
   const [emailData, setEmailData] = useState({ to_email: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState('');
 
   const defaultForm = () => ({
     client_id: '', valid_until: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
@@ -59,11 +61,19 @@ const QuotesPage = () => {
 
   const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Client inconnu';
 
-  const addProductToItems = (product) => {
+  const handleProductSelect = (productId) => {
+    if (!productId) return;
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
     setFormData(prev => ({
       ...prev,
-      items: [...prev.items, { description: product.name + (product.description ? ` - ${product.description}` : ''), quantity: 1, unit_price: product.unit_price }]
+      items: [...prev.items, {
+        description: product.name + (product.description ? ` - ${product.description}` : ''),
+        quantity: 1,
+        unit_price: product.unit_price
+      }]
     }));
+    setSelectedProduct('');
   };
 
   const updateItem = (i, field, value) => {
@@ -82,19 +92,50 @@ const QuotesPage = () => {
 
   const formSubtotal = formData.items.reduce((s, it) => s + (it.quantity * it.unit_price), 0);
 
+  const openNewForm = () => {
+    setEditingQuote(null);
+    setFormData(defaultForm());
+    setSelectedProduct('');
+    setShowForm(true);
+  };
+
+  const openEditForm = (quote) => {
+    setEditingQuote(quote);
+    setFormData({
+      client_id: quote.client_id || '',
+      valid_until: quote.valid_until ? quote.valid_until.substring(0, 10) : '',
+      items: quote.items && quote.items.length > 0 ? quote.items.map(it => ({
+        description: it.description || '',
+        quantity: it.quantity || 1,
+        unit_price: it.unit_price || 0
+      })) : [{ description: '', quantity: 1, unit_price: 0 }],
+      province: quote.province || 'QC',
+      notes: quote.notes || ''
+    });
+    setSelectedProduct('');
+    setShowForm(true);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(''); setSuccess('');
+    const payload = {
+      ...formData,
+      items: formData.items.map(it => ({ ...it, total: it.quantity * it.unit_price }))
+    };
     try {
-      await axios.post(`${BACKEND_URL}/api/quotes`, {
-        ...formData,
-        items: formData.items.map(it => ({ ...it, total: it.quantity * it.unit_price }))
-      });
-      setSuccess('Soumission créée avec succès');
+      if (editingQuote) {
+        await axios.put(`${BACKEND_URL}/api/quotes/${editingQuote.id}`, payload);
+        setSuccess('Soumission modifiée avec succès');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/quotes`, payload);
+        setSuccess('Soumission créée avec succès');
+      }
       setShowForm(false);
+      setEditingQuote(null);
       setFormData(defaultForm());
       fetchData();
-    } catch { setError('Erreur lors de la création'); }
+    } catch { setError(editingQuote ? 'Erreur lors de la modification' : 'Erreur lors de la création'); }
   };
 
   const handleStatusChange = async (id, status) => {
@@ -169,12 +210,9 @@ const QuotesPage = () => {
           <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Soumissions</h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: '14px' }}>Gérez vos devis et soumissions clients</p>
         </div>
-        <button onClick={() => { setFormData(defaultForm()); setShowForm(true); }} data-testid="add-quote-btn" style={btnPrimary}>
-          + Nouvelle Soumission
-        </button>
+        <button onClick={openNewForm} data-testid="add-quote-btn" style={btnPrimary}>+ Nouvelle Soumission</button>
       </div>
 
-      {/* Messages */}
       {error && <div data-testid="quote-error" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setError('')}>{error}</div>}
       {success && <div data-testid="quote-success" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setSuccess('')}>{success}</div>}
 
@@ -202,16 +240,15 @@ const QuotesPage = () => {
         <div style={{ background: '#fff', border: '2px dashed #d1d5db', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
           <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#374151', margin: '0 0 8px' }}>Aucune soumission</h3>
           <p style={{ color: '#6b7280', margin: '0 0 16px' }}>Créez votre première soumission pour commencer</p>
-          <button onClick={() => { setFormData(defaultForm()); setShowForm(true); }} style={btnPrimary}>Créer une soumission</button>
+          <button onClick={openNewForm} style={btnPrimary}>Créer une soumission</button>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {filteredQuotes.map(q => {
             const st = STATUS_CONFIG[q.status] || STATUS_CONFIG.pending;
             return (
-              <div key={q.id} data-testid={`quote-card-${q.id}`} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px', transition: 'box-shadow 0.2s' }}>
+              <div key={q.id} data-testid={`quote-card-${q.id}`} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  {/* Left */}
                   <div style={{ flex: '1', minWidth: '200px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
                       <span style={{ fontWeight: '700', fontSize: '16px', color: '#1f2937' }}>{q.quote_number}</span>
@@ -229,40 +266,34 @@ const QuotesPage = () => {
                       </p>
                     )}
                   </div>
-
-                  {/* Right */}
                   <div style={{ textAlign: 'right', minWidth: '140px' }}>
                     <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '8px' }}>{formatCurrency(q.total)}</div>
-
-                    {/* Status dropdown */}
                     <select data-testid={`quote-status-select-${q.id}`} value={q.status || 'pending'}
                       onChange={e => handleStatusChange(q.id, e.target.value)}
                       style={{ ...inputStyle, width: 'auto', fontSize: '12px', padding: '4px 8px', marginBottom: '8px' }}>
                       {Object.entries(STATUS_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                     </select>
-
-                    {/* Action buttons */}
                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <button data-testid={`edit-quote-${q.id}`} onClick={() => openEditForm(q)}
+                        title="Modifier" style={{ background: '#fef3c7', color: '#92400e', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        Modifier
+                      </button>
                       <button data-testid={`download-pdf-${q.id}`} onClick={() => handleDownloadPdf(q.id, q.quote_number)}
-                        title="Télécharger PDF"
-                        style={{ background: '#eff6ff', color: '#1d4ed8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        title="Télécharger PDF" style={{ background: '#eff6ff', color: '#1d4ed8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         PDF
                       </button>
                       <button data-testid={`send-email-${q.id}`} onClick={() => openEmailModal(q)}
-                        title="Envoyer par email"
-                        style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        title="Envoyer par email" style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Email
                       </button>
                       {q.status !== 'converted' && (
                         <button data-testid={`convert-quote-${q.id}`} onClick={() => handleConvert(q.id)}
-                          title="Convertir en facture"
-                          style={{ background: '#f3e8ff', color: '#6b21a8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                          title="Convertir en facture" style={{ background: '#f3e8ff', color: '#6b21a8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                           Facture
                         </button>
                       )}
                       <button data-testid={`delete-quote-${q.id}`} onClick={() => handleDelete(q.id)}
-                        title="Supprimer"
-                        style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        title="Supprimer" style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Suppr.
                       </button>
                     </div>
@@ -274,15 +305,16 @@ const QuotesPage = () => {
         </div>
       )}
 
-      {/* ═══ New Quote Form Modal ═══ */}
+      {/* ═══ Quote Form Modal (Create / Edit) ═══ */}
       {showForm && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div style={{ background: '#fff', borderRadius: '16px', width: '95%', maxWidth: '820px', maxHeight: '92vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
             <div style={{ padding: '24px 28px', borderBottom: '1px solid #e5e7eb' }}>
-              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>Nouvelle Soumission</h3>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>
+                {editingQuote ? `Modifier ${editingQuote.quote_number}` : 'Nouvelle Soumission'}
+              </h3>
             </div>
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
-              {/* Row 1: Client, Date, Province */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
                   <label style={labelStyle}>Client *</label>
@@ -307,19 +339,20 @@ const QuotesPage = () => {
                 </div>
               </div>
 
-              {/* Product catalog quick-add */}
+              {/* Product catalog dropdown */}
               {products.length > 0 && (
                 <div style={{ marginBottom: '20px' }}>
                   <label style={labelStyle}>Ajouter un produit du catalogue</label>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <select data-testid="quote-product-select" value={selectedProduct}
+                    onChange={e => handleProductSelect(e.target.value)}
+                    style={inputStyle}>
+                    <option value="">-- Sélectionner un produit --</option>
                     {products.map(p => (
-                      <button type="button" key={p.id} data-testid={`add-product-${p.id}`}
-                        onClick={() => addProductToItems(p)}
-                        style={{ background: '#f0fdfa', border: '1px solid #99f6e4', color: '#0f766e', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontSize: '13px', fontWeight: '500', transition: 'all 0.15s' }}>
-                        + {p.name} ({formatCurrency(p.unit_price)})
-                      </button>
+                      <option key={p.id} value={p.id}>
+                        {p.name}{p.description ? ` - ${p.description}` : ''} ({formatCurrency(p.unit_price)})
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 </div>
               )}
 
@@ -327,7 +360,6 @@ const QuotesPage = () => {
               <div style={{ marginBottom: '20px' }}>
                 <label style={labelStyle}>Articles et services</label>
                 <div style={{ border: '1px solid #e5e7eb', borderRadius: '10px', overflow: 'hidden' }}>
-                  {/* Table header */}
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', gap: '0', background: '#008F7A', color: '#fff', padding: '10px 12px', fontSize: '12px', fontWeight: '600' }}>
                     <span>Description</span><span style={{ textAlign: 'center' }}>Qté</span>
                     <span style={{ textAlign: 'center' }}>Prix unit.</span><span style={{ textAlign: 'center' }}>Total</span><span></span>
@@ -359,13 +391,11 @@ const QuotesPage = () => {
                 </button>
               </div>
 
-              {/* Subtotal preview */}
               <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', textAlign: 'right' }}>
                 <span style={{ color: '#6b7280', fontSize: '14px' }}>Sous-total: </span>
                 <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal)}</span>
               </div>
 
-              {/* Notes */}
               <div style={{ marginBottom: '24px' }}>
                 <label style={labelStyle}>Notes / Commentaires</label>
                 <textarea data-testid="quote-notes" value={formData.notes}
@@ -374,10 +404,11 @@ const QuotesPage = () => {
                   style={{ ...inputStyle, resize: 'vertical' }} />
               </div>
 
-              {/* Actions */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #e5e7eb', paddingTop: '20px' }}>
-                <button type="button" onClick={() => setShowForm(false)} style={btnSecondary}>Annuler</button>
-                <button type="submit" data-testid="save-quote-btn" style={btnPrimary}>Créer la soumission</button>
+                <button type="button" onClick={() => { setShowForm(false); setEditingQuote(null); }} style={btnSecondary}>Annuler</button>
+                <button type="submit" data-testid="save-quote-btn" style={btnPrimary}>
+                  {editingQuote ? 'Sauvegarder les modifications' : 'Créer la soumission'}
+                </button>
               </div>
             </form>
           </div>

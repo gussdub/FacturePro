@@ -15,6 +15,7 @@ const InvoicesPage = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState(null);
   const [showEmailModal, setShowEmailModal] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -22,6 +23,7 @@ const InvoicesPage = () => {
   const [sortBy, setSortBy] = useState('date_desc');
   const [emailData, setEmailData] = useState({ to_email: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState('');
 
   const defaultForm = () => ({
     client_id: '', due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
@@ -58,11 +60,19 @@ const InvoicesPage = () => {
 
   const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Client inconnu';
 
-  const addProductToItems = (product) => {
+  const handleProductSelect = (productId) => {
+    if (!productId) return;
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
     setFormData(prev => ({
       ...prev,
-      items: [...prev.items, { description: product.name + (product.description ? ` - ${product.description}` : ''), quantity: 1, unit_price: product.unit_price }]
+      items: [...prev.items, {
+        description: product.name + (product.description ? ` - ${product.description}` : ''),
+        quantity: 1,
+        unit_price: product.unit_price
+      }]
     }));
+    setSelectedProduct('');
   };
 
   const updateItem = (i, field, value) => {
@@ -81,19 +91,52 @@ const InvoicesPage = () => {
 
   const formSubtotal = formData.items.reduce((s, it) => s + (it.quantity * it.unit_price), 0);
 
+  const openNewForm = () => {
+    setEditingInvoice(null);
+    setFormData(defaultForm());
+    setSelectedProduct('');
+    setShowForm(true);
+  };
+
+  const openEditForm = (invoice) => {
+    setEditingInvoice(invoice);
+    const rawDue = invoice.due_date || '';
+    const dueStr = typeof rawDue === 'string' ? rawDue.substring(0, 10) : '';
+    setFormData({
+      client_id: invoice.client_id || '',
+      due_date: dueStr,
+      items: invoice.items && invoice.items.length > 0 ? invoice.items.map(it => ({
+        description: it.description || '',
+        quantity: it.quantity || 1,
+        unit_price: it.unit_price || 0
+      })) : [{ description: '', quantity: 1, unit_price: 0 }],
+      province: invoice.province || 'QC',
+      notes: invoice.notes || ''
+    });
+    setSelectedProduct('');
+    setShowForm(true);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(''); setSuccess('');
+    const payload = {
+      ...formData,
+      items: formData.items.map(it => ({ ...it, total: it.quantity * it.unit_price }))
+    };
     try {
-      await axios.post(`${BACKEND_URL}/api/invoices`, {
-        ...formData,
-        items: formData.items.map(it => ({ ...it, total: it.quantity * it.unit_price }))
-      });
-      setSuccess('Facture créée avec succès');
+      if (editingInvoice) {
+        await axios.put(`${BACKEND_URL}/api/invoices/${editingInvoice.id}`, payload);
+        setSuccess('Facture modifiée avec succès');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/invoices`, payload);
+        setSuccess('Facture créée avec succès');
+      }
       setShowForm(false);
+      setEditingInvoice(null);
       setFormData(defaultForm());
       fetchData();
-    } catch { setError('Erreur lors de la création'); }
+    } catch { setError(editingInvoice ? 'Erreur lors de la modification' : 'Erreur lors de la création'); }
   };
 
   const handleStatusChange = async (id, status) => {
@@ -158,12 +201,9 @@ const InvoicesPage = () => {
           <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Factures</h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: '14px' }}>Créez et gérez vos factures clients</p>
         </div>
-        <button onClick={() => { setFormData(defaultForm()); setShowForm(true); }} data-testid="add-invoice-btn" style={btnPrimary}>
-          + Nouvelle Facture
-        </button>
+        <button onClick={openNewForm} data-testid="add-invoice-btn" style={btnPrimary}>+ Nouvelle Facture</button>
       </div>
 
-      {/* Messages */}
       {error && <div data-testid="invoice-error" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setError('')}>{error}</div>}
       {success && <div data-testid="invoice-success" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setSuccess('')}>{success}</div>}
 
@@ -191,16 +231,15 @@ const InvoicesPage = () => {
         <div style={{ background: '#fff', border: '2px dashed #d1d5db', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
           <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#374151', margin: '0 0 8px' }}>Aucune facture</h3>
           <p style={{ color: '#6b7280', margin: '0 0 16px' }}>Créez votre première facture pour commencer</p>
-          <button onClick={() => { setFormData(defaultForm()); setShowForm(true); }} style={btnPrimary}>Créer une facture</button>
+          <button onClick={openNewForm} style={btnPrimary}>Créer une facture</button>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {filteredInvoices.map(inv => {
             const st = STATUS_CONFIG[inv.status] || STATUS_CONFIG.draft;
             return (
-              <div key={inv.id} data-testid={`invoice-card-${inv.id}`} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px', transition: 'box-shadow 0.2s' }}>
+              <div key={inv.id} data-testid={`invoice-card-${inv.id}`} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                  {/* Left */}
                   <div style={{ flex: '1', minWidth: '200px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
                       <span style={{ fontWeight: '700', fontSize: '16px', color: '#1f2937' }}>{inv.invoice_number}</span>
@@ -218,33 +257,28 @@ const InvoicesPage = () => {
                       </p>
                     )}
                   </div>
-
-                  {/* Right */}
                   <div style={{ textAlign: 'right', minWidth: '140px' }}>
                     <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '8px' }}>{formatCurrency(inv.total)}</div>
-
-                    {/* Status dropdown */}
                     <select data-testid={`invoice-status-select-${inv.id}`} value={inv.status || 'draft'}
                       onChange={e => handleStatusChange(inv.id, e.target.value)}
                       style={{ ...inputStyle, width: 'auto', fontSize: '12px', padding: '4px 8px', marginBottom: '8px' }}>
                       {Object.entries(STATUS_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                     </select>
-
-                    {/* Action buttons */}
                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      <button data-testid={`edit-invoice-${inv.id}`} onClick={() => openEditForm(inv)}
+                        title="Modifier" style={{ background: '#fef3c7', color: '#92400e', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        Modifier
+                      </button>
                       <button data-testid={`download-pdf-inv-${inv.id}`} onClick={() => handleDownloadPdf(inv.id, inv.invoice_number)}
-                        title="Télécharger PDF"
-                        style={{ background: '#eff6ff', color: '#1d4ed8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        title="Télécharger PDF" style={{ background: '#eff6ff', color: '#1d4ed8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         PDF
                       </button>
                       <button data-testid={`send-email-inv-${inv.id}`} onClick={() => openEmailModal(inv)}
-                        title="Envoyer par email"
-                        style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        title="Envoyer par email" style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Email
                       </button>
                       <button data-testid={`delete-invoice-${inv.id}`} onClick={() => handleDelete(inv.id)}
-                        title="Supprimer"
-                        style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                        title="Supprimer" style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Suppr.
                       </button>
                     </div>
@@ -256,15 +290,16 @@ const InvoicesPage = () => {
         </div>
       )}
 
-      {/* ═══ New Invoice Form Modal ═══ */}
+      {/* ═══ Invoice Form Modal (Create / Edit) ═══ */}
       {showForm && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div style={{ background: '#fff', borderRadius: '16px', width: '95%', maxWidth: '820px', maxHeight: '92vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
             <div style={{ padding: '24px 28px', borderBottom: '1px solid #e5e7eb' }}>
-              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>Nouvelle Facture</h3>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700', color: '#1f2937' }}>
+                {editingInvoice ? `Modifier ${editingInvoice.invoice_number}` : 'Nouvelle Facture'}
+              </h3>
             </div>
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
-              {/* Row 1: Client, Date, Province */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
                   <label style={labelStyle}>Client *</label>
@@ -289,19 +324,20 @@ const InvoicesPage = () => {
                 </div>
               </div>
 
-              {/* Product catalog quick-add */}
+              {/* Product catalog dropdown */}
               {products.length > 0 && (
                 <div style={{ marginBottom: '20px' }}>
                   <label style={labelStyle}>Ajouter un produit du catalogue</label>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <select data-testid="invoice-product-select" value={selectedProduct}
+                    onChange={e => handleProductSelect(e.target.value)}
+                    style={inputStyle}>
+                    <option value="">-- Sélectionner un produit --</option>
                     {products.map(p => (
-                      <button type="button" key={p.id} data-testid={`add-product-inv-${p.id}`}
-                        onClick={() => addProductToItems(p)}
-                        style={{ background: '#f0fdfa', border: '1px solid #99f6e4', color: '#0f766e', padding: '6px 14px', borderRadius: '20px', cursor: 'pointer', fontSize: '13px', fontWeight: '500', transition: 'all 0.15s' }}>
-                        + {p.name} ({formatCurrency(p.unit_price)})
-                      </button>
+                      <option key={p.id} value={p.id}>
+                        {p.name}{p.description ? ` - ${p.description}` : ''} ({formatCurrency(p.unit_price)})
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 </div>
               )}
 
@@ -340,13 +376,11 @@ const InvoicesPage = () => {
                 </button>
               </div>
 
-              {/* Subtotal preview */}
               <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', textAlign: 'right' }}>
                 <span style={{ color: '#6b7280', fontSize: '14px' }}>Sous-total: </span>
                 <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal)}</span>
               </div>
 
-              {/* Notes */}
               <div style={{ marginBottom: '24px' }}>
                 <label style={labelStyle}>Notes / Commentaires</label>
                 <textarea data-testid="invoice-notes" value={formData.notes}
@@ -355,10 +389,11 @@ const InvoicesPage = () => {
                   style={{ ...inputStyle, resize: 'vertical' }} />
               </div>
 
-              {/* Actions */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #e5e7eb', paddingTop: '20px' }}>
-                <button type="button" onClick={() => setShowForm(false)} style={btnSecondary}>Annuler</button>
-                <button type="submit" data-testid="save-invoice-btn" style={btnPrimary}>Créer la facture</button>
+                <button type="button" onClick={() => { setShowForm(false); setEditingInvoice(null); }} style={btnSecondary}>Annuler</button>
+                <button type="submit" data-testid="save-invoice-btn" style={btnPrimary}>
+                  {editingInvoice ? 'Sauvegarder les modifications' : 'Créer la facture'}
+                </button>
               </div>
             </form>
           </div>

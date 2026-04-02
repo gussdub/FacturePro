@@ -820,7 +820,9 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     left_parts = []
     if logo_elem:
         left_parts.append(logo_elem)
-    left_parts.append(Paragraph(comp_name, ParagraphStyle('CompName', parent=styles['Normal'], fontSize=16, textColor=dark, fontName='Helvetica-Bold')))
+        left_parts.append(Spacer(1, 8))
+    left_parts.append(Paragraph(comp_name, ParagraphStyle('CompName', parent=styles['Normal'], fontSize=14, textColor=dark, fontName='Helvetica-Bold', leading=18)))
+    left_parts.append(Spacer(1, 4))
     if comp_address:
         left_parts.append(Paragraph(comp_address, small_style))
     if comp_city:
@@ -841,18 +843,31 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     doc_number = document.get('quote_number' if doc_type == 'quote' else 'invoice_number', 'N/A')
 
     right_parts = []
-    right_parts.append(Paragraph(doc_label, ParagraphStyle('DocLabel', parent=styles['Normal'], fontSize=24, textColor=teal, alignment=TA_RIGHT, fontName='Helvetica-Bold')))
+    right_parts.append(Paragraph(doc_label, ParagraphStyle('DocLabel', parent=styles['Normal'], fontSize=20, textColor=teal, alignment=TA_RIGHT, fontName='Helvetica-Bold', spaceAfter=6)))
+    right_parts.append(Spacer(1, 4))
     right_parts.append(Paragraph(f"No: {doc_number}", right_style))
 
-    issue_date = document.get('issue_date', '')[:10]
+    raw_issue = document.get('issue_date', '')
+    if isinstance(raw_issue, datetime):
+        issue_date = raw_issue.strftime("%Y-%m-%d")
+    else:
+        issue_date = str(raw_issue)[:10] if raw_issue else ""
     right_parts.append(Paragraph(f"Date: {issue_date}", right_style))
 
     if doc_type == 'quote':
-        valid = document.get('valid_until', '')[:10]
+        raw_valid = document.get('valid_until', '')
+        if isinstance(raw_valid, datetime):
+            valid = raw_valid.strftime("%Y-%m-%d")
+        else:
+            valid = str(raw_valid)[:10] if raw_valid else ""
         if valid:
             right_parts.append(Paragraph(f"Valide jusqu'au: {valid}", right_style))
     else:
-        due = document.get('due_date', '')[:10]
+        raw_due = document.get('due_date', '')
+        if isinstance(raw_due, datetime):
+            due = raw_due.strftime("%Y-%m-%d")
+        else:
+            due = str(raw_due)[:10] if raw_due else ""
         if due:
             right_parts.append(Paragraph(f"Echeance: {due}", right_style))
 
