@@ -649,6 +649,154 @@ class TestCSVExport:
         print(f"✅ Exported expenses CSV ({len(content)} bytes)")
 
 
+class TestQuoteStatusUpdate:
+    """Quote status update tests - NEW endpoint"""
+    
+    def test_update_quote_status(self, auth_headers):
+        # Create a quote first
+        quote_data = {
+            "client_id": "test-client-id",
+            "items": [{"description": "Status Test Item", "quantity": 1, "unit_price": 100.00}],
+            "province": "QC"
+        }
+        create_response = requests.post(f"{BASE_URL}/api/quotes", json=quote_data, headers=auth_headers)
+        assert create_response.status_code == 200
+        quote_id = create_response.json()["id"]
+        
+        # Update status to accepted
+        status_response = requests.put(f"{BASE_URL}/api/quotes/{quote_id}/status", 
+                                       json={"status": "accepted"}, headers=auth_headers)
+        assert status_response.status_code == 200
+        
+        # Verify status change
+        get_response = requests.get(f"{BASE_URL}/api/quotes", headers=auth_headers)
+        quotes = get_response.json()
+        found = next((q for q in quotes if q["id"] == quote_id), None)
+        assert found is not None
+        assert found["status"] == "accepted"
+        print(f"✅ Updated quote status to 'accepted': {quote_id}")
+    
+    def test_update_quote_status_refused(self, auth_headers):
+        # Create a quote first
+        quote_data = {
+            "client_id": "test-client-id",
+            "items": [{"description": "Refused Test", "quantity": 1, "unit_price": 50.00}],
+            "province": "QC"
+        }
+        create_response = requests.post(f"{BASE_URL}/api/quotes", json=quote_data, headers=auth_headers)
+        quote_id = create_response.json()["id"]
+        
+        # Update status to refused
+        status_response = requests.put(f"{BASE_URL}/api/quotes/{quote_id}/status", 
+                                       json={"status": "refused"}, headers=auth_headers)
+        assert status_response.status_code == 200
+        print(f"✅ Updated quote status to 'refused': {quote_id}")
+
+
+class TestPDFGeneration:
+    """PDF generation tests for quotes and invoices"""
+    
+    def test_get_quote_pdf(self, auth_headers):
+        # Create a quote first
+        quote_data = {
+            "client_id": "test-client-id",
+            "items": [{"description": "PDF Test Item", "quantity": 2, "unit_price": 75.00}],
+            "province": "QC",
+            "notes": "Test PDF generation"
+        }
+        create_response = requests.post(f"{BASE_URL}/api/quotes", json=quote_data, headers=auth_headers)
+        assert create_response.status_code == 200
+        quote_id = create_response.json()["id"]
+        quote_number = create_response.json()["quote_number"]
+        
+        # Get PDF
+        pdf_response = requests.get(f"{BASE_URL}/api/quotes/{quote_id}/pdf", headers=auth_headers)
+        assert pdf_response.status_code == 200
+        assert "application/pdf" in pdf_response.headers.get("content-type", "")
+        assert len(pdf_response.content) > 1000  # PDF should have some content
+        print(f"✅ Generated PDF for quote {quote_number} ({len(pdf_response.content)} bytes)")
+    
+    def test_get_invoice_pdf(self, auth_headers):
+        # Create an invoice first
+        invoice_data = {
+            "client_id": "test-client-id",
+            "items": [{"description": "Invoice PDF Test", "quantity": 1, "unit_price": 150.00}],
+            "province": "QC",
+            "due_date": "2026-02-28"
+        }
+        create_response = requests.post(f"{BASE_URL}/api/invoices", json=invoice_data, headers=auth_headers)
+        assert create_response.status_code == 200
+        invoice_id = create_response.json()["id"]
+        invoice_number = create_response.json()["invoice_number"]
+        
+        # Get PDF
+        pdf_response = requests.get(f"{BASE_URL}/api/invoices/{invoice_id}/pdf", headers=auth_headers)
+        assert pdf_response.status_code == 200
+        assert "application/pdf" in pdf_response.headers.get("content-type", "")
+        assert len(pdf_response.content) > 1000  # PDF should have some content
+        print(f"✅ Generated PDF for invoice {invoice_number} ({len(pdf_response.content)} bytes)")
+    
+    def test_quote_pdf_not_found(self, auth_headers):
+        pdf_response = requests.get(f"{BASE_URL}/api/quotes/nonexistent-id/pdf", headers=auth_headers)
+        assert pdf_response.status_code == 404
+        print("✅ Quote PDF returns 404 for non-existent quote")
+    
+    def test_invoice_pdf_not_found(self, auth_headers):
+        pdf_response = requests.get(f"{BASE_URL}/api/invoices/nonexistent-id/pdf", headers=auth_headers)
+        assert pdf_response.status_code == 404
+        print("✅ Invoice PDF returns 404 for non-existent invoice")
+
+
+class TestEmailSending:
+    """Email sending tests for quotes and invoices (Resend integration)"""
+    
+    def test_send_quote_email_missing_recipient(self, auth_headers):
+        # Create a quote first
+        quote_data = {
+            "client_id": "test-client-id",
+            "items": [{"description": "Email Test", "quantity": 1, "unit_price": 100.00}],
+            "province": "QC"
+        }
+        create_response = requests.post(f"{BASE_URL}/api/quotes", json=quote_data, headers=auth_headers)
+        quote_id = create_response.json()["id"]
+        
+        # Try to send without email
+        send_response = requests.post(f"{BASE_URL}/api/quotes/{quote_id}/send", 
+                                      json={}, headers=auth_headers)
+        # Should fail because no email provided and client has no email
+        assert send_response.status_code == 400
+        print("✅ Quote email send correctly requires recipient email")
+    
+    def test_send_invoice_email_missing_recipient(self, auth_headers):
+        # Create an invoice first
+        invoice_data = {
+            "client_id": "test-client-id",
+            "items": [{"description": "Email Test", "quantity": 1, "unit_price": 100.00}],
+            "province": "QC"
+        }
+        create_response = requests.post(f"{BASE_URL}/api/invoices", json=invoice_data, headers=auth_headers)
+        invoice_id = create_response.json()["id"]
+        
+        # Try to send without email
+        send_response = requests.post(f"{BASE_URL}/api/invoices/{invoice_id}/send", 
+                                      json={}, headers=auth_headers)
+        # Should fail because no email provided and client has no email
+        assert send_response.status_code == 400
+        print("✅ Invoice email send correctly requires recipient email")
+    
+    def test_send_quote_email_not_found(self, auth_headers):
+        send_response = requests.post(f"{BASE_URL}/api/quotes/nonexistent-id/send", 
+                                      json={"to_email": "test@test.com"}, headers=auth_headers)
+        assert send_response.status_code == 404
+        print("✅ Quote email send returns 404 for non-existent quote")
+    
+    def test_send_invoice_email_not_found(self, auth_headers):
+        send_response = requests.post(f"{BASE_URL}/api/invoices/nonexistent-id/send", 
+                                      json={"to_email": "test@test.com"}, headers=auth_headers)
+        assert send_response.status_code == 404
+        print("✅ Invoice email send returns 404 for non-existent invoice")
+
+
 class TestUnauthorizedAccess:
     """Test that protected endpoints require authentication"""
     
@@ -666,6 +814,16 @@ class TestUnauthorizedAccess:
         response = requests.get(f"{BASE_URL}/api/dashboard/stats")
         assert response.status_code in [401, 403]
         print("✅ Dashboard endpoint requires authentication")
+    
+    def test_quotes_pdf_requires_auth(self):
+        response = requests.get(f"{BASE_URL}/api/quotes/some-id/pdf")
+        assert response.status_code in [401, 403]
+        print("✅ Quote PDF endpoint requires authentication")
+    
+    def test_invoices_pdf_requires_auth(self):
+        response = requests.get(f"{BASE_URL}/api/invoices/some-id/pdf")
+        assert response.status_code in [401, 403]
+        print("✅ Invoice PDF endpoint requires authentication")
 
 
 if __name__ == "__main__":

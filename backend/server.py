@@ -460,6 +460,14 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: User = Dep
     db.quotes.update_one({"id": quote_id}, {"$set": {"status": "converted"}})
     return clean_doc(invoice_doc)
 
+@app.put("/api/quotes/{quote_id}/status")
+def update_quote_status(quote_id: str, status_data: dict, current_user: User = Depends(get_current_user_with_access)):
+    new_status = status_data.get("status", "pending")
+    result = db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": {"status": new_status}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Quote not found")
+    return {"message": "Status updated"}
+
 @app.delete("/api/quotes/{quote_id}")
 def delete_quote(quote_id: str, current_user: User = Depends(get_current_user_with_access)):
     result = db.quotes.delete_one({"id": quote_id, "user_id": current_user.id})
