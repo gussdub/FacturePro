@@ -6,6 +6,7 @@ const ProductsPage = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [formData, setFormData] = useState({ name: '', description: '', unit_price: '', unit: 'unite', category: '' });
@@ -27,14 +28,35 @@ const ProductsPage = () => {
     e.preventDefault();
     setError(''); setSuccess('');
     try {
-      await axios.post(`${BACKEND_URL}/api/products`, { ...formData, unit_price: parseFloat(formData.unit_price) });
-      setSuccess('Produit cree avec succes');
-      setShowForm(false);
-      setFormData({ name: '', description: '', unit_price: '', unit: 'unite', category: '' });
+      if (editingProduct) {
+        await axios.put(`${BACKEND_URL}/api/products/${editingProduct.id}`, { ...formData, unit_price: parseFloat(formData.unit_price) });
+        setSuccess('Produit modifie avec succes');
+      } else {
+        await axios.post(`${BACKEND_URL}/api/products`, { ...formData, unit_price: parseFloat(formData.unit_price) });
+        setSuccess('Produit cree avec succes');
+      }
+      closeForm();
       fetchProducts();
     } catch (err) {
-      setError('Erreur lors de la creation du produit');
+      setError('Erreur lors de la sauvegarde du produit');
     }
+  };
+
+  const handleEdit = (product) => {
+    setEditingProduct(product);
+    setFormData({ name: product.name, description: product.description || '', unit_price: String(product.unit_price), unit: product.unit || 'unite', category: product.category || '' });
+    setShowForm(true);
+  };
+
+  const handleDuplicate = (product) => {
+    setEditingProduct(null);
+    setFormData({ name: `${product.name} (copie)`, description: product.description || '', unit_price: String(product.unit_price), unit: product.unit || 'unite', category: product.category || '' });
+    setShowForm(true);
+  };
+
+  const closeForm = () => {
+    setShowForm(false); setEditingProduct(null);
+    setFormData({ name: '', description: '', unit_price: '', unit: 'unite', category: '' });
   };
 
   return (
@@ -82,14 +104,22 @@ const ProductsPage = () => {
                   <div style={{ fontSize: '20px', fontWeight: '800', color: '#10b981' }}>{formatCurrency(product.unit_price)}</div>
                   <div style={{ fontSize: '12px', color: '#6b7280' }}>par {product.unit}</div>
                 </div>
-                <button onClick={async () => {
-                  if (window.confirm('Supprimer ce produit ?')) {
-                    try { await axios.delete(`${BACKEND_URL}/api/products/${product.id}`); setSuccess('Produit supprime'); fetchProducts(); }
-                    catch (err) { setError('Erreur suppression'); }
-                  }
-                }} data-testid={`delete-product-${product.id}`} style={{
-                  background: '#fef2f2', color: '#dc2626', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
-                }}>Supprimer</button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={() => handleEdit(product)} data-testid={`edit-product-${product.id}`} style={{
+                    background: '#f0f9ff', color: '#0369a1', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
+                  }}>Modifier</button>
+                  <button onClick={() => handleDuplicate(product)} data-testid={`duplicate-product-${product.id}`} style={{
+                    background: '#f0fdf4', color: '#166534', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
+                  }}>Dupliquer</button>
+                  <button onClick={async () => {
+                    if (window.confirm('Supprimer ce produit ?')) {
+                      try { await axios.delete(`${BACKEND_URL}/api/products/${product.id}`); setSuccess('Produit supprime'); fetchProducts(); }
+                      catch (err) { setError('Erreur suppression'); }
+                    }
+                  }} data-testid={`delete-product-${product.id}`} style={{
+                    background: '#fef2f2', color: '#dc2626', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
+                  }}>Supprimer</button>
+                </div>
               </div>
             </div>
           ))}
@@ -99,7 +129,7 @@ const ProductsPage = () => {
       {showForm && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div style={{ background: 'white', padding: '32px', borderRadius: '16px', width: '100%', maxWidth: '500px' }}>
-            <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>Nouveau Produit/Service</h3>
+            <h3 style={{ margin: '0 0 24px 0', fontSize: '20px', fontWeight: '700' }}>{editingProduct ? 'Modifier le produit' : 'Nouveau Produit/Service'}</h3>
             <form onSubmit={handleSubmit}>
               <div style={{ marginBottom: '20px' }}>
                 <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Nom *</label>
@@ -136,12 +166,12 @@ const ProductsPage = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                <button type="button" onClick={() => setShowForm(false)} style={{
+                <button type="button" onClick={closeForm} style={{
                   background: 'white', color: '#374151', border: '1px solid #d1d5db', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
                 }}>Annuler</button>
                 <button type="submit" data-testid="save-product-btn" style={{
                   background: '#10b981', color: 'white', border: 'none', padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600'
-                }}>Creer le produit</button>
+                }}>{editingProduct ? 'Modifier' : 'Creer le produit'}</button>
               </div>
             </form>
           </div>
