@@ -73,7 +73,7 @@ class CompanySettings(BaseModel):
     postal_code: Optional[str] = None
     country: Optional[str] = None
     logo_url: Optional[str] = None
-    primary_color: str = "#3B82F6"
+    primary_color: str = "#00A08C"
     secondary_color: str = "#1F2937"
     default_due_days: int = 30
     gst_number: Optional[str] = None
@@ -182,7 +182,7 @@ async def register(user_data: UserCreate):
         "company_name": user_data.company_name,
         "email": user_data.email,
         "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
-        "logo_url": "", "primary_color": "#3B82F6", "secondary_color": "#1F2937",
+        "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
         "default_due_days": 30, "gst_number": "", "pst_number": "", "hst_number": ""
     }
     await db.company_settings.insert_one(settings_doc)

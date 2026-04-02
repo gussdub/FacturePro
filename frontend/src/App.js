@@ -60,7 +60,7 @@ const NotificationsDropdown = ({ isOpen, onClose }) => {
                 height: '8px',
                 borderRadius: '50%',
                 background: notification.type === 'success' ? '#10b981' : 
-                          notification.type === 'warning' ? '#f59e0b' : '#3b82f6',
+                          notification.type === 'warning' ? '#f59e0b' : '#00A08C',
                 marginTop: '6px'
               }}></div>
               <div style={{ flex: 1 }}>
@@ -301,37 +301,15 @@ const Layout = ({ currentRoute, navigate, children }) => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{
               width: '48px', height: '48px',
-              background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
               borderRadius: '12px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center'
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              overflow: 'hidden'
             }}>
-              {settings?.logo_url ? (
-                <img 
-                  src={settings.logo_url} 
-                  alt="Logo" 
-                  style={{
-                    width: '32px', height: '32px',
-                    objectFit: 'contain', borderRadius: '6px'
-                  }}
-                  onError={(e) => {
-                    e.target.style.display = 'none';
-                    e.target.nextSibling.style.display = 'block';
-                  }}
-                />
-              ) : null}
-              <svg 
-                width="28" 
-                height="28" 
-                viewBox="0 0 24 24" 
-                fill="none" 
-                stroke="white" 
-                strokeWidth="2.5"
-                style={{ display: settings?.logo_url ? 'none' : 'block' }}
-              >
-                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-                <path d="M12 18V6"/>
-              </svg>
+              <img 
+                src="https://customer-assets.emergentagent.com/job_37455350-d4d4-40f6-ab0f-e859ab6de5ff/artifacts/menbvk51_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg" 
+                alt="FacturePro" 
+                style={{ width: '48px', height: '48px', objectFit: 'contain' }}
+              />
             </div>
             <div>
               <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
@@ -354,9 +332,9 @@ const Layout = ({ currentRoute, navigate, children }) => {
                   padding: '14px 16px',
                   margin: '4px 0',
                   background: item.current 
-                    ? 'rgba(59, 130, 246, 0.2)' 
+                    ? 'rgba(0, 160, 140, 0.2)' 
                     : 'transparent',
-                  color: item.current ? '#60a5fa' : '#cbd5e1',
+                  color: item.current ? '#47D2A7' : '#cbd5e1',
                   border: 'none',
                   borderRadius: '10px',
                   cursor: 'pointer',
@@ -394,7 +372,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
             <div style={{
               width: '40px', height: '40px',
-              background: settings?.logo_url ? 'white' : '#3b82f6',
+              background: settings?.logo_url ? 'white' : '#00A08C',
               borderRadius: '50%',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               marginRight: '12px'
@@ -538,7 +516,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
               }}>
                 <div style={{
                   width: '32px', height: '32px',
-                  background: settings?.logo_url ? 'white' : '#3b82f6',
+                  background: settings?.logo_url ? 'white' : '#00A08C',
                   borderRadius: '50%',
                   display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}>
@@ -635,14 +613,14 @@ const LoginPage = () => {
   return (
     <div style={{
       minHeight: '100vh',
-      background: 'linear-gradient(to-br, #f1f5f9, #e0e7ff, #c7d2fe)',
+      background: 'linear-gradient(to-br, #f0fdfa, #ccfbf1, #d1fae5)',
       display: 'flex',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
       {/* Left Hero Section - DESIGN ORIGINAL */}
       <div style={{
         width: '50%',
-        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
+        background: 'linear-gradient(135deg, #00A08C, #47D2A7)',
         position: 'relative',
         overflow: 'hidden',
         display: 'flex',
@@ -660,24 +638,20 @@ const LoginPage = () => {
         <div style={{
           position: 'absolute', bottom: '80px', right: '80px',
           width: '384px', height: '384px',
-          background: 'rgba(59,130,246,0.2)',
+          background: 'rgba(71,210,167,0.2)',
           borderRadius: '50%', filter: 'blur(48px)'
         }}></div>
         
         <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
           <div style={{ marginBottom: '32px' }}>
-            {/* Beautiful Receipt Icon - ORIGINAL */}
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: '24px' }}>
-              <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-              <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-              <path d="M12 18V6"/>
-            </svg>
+            {/* FacturePro Logo */}
+            <img src="https://customer-assets.emergentagent.com/job_37455350-d4d4-40f6-ab0f-e859ab6de5ff/artifacts/menbvk51_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg" alt="FacturePro" style={{ width: '64px', height: '64px', objectFit: 'contain', marginBottom: '24px', borderRadius: '12px' }} />
             <h1 style={{
               fontSize: '80px', fontWeight: 'bold', marginBottom: '16px',
               lineHeight: '1.1', margin: 0
             }}>
               Simplifiez votre
-              <span style={{ display: 'block', color: '#bfdbfe' }}>facturation</span>
+              <span style={{ display: 'block', color: '#a7f3d0' }}>facturation</span>
             </h1>
             <p style={{
               fontSize: '20px', color: 'rgba(255,255,255,0.8)',
@@ -740,15 +714,10 @@ const LoginPage = () => {
             <div style={{
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               width: '88px', height: '88px',
-              background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
               borderRadius: '24px', marginBottom: '24px',
-              boxShadow: '0 20px 40px rgba(67,56,202,0.4)'
+              overflow: 'hidden'
             }}>
-              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/>
-                <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-                <path d="M12 18V6"/>
-              </svg>
+              <img src="https://customer-assets.emergentagent.com/job_37455350-d4d4-40f6-ab0f-e859ab6de5ff/artifacts/menbvk51_2c256145-633e-411d-9781-dce2201c8da3_wm.jpeg" alt="FacturePro" style={{ width: '88px', height: '88px', objectFit: 'contain' }} />
             </div>
 
             <h1 style={{
@@ -892,7 +861,7 @@ const LoginPage = () => {
                   width: '100%', height: '48px', fontSize: '16px', fontWeight: '700',
                   background: loading 
                     ? '#94a3b8' 
-                    : 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)',
+                    : 'linear-gradient(135deg, #00A08C 0%, #47D2A7 100%)',
                   color: 'white', border: 'none', borderRadius: '12px',
                   cursor: loading ? 'not-allowed' : 'pointer',
                   boxShadow: '0 10px 25px rgba(67,56,202,0.4)'
@@ -920,7 +889,7 @@ const LoginPage = () => {
                   type="button"
                   onClick={() => setShowForgotPassword(true)}
                   style={{
-                    background: 'none', border: 'none', color: '#4338ca',
+                    background: 'none', border: 'none', color: '#00A08C',
                     fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
                   }}
                 >
@@ -938,7 +907,7 @@ const LoginPage = () => {
                   setFormData({ email: '', password: '', companyName: '' });
                 }}
                 style={{
-                  background: 'none', border: 'none', color: '#4338ca',
+                  background: 'none', border: 'none', color: '#00A08C',
                   fontSize: '16px', fontWeight: '600', cursor: 'pointer'
                 }}
               >
@@ -956,11 +925,11 @@ const LoginPage = () => {
               fontSize: '14px', color: '#64748b'
             }}>
               En créant un compte, vous acceptez nos{' '}
-              <a href="#" style={{ color: '#4338ca', textDecoration: 'none' }}>
+              <a href="#" style={{ color: '#00A08C', textDecoration: 'none' }}>
                 conditions d'utilisation
               </a>{' '}
               et notre{' '}
-              <a href="#" style={{ color: '#4338ca', textDecoration: 'none' }}>
+              <a href="#" style={{ color: '#00A08C', textDecoration: 'none' }}>
                 politique de confidentialité
               </a>
             </div>
@@ -1103,7 +1072,7 @@ const ForgotPasswordModal = ({ onClose }) => {
                 borderRadius: '8px', cursor: 'pointer'
               }}>Annuler</button>
               <button type="submit" disabled={loading} style={{
-                flex: 1, padding: '12px', background: loading ? '#9ca3af' : '#4338ca',
+                flex: 1, padding: '12px', background: loading ? '#9ca3af' : '#00A08C',
                 color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer'
               }}>{loading ? 'Génération...' : 'Générer code'}</button>
             </div>
@@ -1163,7 +1132,7 @@ const ForgotPasswordModal = ({ onClose }) => {
                 borderRadius: '8px', cursor: 'pointer'
               }}>← Retour</button>
               <button type="submit" disabled={loading} style={{
-                flex: 1, padding: '12px', background: loading ? '#9ca3af' : '#4338ca',
+                flex: 1, padding: '12px', background: loading ? '#9ca3af' : '#00A08C',
                 color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer'
               }}>{loading ? 'Réinitialisation...' : 'Réinitialiser'}</button>
             </div>
@@ -1212,7 +1181,7 @@ const Dashboard = () => {
     <div>
       {/* Welcome Banner */}
       <div style={{
-        background: 'linear-gradient(135deg, #4338ca, #7c3aed)',
+        background: 'linear-gradient(135deg, #00A08C, #47D2A7)',
         color: 'white', padding: '32px', borderRadius: '16px',
         marginBottom: '32px', textAlign: 'center'
       }}>
@@ -1232,7 +1201,7 @@ const Dashboard = () => {
         marginBottom: '32px'
       }}>
         <div style={{
-          background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+          background: 'linear-gradient(135deg, #00A08C, #008F7A)',
           color: 'white', padding: '28px', borderRadius: '16px',
           textAlign: 'center', position: 'relative', overflow: 'hidden'
         }}>
@@ -1256,7 +1225,7 @@ const Dashboard = () => {
         </div>
 
         <div style={{
-          background: 'linear-gradient(135deg, #7c3aed, #5b21b6)',
+          background: 'linear-gradient(135deg, #47D2A7, #008F7A)',
           color: 'white', padding: '28px', borderRadius: '16px',
           textAlign: 'center'
         }}>
@@ -1465,7 +1434,7 @@ const ClientsPage = () => {
         <button
           onClick={() => setShowForm(true)}
           style={{
-            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            background: 'linear-gradient(135deg, #00A08C, #008F7A)',
             color: 'white', border: 'none', padding: '14px 28px',
             borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
             fontSize: '14px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
@@ -1541,7 +1510,7 @@ const ClientsPage = () => {
           <button
             onClick={() => setShowForm(true)}
             style={{
-              background: '#3b82f6', color: 'white', border: 'none',
+              background: '#00A08C', color: 'white', border: 'none',
               padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
               fontWeight: '700', fontSize: '16px'
             }}
@@ -1765,7 +1734,7 @@ const ClientsPage = () => {
                   <button
                     type="submit"
                     style={{
-                      background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', color: 'white',
+                      background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: 'white',
                       border: 'none', padding: '12px 24px', borderRadius: '8px',
                       cursor: 'pointer', fontWeight: '600', fontSize: '14px'
                     }}
@@ -2209,7 +2178,7 @@ const InvoicesPage = () => {
         <button
           onClick={() => setShowForm(true)}
           style={{
-            background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
+            background: 'linear-gradient(135deg, #00A08C, #008F7A)',
             color: 'white', border: 'none', padding: '14px 28px',
             borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
             fontSize: '14px', boxShadow: '0 4px 12px rgba(59,130,246,0.4)'
@@ -2253,7 +2222,7 @@ const InvoicesPage = () => {
           <button
             onClick={() => setShowForm(true)}
             style={{
-              background: '#3b82f6', color: 'white', border: 'none',
+              background: '#00A08C', color: 'white', border: 'none',
               padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
               fontWeight: '700', fontSize: '16px'
             }}
@@ -2464,7 +2433,7 @@ const InvoicesPage = () => {
                 <button
                   type="submit"
                   style={{
-                    background: '#3b82f6', color: 'white', border: 'none',
+                    background: '#00A08C', color: 'white', border: 'none',
                     padding: '12px 24px', borderRadius: '8px', cursor: 'pointer',
                     fontWeight: '600'
                   }}
@@ -2562,7 +2531,7 @@ const QuotesPage = () => {
         <button
           onClick={() => setShowForm(true)}
           style={{
-            background: 'linear-gradient(135deg, #7c3aed, #5b21b6)',
+            background: 'linear-gradient(135deg, #47D2A7, #008F7A)',
             color: 'white', border: 'none', padding: '14px 28px',
             borderRadius: '12px', cursor: 'pointer', fontWeight: '700',
             fontSize: '14px', boxShadow: '0 4px 12px rgba(124,58,237,0.4)'
@@ -2605,7 +2574,7 @@ const QuotesPage = () => {
           <button
             onClick={() => setShowForm(true)}
             style={{
-              background: '#7c3aed', color: 'white', border: 'none',
+              background: '#47D2A7', color: 'white', border: 'none',
               padding: '16px 32px', borderRadius: '12px', cursor: 'pointer',
               fontWeight: '700', fontSize: '16px'
             }}
@@ -2630,7 +2599,7 @@ const QuotesPage = () => {
                   </p>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#7c3aed' }}>
+                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#47D2A7' }}>
                     {formatCurrency(quote.total)}
                   </div>
                 </div>
@@ -2713,7 +2682,7 @@ const QuotesPage = () => {
                   padding: '12px 24px', borderRadius: '8px', cursor: 'pointer'
                 }}>Annuler</button>
                 <button type="submit" style={{
-                  background: '#7c3aed', color: 'white', border: 'none',
+                  background: '#47D2A7', color: 'white', border: 'none',
                   padding: '12px 24px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600'
                 }}>💾 Créer la soumission</button>
               </div>
@@ -2744,7 +2713,7 @@ const ExpensesPage = () => (
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
     company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
-    logo_url: '', primary_color: '#3B82F6', secondary_color: '#1F2937',
+    logo_url: '', primary_color: '#00A08C', secondary_color: '#1F2937',
     gst_number: '', pst_number: '', hst_number: '', default_due_days: 30
   });
   const [loading, setLoading] = useState(true);
@@ -2858,7 +2827,7 @@ const SettingsPage = () => {
               type="button"
               onClick={handleLogoSave}
               style={{
-                background: '#3b82f6', color: 'white', border: 'none',
+                background: '#00A08C', color: 'white', border: 'none',
                 padding: '12px 20px', borderRadius: '8px', cursor: 'pointer',
                 fontWeight: '600'
               }}
@@ -3061,7 +3030,7 @@ const ExportPage = () => {
             data-testid="export-invoices-btn"
             onClick={() => downloadCSV('invoices')}
             style={{
-              background: '#6366f1', color: 'white', border: 'none', padding: '10px 24px',
+              background: '#00A08C', color: 'white', border: 'none', padding: '10px 24px',
               borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '14px'
             }}
           >
@@ -3080,7 +3049,7 @@ const ExportPage = () => {
             data-testid="export-expenses-btn"
             onClick={() => downloadCSV('expenses')}
             style={{
-              background: '#6366f1', color: 'white', border: 'none', padding: '10px 24px',
+              background: '#00A08C', color: 'white', border: 'none', padding: '10px 24px',
               borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '14px'
             }}
           >
