@@ -104,6 +104,17 @@ const InvoicesPage = () => {
                     color: invoice.status === 'paid' ? '#166534' : '#92400e',
                     padding: '4px 8px', borderRadius: '6px', fontSize: '12px', fontWeight: '600'
                   }}>{invoice.status === 'paid' ? 'Payee' : invoice.status}</span>
+                  <div style={{ marginTop: '8px' }}>
+                    <button onClick={async () => {
+                      if (window.confirm('Supprimer cette facture ?')) {
+                        try { await axios.delete(`${BACKEND_URL}/api/invoices/${invoice.id}`); setSuccess('Facture supprimee'); fetchData(); }
+                        catch (err) { setError('Erreur suppression'); }
+                      }
+                    }} data-testid={`delete-invoice-${invoice.id}`} style={{
+                      background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 12px',
+                      borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600'
+                    }}>Supprimer</button>
+                  </div>
                 </div>
               </div>
             </div>

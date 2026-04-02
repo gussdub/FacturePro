@@ -87,7 +87,16 @@ const QuotesPage = () => {
                   <p style={{ color: '#6b7280' }}>Valide jusqu'au: {new Date(quote.valid_until).toLocaleDateString('fr-CA')}</p>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#47D2A7' }}>{formatCurrency(quote.total)}</div>
+                  <div style={{ fontSize: '24px', fontWeight: '800', color: '#47D2A7', marginBottom: '8px' }}>{formatCurrency(quote.total)}</div>
+                  <button onClick={async () => {
+                    if (window.confirm('Supprimer cette soumission ?')) {
+                      try { await axios.delete(`${BACKEND_URL}/api/quotes/${quote.id}`); setSuccess('Soumission supprimee'); fetchData(); }
+                      catch (err) { setError('Erreur suppression'); }
+                    }
+                  }} data-testid={`delete-quote-${quote.id}`} style={{
+                    background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 12px',
+                    borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600'
+                  }}>Supprimer</button>
                 </div>
               </div>
             </div>
