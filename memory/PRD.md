@@ -8,7 +8,7 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - **Backend**: FastAPI + pymongo sync on port 8001
 - **Database**: MongoDB Atlas
 - **Storage**: Emergent Object Storage (logos, recus)
-- **Email**: Resend (PDF attachments, reminders)
+- **Email**: Resend via noreply@facturepro.ca (PDF attachments, reminders)
 - **PDF**: ReportLab (professional layout with company logo)
 - **Brand Colors**: #00A08C, #47D2A7, #008F7A
 
@@ -21,44 +21,39 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - [x] Employees CRUD
 - [x] Expenses CRUD with approval workflow
 - [x] Company Settings with drag-and-drop logo upload
-- [x] Dashboard stats
+- [x] Dashboard stats + overdue tracker with reminder emails
 - [x] CSV exports
 - [x] SVG logo (no external URL dependency)
 - [x] File upload via Emergent Object Storage
 - [x] Refactored monolith into modular components
 - [x] pymongo sync backend (works on Render + Emergent)
-- [x] Advanced Quotes page: Product catalog quick-add, multi-line items, status badges, filter/sort, PDF download, email sending (Resend), convert to invoice
-- [x] Advanced Invoices page: Product catalog quick-add, multi-line items, status badges, filter/sort, PDF download, email sending (Resend)
-- [x] PDF generation with company logo, client info, item table, taxes, totals
-- [x] Email sending via Resend with PDF attachment
-- [x] Quote status management (PUT /api/quotes/{id}/status)
-- [x] **Payment tracking dashboard**: Overdue invoices table with days overdue, total impayé badge, send reminder button
-- [x] **Auto-status update**: Invoices auto-marked as 'overdue' when due_date passes
-- [x] **Reminder emails**: POST /api/invoices/{id}/remind sends payment reminder with PDF attachment via Resend
+- [x] Advanced Quotes page: Product dropdown, multi-line items, status badges, filter/sort, PDF, email, convert
+- [x] Advanced Invoices page: Product dropdown, multi-line items, status badges, filter/sort, PDF, email
+- [x] PDF generation with company logo, proper spacing (no overlaps)
+- [x] Email sending via Resend (noreply@facturepro.ca) with PDF attachment
+- [x] Quote/Invoice number editable in forms
+- [x] Edit existing quotes/invoices (Modifier button, pre-filled form)
+- [x] Empty items by default (no blank row until product selected or manual add)
+- [x] Payment tracking dashboard with overdue detection + reminder emails
+- [x] Backend tax recalculation on quote PUT
 
 ## Backlog
 ### P1
-- Stripe subscription ($15/mois CAD, 14 jours trial, gussdub@gmail.com exempt)
+- Stripe subscription ($15/mois CAD, 14 jours trial)
 - Expense receipt file upload (drag & drop)
 
 ### P2
 - Employee expense approval workflow
-- Edit existing quotes/invoices from the UI
 
 ### P3
 - UI/UX polish
 - Custom domain deployment (facturepro.ca)
 
 ## Key Files
-- `/app/backend/server.py` - Backend (pymongo sync, ReportLab, Resend)
-- `/app/frontend/src/App.js` - Router
-- `/app/frontend/src/config.js` - Config
-- `/app/frontend/src/context/AuthContext.js` - Auth
-- `/app/frontend/src/components/` - Layout, FactureProLogo, etc.
-- `/app/frontend/src/pages/Dashboard.js` - Dashboard with overdue tracker
-- `/app/frontend/src/pages/QuotesPage.js` - Advanced quotes page
-- `/app/frontend/src/pages/InvoicesPage.js` - Advanced invoices page
-- `/app/DEPLOYMENT_GUIDE.md` - Render deployment guide
+- `/app/backend/server.py` - Backend
+- `/app/frontend/src/pages/QuotesPage.js` - Soumissions
+- `/app/frontend/src/pages/InvoicesPage.js` - Factures
+- `/app/frontend/src/pages/Dashboard.js` - Dashboard + overdue tracker
 
 ## Key API Endpoints
 - POST /api/auth/login, /api/auth/register
@@ -69,4 +64,3 @@ Billing software "FacturePro" for Canadian businesses (French-language).
 - POST /api/quotes/{id}/convert
 - GET /api/dashboard/stats, GET /api/dashboard/overdue
 - POST /api/invoices/{id}/remind
-- POST /api/upload, GET /api/files/{id}
