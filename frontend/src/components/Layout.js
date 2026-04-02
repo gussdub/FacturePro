@@ -1,9 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
-import { BACKEND_URL } from '../config';
+import { BACKEND_URL, FACTUREPRO_LOGO_FILE_ID } from '../config';
 import NotificationsDropdown from './NotificationsDropdown';
-import FactureProLogo from './FactureProLogo';
+
+const getImageUrl = (url) => {
+  if (!url) return null;
+  if (url.startsWith('/api')) return `${BACKEND_URL}${url}`;
+  if (url.startsWith('http')) return url;
+  return null;
+};
+
+const factureProLogoUrl = `${BACKEND_URL}/api/files/${FACTUREPRO_LOGO_FILE_ID}`;
 
 const Layout = ({ currentRoute, navigate, children }) => {
   const { user, logout } = useAuth();
@@ -48,10 +56,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
         <div style={{ padding: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '48px', height: '48px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              {settings?.logo_url ? (
-                <img src={settings.logo_url.startsWith('/api') ? `${BACKEND_URL}${settings.logo_url}` : settings.logo_url} alt="Logo" style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '12px' }} onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'block'; }} />
-              ) : null}
-              <div style={{ display: settings?.logo_url ? 'none' : 'block' }}><FactureProLogo size={48} /></div>
+              <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '12px' }} />
             </div>
             <div>
               <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
@@ -92,10 +97,11 @@ const Layout = ({ currentRoute, navigate, children }) => {
             <div style={{
               width: '40px', height: '40px',
               background: settings?.logo_url ? 'white' : '#00A08C',
-              borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '12px'
+              borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '12px',
+              overflow: 'hidden', border: settings?.logo_url ? '1px solid #475569' : 'none'
             }}>
-              {settings?.logo_url ? (
-                <img src={settings.logo_url.startsWith('/api') ? `${BACKEND_URL}${settings.logo_url}` : settings.logo_url} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain', borderRadius: '50%' }} />
+              {getImageUrl(settings?.logo_url) ? (
+                <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
               ) : (
                 <span style={{ color: 'white', fontSize: '16px', fontWeight: '700' }}>
                   {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
@@ -163,10 +169,11 @@ const Layout = ({ currentRoute, navigate, children }) => {
               }}>
                 <div style={{
                   width: '32px', height: '32px', background: settings?.logo_url ? 'white' : '#00A08C',
-                  borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                  borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  overflow: 'hidden', border: settings?.logo_url ? '1px solid #e2e8f0' : 'none'
                 }}>
-                  {settings?.logo_url ? (
-                    <img src={settings.logo_url.startsWith('/api') ? `${BACKEND_URL}${settings.logo_url}` : settings.logo_url} alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain', borderRadius: '50%' }} />
+                  {getImageUrl(settings?.logo_url) ? (
+                    <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
                   ) : (
                     <span style={{ color: 'white', fontSize: '14px', fontWeight: '700' }}>
                       {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
