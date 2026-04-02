@@ -687,6 +687,20 @@ def seed_data():
         client.admin.command('ping')
         print("MongoDB connected successfully")
 
+        # Create indexes for faster queries
+        db.users.create_index("email", unique=True)
+        db.users.create_index("id", unique=True)
+        db.user_passwords.create_index("user_id", unique=True)
+        db.clients.create_index([("user_id", 1)])
+        db.products.create_index([("user_id", 1), ("is_active", 1)])
+        db.invoices.create_index([("user_id", 1)])
+        db.quotes.create_index([("user_id", 1)])
+        db.employees.create_index([("user_id", 1), ("is_active", 1)])
+        db.expenses.create_index([("user_id", 1)])
+        db.company_settings.create_index("user_id", unique=True)
+        db.files.create_index("id", unique=True)
+        print("Database indexes created")
+
         try:
             init_storage()
             print("Object storage initialized")
