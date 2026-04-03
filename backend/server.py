@@ -637,6 +637,139 @@ def delete_expense(expense_id: str, current_user: User = Depends(get_current_use
         raise HTTPException(404, "Expense not found")
     return {"message": "Expense deleted"}
 
+# ─── CSV Import for Expenses ───
+import csv
+import io
+import re as re_module
+
+FIELD_PATTERNS = {
+    "expense_date": [r"date", r"jour", r"day", r"posted", r"effective"],
+    "amount": [r"amount", r"montant", r"total", r"debit", r"d.bit", r"credit", r"cr.dit", r"sum", r"value", r"prix", r"cost", r"cout", r"co.t"],
+    "description": [r"desc", r"libell", r"detail", r"memo", r"narr", r"ref", r"comment", r"name", r"nom", r"transaction"],
+    "category": [r"categ", r"type", r"class", r"group", r"dept", r"department", r"service"],
+    "notes": [r"note", r"remarque", r"observ", r"info"],
+}
+
+def detect_column_mapping(headers):
+    mapping = {}
+    used = set()
+    for field, patterns in FIELD_PATTERNS.items():
+        best = None
+        for i, h in enumerate(headers):
+            if i in used:
+                continue
+            h_lower = h.lower().strip()
+            for pat in patterns:
+                if re_module.search(pat, h_lower):
+                    best = i
+                    break
+            if best is not None:
+                break
+        if best is not None:
+            mapping[field] = best
+            used.add(best)
+    return mapping
+
+def parse_amount(val):
+    if not val:
+        return 0.0
+    val = str(val).strip().replace(" ", "").replace("\u00a0", "")
+    val = val.replace("$", "").replace("CAD", "").replace("€", "").replace(",", ".").strip()
+    neg = val.startswith("(") and val.endswith(")")
+    if neg:
+        val = val[1:-1]
+    val = re_module.sub(r"[^\d.\-]", "", val)
+    try:
+        result = abs(float(val))
+        return -result if neg else result
+    except:
+        return 0.0
+
+def parse_date(val):
+    if not val:
+        return ""
+    val = str(val).strip()
+    for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d", "%d-%m-%Y", "%m-%d-%Y", "%d.%m.%Y", "%Y%m%d"]:
+        try:
+            return datetime.strptime(val, fmt).strftime("%Y-%m-%d")
+        except:
+            continue
+    return val[:10]
+
+@app.post("/api/expenses/import-csv")
+def import_csv_preview(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
+    content = file.file.read()
+    for encoding in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+        try:
+            text = content.decode(encoding)
+            break
+        except:
+            continue
+    else:
+        raise HTTPException(400, "Impossible de lire le fichier CSV")
+
+    for delimiter in [",", ";", "\t", "|"]:
+        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+        rows = list(reader)
+        if len(rows) > 1 and len(rows[0]) > 1:
+            break
+    else:
+        rows = list(csv.reader(io.StringIO(text)))
+
+    if len(rows) < 2:
+        raise HTTPException(400, "Le fichier CSV est vide ou invalide")
+
+    headers = [h.strip() for h in rows[0]]
+    data_rows = rows[1:]
+    mapping = detect_column_mapping(headers)
+
+    preview = []
+    for row in data_rows[:10]:
+        entry = {}
+        for field, col_idx in mapping.items():
+            if col_idx < len(row):
+                if field == "amount":
+                    entry[field] = parse_amount(row[col_idx])
+                elif field == "expense_date":
+                    entry[field] = parse_date(row[col_idx])
+                else:
+                    entry[field] = row[col_idx].strip()
+            else:
+                entry[field] = "" if field != "amount" else 0
+        preview.append(entry)
+
+    return {
+        "headers": headers,
+        "mapping": {f: {"column_index": idx, "column_name": headers[idx]} for f, idx in mapping.items()},
+        "total_rows": len(data_rows),
+        "preview": preview,
+        "raw_preview": [r for r in data_rows[:5]]
+    }
+
+@app.post("/api/expenses/import-confirm")
+def import_csv_confirm(import_data: dict, current_user: User = Depends(get_current_user_with_access)):
+    rows = import_data.get("rows", [])
+    if not rows:
+        raise HTTPException(400, "Aucune donnee a importer")
+    created = 0
+    for row in rows:
+        amt = parse_amount(str(row.get("amount", 0)))
+        if amt == 0 and not row.get("description"):
+            continue
+        doc = {
+            "id": str(uuid.uuid4()), "user_id": current_user.id,
+            "employee_id": row.get("employee_id", ""),
+            "description": row.get("description", "Import CSV"),
+            "amount": abs(amt),
+            "category": row.get("category", ""),
+            "expense_date": row.get("expense_date", datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+            "status": "pending", "receipt_url": "",
+            "notes": row.get("notes", ""), "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        db.expenses.insert_one(doc)
+        created += 1
+    return {"message": f"{created} depense(s) importee(s)", "created": created}
+
 # ─── Settings ───
 @app.get("/api/settings/company")
 def get_settings(current_user: User = Depends(get_current_user_with_access)):
