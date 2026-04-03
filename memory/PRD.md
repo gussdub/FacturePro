@@ -1,16 +1,17 @@
 # FacturePro - PRD
 
 ## Original Problem Statement
-Billing software "FacturePro" for Canadian businesses (French-language). Core requirements: comprehensive form for quotes/invoices, interactive statuses, customizable PDF generation (with company logos and tax numbers), Resend email delivery, intelligent CSV import for expenses, and a Stripe subscription system ($15/month CAD, 14-day trial) to gate premium features.
+Billing software "FacturePro" for Canadian businesses (French-language). Core requirements: comprehensive form for quotes/invoices, interactive statuses, customizable PDF generation (with company logos and tax numbers), Resend email delivery, intelligent CSV import for expenses, Stripe subscription system ($15/month CAD, 14-day trial), and multi-currency support.
 
 ## Architecture
 - **Frontend**: React + Recharts + lucide-react on port 3000
 - **Backend**: FastAPI + pymongo sync on port 8001
 - **Database**: MongoDB Atlas
 - **Email**: Resend via noreply@facturepro.ca
-- **PDF**: ReportLab
+- **PDF**: ReportLab (with currency symbol support)
 - **Payments**: Stripe via emergentintegrations library
 - **Storage**: Emergent Object Storage (for logos, receipts)
+- **Exchange Rates**: frankfurter.dev API (cached 1h)
 - **Font**: IBM Plex Sans (Google Fonts)
 
 ## Implemented
@@ -22,24 +23,14 @@ Billing software "FacturePro" for Canadian businesses (French-language). Core re
 - [x] Dashboard: stats, overdue tracker, reminder emails
 - [x] Expense analytics charts: Donut by category + stacked bar by month (Recharts)
 - [x] CSV import for expenses with intelligent column mapping
-- [x] Company Settings with logo upload + tax numbers
+- [x] Company Settings with logo upload + tax numbers + default currency
 - [x] CSV exports, Object Storage
-- [x] **Stripe Subscription** ($15/mois CAD, 14 jours trial, gating, checkout, payment polling)
-- [x] **Trial expiry email notifications** (3 days before expiration, via Resend)
-- [x] **Drag & drop receipt upload** on expenses (Object Storage)
-- [x] **Employee field optional** on expenses (general expenses supported)
-- [x] **UI/UX Polish (P3)**: lucide-react icons, IBM Plex Sans font, monochrome color scheme, modernized sidebar/dashboard/login/subscription
-
-## Backlog
-### P1 (Completed)
-- ~~Stripe subscription~~ DONE
-- ~~Drag & drop receipt upload~~ DONE
-
-### P2 (Removed by user)
-- ~~Employee expense approval workflow~~ REMOVED
-
-### P3 (Completed)
-- ~~UI/UX polish~~ DONE
+- [x] Stripe Subscription ($15/mois CAD, 14 jours trial, gating, checkout, payment polling)
+- [x] Trial expiry email notifications (3 days before expiration, via Resend)
+- [x] Drag & drop receipt upload on expenses (Object Storage)
+- [x] Employee field optional on expenses (general expenses supported)
+- [x] UI/UX Polish: lucide-react icons, IBM Plex Sans font, monochrome color scheme
+- [x] **Multi-currency** (CAD, USD, EUR, GBP): real-time rates from frankfurter.dev, currency selector on all forms, conversion preview, total_cad stored, PDF shows correct symbols, dashboard converts to CAD
 
 ## Key API Endpoints
 - Auth: /api/auth/login, /api/auth/register, /api/auth/me
@@ -52,12 +43,13 @@ Billing software "FacturePro" for Canadian businesses (French-language). Core re
 - Notifications: /api/subscription/check-trial-expiry
 - Webhook: /api/webhook/stripe
 - Files: /api/upload, /api/files/{file_id}
+- **Exchange Rates**: /api/exchange-rates (GET, returns {base, rates, supported})
 
 ## DB Collections
 - `users`: id, email, company_name, subscription_status, trial_end_date, subscription_started_at
-- `invoices` / `quotes`: id, user_id, client_id, items, total, status, invoice_number
-- `expenses`: id, user_id, employee_id (optional), amount, description, category, receipt_url
-- `company_settings`: user_id, company_name, email, logo_url, gst_number, pst_number
-- `payment_transactions`: id, user_id, session_id, amount, currency, payment_status, metadata
+- `invoices` / `quotes`: id, user_id, client_id, items, total, status, currency, exchange_rate_to_cad, total_cad
+- `expenses`: id, user_id, employee_id (optional), amount, currency, exchange_rate_to_cad, amount_cad, category, receipt_url
+- `company_settings`: user_id, company_name, email, logo_url, gst_number, pst_number, default_currency
+- `payment_transactions`: id, user_id, session_id, amount, currency, payment_status
 - `trial_notifications`: user_id, email, type, sent_at
 - `files`: id, user_id, storage_path, original_filename, content_type
