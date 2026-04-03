@@ -1,0 +1,75 @@
+{
+  "theme": "LIGHT",
+  "archetype": "Archetype 4: Swiss & High-Contrast",
+  "colors": {
+    "background": "#FFFFFF",
+    "surface": "#F4F4F5",
+    "border": "#E4E4E7",
+    "text_primary": "#09090B",
+    "text_secondary": "#52525B",
+    "primary_accent": "#002FA7",
+    "success": "#16A34A",
+    "warning": "#F59E0B",
+    "danger": "#DC2626",
+    "chart_palette": [
+      "#09090B",
+      "#52525B",
+      "#A1A1AA",
+      "#002FA7",
+      "#E4E4E7"
+    ]
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "IBM Plex Sans",
+    "scale": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-medium",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-medium",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-zinc-500",
+      "label": "text-xs uppercase tracking-[0.2em] font-bold text-zinc-500"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Strict grid hierarchy, dense and compact spacing. Optical alignment.",
+    "container_padding": "p-6 md:p-8",
+    "grid_system": "The Control Room Grid: grid-cols-1 md:grid-cols-3 lg:grid-cols-4, gap-4 or gap-6",
+    "borderRadius": "rounded-none",
+    "surface_strategy": {
+      "dashboard_cards": "Flat background, 1px subtle border (border-zinc-200), no shadow. Hover: slight lift (-translate-y-1), border color darkens.",
+      "headers": "Solid Background with a hard bottom border (border-b border-zinc-200).",
+      "sidebar": "Light gray background (bg-zinc-50) with 1px right border, ditch the dark gradient. Use Lucide-react icons instead of emojis."
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-zinc-950 text-white hover:bg-zinc-800 hover:text-white rounded-none px-6 py-2 font-medium transition-colors",
+      "secondary": "bg-white text-zinc-950 border border-zinc-200 hover:bg-zinc-100 rounded-none px-6 py-2 font-medium transition-colors",
+      "accent": "bg-[#002FA7] text-white hover:bg-[#002480] hover:text-white rounded-none px-6 py-2 font-medium transition-colors"
+    },
+    "inputs": "bg-white border border-zinc-200 rounded-none px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-950 focus:border-transparent transition-all",
+    "tables": "w-full text-sm text-left. Header: bg-zinc-50 border-y border-zinc-200 text-zinc-500 font-medium. Rows: border-b border-zinc-100 hover:bg-zinc-50/50 transition-colors.",
+    "icons": "lucide-react (stroke-width 1.5, size 18px or 20px)"
+  },
+  "accessibility": {
+    "contrast": "Strict APCA compliance. Black and dark gray text on white. Blue accent for actionable links/buttons. Explicit hover and focus states.",
+    "testing_attributes": "All interactive elements must have data-testid attributes (e.g., data-testid='create-invoice-button')"
+  },
+  "animations": {
+    "micro_interactions": "Subtle and fast. 150ms ease-in-out for hover states, background color changes, and border color changes.",
+    "page_transitions": "Fade-in with slight upward motion (framer-motion, y: 10 -> 0, opacity: 0 -> 1, duration: 0.3s)."
+  },
+  "instructions_to_main_agent": [
+    "Replace all inline styles with Tailwind CSS utility classes.",
+    "Remove all emoji icons from navigation and UI, replace with lucide-react icons.",
+    "Replace the dark gradient sidebar with a crisp, minimal light sidebar (bg-zinc-50) or pure white with right border.",
+    "Use flat, cardless design for dashboard widgets: simple rectangular divs with 1px border-zinc-200 and no shadow. Remove rounded corners (rounded-none).",
+    "Implement Cabinet Grotesk for all headings and IBM Plex Sans for body text. Import them via standard methods.",
+    "Use International Klein Blue (#002FA7) sparingly, only for primary call-to-actions or active states. Otherwise, stick to monochrome (zinc-950, zinc-500, white).",
+    "Ensure all forms, tables, and lists are dense, properly aligned, and use borders to separate rows instead of distinct cards.",
+    "Add 'data-testid' attributes to all interactive elements for testing (e.g., buttons, inputs, links).",
+    "Ensure all the component and logic code remains in .js files since the project does not use TypeScript."
+  ]
+}
