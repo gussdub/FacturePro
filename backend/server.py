@@ -903,21 +903,25 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     client_postal = client_info.get('postal_code', '') if client_info else ''
 
     bill_to = [Paragraph("<b>Facturer a:</b>", company_style)]
-    bill_to.append(Paragraph(client_name, ParagraphStyle('ClientName', parent=styles['Normal'], fontSize=12, textColor=dark, fontName='Helvetica-Bold')))
+    bill_to.append(Spacer(1, 6))
+    bill_to.append(Paragraph(client_name, ParagraphStyle('ClientName', parent=styles['Normal'], fontSize=12, textColor=dark, fontName='Helvetica-Bold', leading=16)))
     if client_addr:
-        bill_to.append(Paragraph(client_addr, small_style))
+        bill_to.append(Spacer(1, 3))
+        bill_to.append(Paragraph(client_addr, ParagraphStyle('ClientAddr', parent=small_style, leading=14)))
     if client_city or client_postal:
-        bill_to.append(Paragraph(f"{client_city} {client_postal}".strip(), small_style))
+        bill_to.append(Spacer(1, 3))
+        bill_to.append(Paragraph(f"{client_city} {client_postal}".strip(), ParagraphStyle('ClientCity', parent=small_style, leading=14)))
     if client_email:
-        bill_to.append(Paragraph(client_email, small_style))
+        bill_to.append(Spacer(1, 3))
+        bill_to.append(Paragraph(client_email, ParagraphStyle('ClientEmail', parent=small_style, leading=14)))
 
     client_table = Table([[bill_to]], colWidths=[7*inch])
     client_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8fafb')),
         ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
-        ('TOPPADDING', (0, 0), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+        ('TOPPADDING', (0, 0), (-1, -1), 14),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ('LEFTPADDING', (0, 0), (-1, -1), 16),
     ]))
     elements.append(client_table)
     elements.append(Spacer(1, 0.3*inch))
