@@ -1512,6 +1512,60 @@ async def stripe_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 
+@app.post("/api/subscription/check-trial-expiry")
+async def check_trial_expiry(request: Request):
+    """Check for users whose trial expires in 3 days and send them a reminder email."""
+    if not RESEND_API_KEY:
+        raise HTTPException(500, "Email non configure")
+    now = datetime.now(timezone.utc)
+    three_days = now + timedelta(days=3)
+    users_to_notify = []
+    all_trial_users = list(db.users.find({"subscription_status": "trial"}, {"_id": 0}))
+    for u in all_trial_users:
+        if u.get("email") in EXEMPT_USERS:
+            continue
+        trial_end = u.get("trial_end_date")
+        if not trial_end:
+            continue
+        try:
+            end_dt = datetime.fromisoformat(trial_end)
+            days_left = (end_dt - now).days
+            if 0 <= days_left <= 3:
+                already_notified = db.trial_notifications.find_one({"user_id": u["id"], "type": "trial_expiry_3d"})
+                if not already_notified:
+                    users_to_notify.append(u)
+        except Exception:
+            continue
+    sent = 0
+    for u in users_to_notify:
+        try:
+            trial_end = datetime.fromisoformat(u["trial_end_date"])
+            days_left = max(0, (trial_end - now).days)
+            params = {
+                "from": SENDER_EMAIL,
+                "to": [u["email"]],
+                "subject": "FacturePro — Votre essai gratuit expire bientot",
+                "html": f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+<h2 style="color:#1f2937">Bonjour {u.get('company_name', '')},</h2>
+<p>Votre essai gratuit de <strong>FacturePro</strong> expire dans <strong>{days_left} jour{'s' if days_left != 1 else ''}</strong>.</p>
+<p>Pour continuer a profiter de toutes les fonctionnalites (factures, soumissions, suivi des paiements, etc.), abonnez-vous des maintenant pour seulement <strong>15 $/mois CAD</strong>.</p>
+<p style="margin:24px 0"><a href="https://facturepro.ca/subscription" style="background:#00A08C;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600">S'abonner maintenant</a></p>
+<p style="color:#6b7280;font-size:13px">Merci de faire confiance a FacturePro!</p>
+</div>"""
+            }
+            resend.Emails.send(params)
+            db.trial_notifications.insert_one({
+                "user_id": u["id"],
+                "email": u["email"],
+                "type": "trial_expiry_3d",
+                "sent_at": now.isoformat()
+            })
+            sent += 1
+        except Exception as e:
+            print(f"Trial notification error for {u.get('email')}: {e}")
+    return {"notified": sent, "total_eligible": len(users_to_notify)}
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
@@ -1533,6 +1587,7 @@ def seed_data():
         db.files.create_index("id", unique=True)
         db.payment_transactions.create_index("session_id", unique=True)
         db.payment_transactions.create_index([("user_id", 1)])
+        db.trial_notifications.create_index([("user_id", 1), ("type", 1)], unique=True)
         print("Database indexes created")
 
         try:
