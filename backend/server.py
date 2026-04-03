@@ -364,7 +364,7 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
     doc = {
         "id": str(uuid.uuid4()), "user_id": current_user.id,
         "client_id": invoice_data.get("client_id", ""),
-        "invoice_number": f"INV-{count + 1:04d}",
+        "invoice_number": invoice_data.get("invoice_number") or f"INV-{count + 1:04d}",
         "issue_date": datetime.now(timezone.utc).isoformat(),
         "due_date": invoice_data.get("due_date", ""),
         "items": items, "subtotal": round(subtotal, 2),
@@ -372,6 +372,9 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
         "total_tax": total_tax, "total": total, "province": province,
         "status": invoice_data.get("status", "draft"),
         "notes": invoice_data.get("notes", ""),
+        "recurrence": invoice_data.get("recurrence", "none"),
+        "next_send_date": invoice_data.get("next_send_date", ""),
+        "recurrence_active": invoice_data.get("recurrence", "none") != "none",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     db.invoices.insert_one(doc)
@@ -405,6 +408,79 @@ def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_use
     if result.deleted_count == 0:
         raise HTTPException(404, "Invoice not found")
     return {"message": "Invoice deleted"}
+
+@app.put("/api/invoices/{invoice_id}/recurrence")
+def toggle_recurrence(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+    active = body.get("recurrence_active", False)
+    update = {"recurrence_active": active}
+    if not active:
+        update["recurrence"] = "none"
+        update["next_send_date"] = ""
+    result = db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": update})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Invoice not found")
+    return {"message": "Recurrence updated"}
+
+def _advance_date(date_str, recurrence):
+    from dateutil.relativedelta import relativedelta
+    d = datetime.fromisoformat(date_str + "T00:00:00+00:00") if len(date_str) == 10 else datetime.fromisoformat(date_str)
+    if recurrence == "biweekly":
+        d += timedelta(days=14)
+    elif recurrence == "monthly":
+        d += relativedelta(months=1)
+    elif recurrence == "quarterly":
+        d += relativedelta(months=3)
+    elif recurrence == "annual":
+        d += relativedelta(years=1)
+    return d.strftime("%Y-%m-%d")
+
+@app.post("/api/invoices/process-recurring")
+def process_recurring_invoices(current_user: User = Depends(get_current_user_with_access)):
+    if not RESEND_API_KEY:
+        raise HTTPException(500, "Email service not configured")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    invoices = list(db.invoices.find({
+        "user_id": current_user.id,
+        "recurrence_active": True,
+        "recurrence": {"$ne": "none"},
+        "next_send_date": {"$lte": today, "$ne": ""}
+    }, {"_id": 0}))
+    sent_count = 0
+    errors = []
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    for inv in invoices:
+        client = db.clients.find_one({"id": inv.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+        to_email = (client or {}).get("email", "")
+        if not to_email:
+            errors.append(f"{inv.get('invoice_number')}: pas d'email client")
+            continue
+        try:
+            pdf_buffer = generate_document_pdf("invoice", inv, settings, client, products)
+            pdf_bytes = pdf_buffer.read()
+            pdf_b64 = base64.b64encode(pdf_bytes).decode()
+            comp_name = settings.get('company_name', 'FacturePro')
+            inv_num = inv.get('invoice_number', 'N/A')
+            params = {
+                "from": SENDER_EMAIL,
+                "to": [to_email],
+                "subject": f"Facture {inv_num} - {comp_name}",
+                "text": f"Bonjour,\n\nVeuillez trouver ci-joint la facture {inv_num}.\n\nCordialement,\n{comp_name}",
+                "attachments": [{"filename": f"facture_{inv_num}.pdf", "content": pdf_b64}]
+            }
+            resend.Emails.send(params)
+            new_next = _advance_date(inv["next_send_date"], inv["recurrence"])
+            new_due = _advance_date(inv.get("due_date", inv["next_send_date"]), inv["recurrence"])
+            db.invoices.update_one({"id": inv["id"]}, {"$set": {
+                "next_send_date": new_next,
+                "due_date": new_due,
+                "status": "sent",
+                "last_sent": datetime.now(timezone.utc).isoformat()
+            }})
+            sent_count += 1
+        except Exception as e:
+            errors.append(f"{inv.get('invoice_number')}: {str(e)}")
+    return {"sent": sent_count, "errors": errors}
 
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")

@@ -9,6 +9,14 @@ const STATUS_CONFIG = {
   overdue: { label: 'En retard', bg: '#fef2f2', color: '#991b1b', icon: '!' },
 };
 
+const RECURRENCE_CONFIG = {
+  none:      { label: 'Aucune', bg: 'transparent', color: '#6b7280' },
+  biweekly:  { label: 'Aux 2 semaines', bg: '#ede9fe', color: '#6b21a8' },
+  monthly:   { label: 'Mensuelle', bg: '#dbeafe', color: '#1e40af' },
+  quarterly: { label: 'Trimestrielle', bg: '#fef3c7', color: '#92400e' },
+  annual:    { label: 'Annuelle', bg: '#f0fdf4', color: '#166534' },
+};
+
 const InvoicesPage = () => {
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
@@ -24,10 +32,11 @@ const InvoicesPage = () => {
   const [emailData, setEmailData] = useState({ to_email: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState('');
+  const [processing, setProcessing] = useState(false);
 
   const defaultForm = () => ({
     client_id: '', invoice_number: '', due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-    items: [], province: 'QC', notes: ''
+    items: [], province: 'QC', notes: '', recurrence: 'none', next_send_date: ''
   });
   const [formData, setFormData] = useState(defaultForm());
 
@@ -41,6 +50,8 @@ const InvoicesPage = () => {
         axios.get(`${BACKEND_URL}/api/products`)
       ]);
       setInvoices(inv.data); setClients(c.data); setProducts(p.data);
+      // Auto-process recurring invoices silently
+      try { await axios.post(`${BACKEND_URL}/api/invoices/process-recurring`); } catch {}
     } catch { setError('Erreur lors du chargement'); }
     finally { setLoading(false); }
   };
@@ -112,7 +123,9 @@ const InvoicesPage = () => {
         unit_price: it.unit_price || 0
       })) : [],
       province: invoice.province || 'QC',
-      notes: invoice.notes || ''
+      notes: invoice.notes || '',
+      recurrence: invoice.recurrence || 'none',
+      next_send_date: invoice.next_send_date ? invoice.next_send_date.substring(0, 10) : ''
     });
     setSelectedProduct('');
     setShowForm(true);
@@ -192,6 +205,28 @@ const InvoicesPage = () => {
     } finally { setSending(false); }
   };
 
+  const toggleRecurrence = async (inv) => {
+    try {
+      const newActive = !inv.recurrence_active;
+      await axios.put(`${BACKEND_URL}/api/invoices/${inv.id}/recurrence`, { recurrence_active: newActive });
+      setSuccess(newActive ? 'Récurrence activée' : 'Récurrence désactivée');
+      fetchData();
+    } catch { setError('Erreur mise à jour récurrence'); }
+  };
+
+  const processRecurring = async () => {
+    setProcessing(true);
+    try {
+      const res = await axios.post(`${BACKEND_URL}/api/invoices/process-recurring`);
+      const { sent, errors } = res.data;
+      if (sent > 0) setSuccess(`${sent} facture(s) récurrente(s) envoyée(s)`);
+      else setSuccess('Aucune facture récurrente à envoyer aujourd\'hui');
+      if (errors.length > 0) setError(errors.join(', '));
+      fetchData();
+    } catch { setError('Erreur traitement récurrence'); }
+    finally { setProcessing(false); }
+  };
+
   const inputStyle = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box', outline: 'none', transition: 'border 0.2s' };
   const labelStyle = { display: 'block', marginBottom: '6px', fontWeight: '600', fontSize: '13px', color: '#374151' };
   const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' };
@@ -205,7 +240,13 @@ const InvoicesPage = () => {
           <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Factures</h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: '14px' }}>Créez et gérez vos factures clients</p>
         </div>
-        <button onClick={openNewForm} data-testid="add-invoice-btn" style={btnPrimary}>+ Nouvelle Facture</button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button data-testid="process-recurring-btn" onClick={processRecurring} disabled={processing}
+            style={{ ...btnSecondary, opacity: processing ? 0.6 : 1 }}>
+            {processing ? 'Traitement...' : 'Envoyer récurrentes'}
+          </button>
+          <button onClick={openNewForm} data-testid="add-invoice-btn" style={btnPrimary}>+ Nouvelle Facture</button>
+        </div>
       </div>
 
       {error && <div data-testid="invoice-error" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setError('')}>{error}</div>}
@@ -245,16 +286,31 @@ const InvoicesPage = () => {
               <div key={inv.id} data-testid={`invoice-card-${inv.id}`} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
                   <div style={{ flex: '1', minWidth: '200px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', flexWrap: 'wrap' }}>
                       <span style={{ fontWeight: '700', fontSize: '16px', color: '#1f2937' }}>{inv.invoice_number}</span>
                       <span data-testid={`invoice-status-${inv.id}`} style={{ background: st.bg, color: st.color, padding: '3px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
                         {st.icon} {st.label}
                       </span>
+                      {inv.recurrence && inv.recurrence !== 'none' && (
+                        <span data-testid={`invoice-recurrence-${inv.id}`} style={{
+                          background: RECURRENCE_CONFIG[inv.recurrence]?.bg || '#f3f4f6',
+                          color: RECURRENCE_CONFIG[inv.recurrence]?.color || '#374151',
+                          padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: '600',
+                          border: inv.recurrence_active ? '1.5px solid currentColor' : '1px dashed #d1d5db'
+                        }}>
+                          ↻ {RECURRENCE_CONFIG[inv.recurrence]?.label}{inv.recurrence_active ? '' : ' (pause)'}
+                        </span>
+                      )}
                     </div>
                     <p style={{ margin: '2px 0', color: '#6b7280', fontSize: '14px' }}>Client: <strong>{getClientName(inv.client_id)}</strong></p>
                     <p style={{ margin: '2px 0', color: '#9ca3af', fontSize: '13px' }}>
                       Échéance: {inv.due_date ? new Date(inv.due_date).toLocaleDateString('fr-CA') : '—'}
                     </p>
+                    {inv.next_send_date && inv.recurrence_active && (
+                      <p style={{ margin: '2px 0', color: '#6b21a8', fontSize: '12px', fontWeight: '600' }}>
+                        Prochain envoi: {new Date(inv.next_send_date).toLocaleDateString('fr-CA')}
+                      </p>
+                    )}
                     {inv.items && inv.items.length > 0 && (
                       <p style={{ margin: '4px 0 0', color: '#9ca3af', fontSize: '12px' }}>
                         {inv.items.length} article(s) — Sous-total: {formatCurrency(inv.subtotal)}
@@ -281,6 +337,13 @@ const InvoicesPage = () => {
                         title="Envoyer par email" style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Email
                       </button>
+                      {inv.recurrence && inv.recurrence !== 'none' && (
+                        <button data-testid={`toggle-recurrence-${inv.id}`} onClick={() => toggleRecurrence(inv)}
+                          title={inv.recurrence_active ? 'Mettre en pause' : 'Reprendre'}
+                          style={{ background: inv.recurrence_active ? '#ede9fe' : '#f3f4f6', color: inv.recurrence_active ? '#6b21a8' : '#6b7280', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                          {inv.recurrence_active ? 'Pause' : 'Reprendre'}
+                        </button>
+                      )}
                       <button data-testid={`delete-invoice-${inv.id}`} onClick={() => handleDelete(inv.id)}
                         title="Supprimer" style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Suppr.
@@ -395,6 +458,34 @@ const InvoicesPage = () => {
               <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', textAlign: 'right' }}>
                 <span style={{ color: '#6b7280', fontSize: '14px' }}>Sous-total: </span>
                 <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal)}</span>
+              </div>
+
+              {/* Recurrence */}
+              <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: '10px', padding: '16px', marginBottom: '20px' }}>
+                <label style={{ ...labelStyle, color: '#6b21a8' }}>Facturation récurrente</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div>
+                    <label style={{ ...labelStyle, fontSize: '12px' }}>Fréquence</label>
+                    <select data-testid="invoice-recurrence" value={formData.recurrence}
+                      onChange={e => setFormData(prev => ({ ...prev, recurrence: e.target.value }))} style={inputStyle}>
+                      {Object.entries(RECURRENCE_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                  </div>
+                  {formData.recurrence !== 'none' && (
+                    <div>
+                      <label style={{ ...labelStyle, fontSize: '12px' }}>Premier envoi automatique</label>
+                      <input data-testid="invoice-next-send" type="date" value={formData.next_send_date}
+                        onChange={e => setFormData(prev => ({ ...prev, next_send_date: e.target.value }))}
+                        required style={inputStyle} />
+                    </div>
+                  )}
+                </div>
+                {formData.recurrence !== 'none' && (
+                  <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#7c3aed' }}>
+                    La facture sera envoyée automatiquement par email à la date prévue, puis répétée {RECURRENCE_CONFIG[formData.recurrence]?.label.toLowerCase()}.
+                    Vous pouvez modifier la facture entre deux envois.
+                  </p>
+                )}
               </div>
 
               <div style={{ marginBottom: '24px' }}>
