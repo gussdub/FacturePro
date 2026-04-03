@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { BACKEND_URL, FACTUREPRO_LOGO_FILE_ID } from '../config';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
-import { Zap, RefreshCw, Shield } from 'lucide-react';
 
 const factureProLogoUrl = `${BACKEND_URL}/api/files/${FACTUREPRO_LOGO_FILE_ID}`;
 
@@ -37,188 +36,168 @@ const LoginPage = () => {
     setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const inputStyle = {
-    width: '100%', height: '44px', fontSize: '14px', padding: '10px 14px',
-    border: '1px solid #e4e4e7', borderRadius: '6px', boxSizing: 'border-box',
-    outline: 'none', transition: 'border-color 0.15s ease',
-    fontFamily: "'IBM Plex Sans', sans-serif"
-  };
-
-  const features = [
-    { icon: Zap, title: 'Facturation instantanee', desc: 'Creez et envoyez vos factures en quelques clics' },
-    { icon: RefreshCw, title: 'Recurrence automatique', desc: 'Programmez vos factures recurrentes' },
-    { icon: Shield, title: 'Securise et conforme', desc: 'Taxes canadiennes calculees automatiquement' }
-  ];
-
   return (
     <div style={{
-      minHeight: '100vh', display: 'flex',
-      fontFamily: "'IBM Plex Sans', -apple-system, sans-serif"
+      minHeight: '100vh', background: 'linear-gradient(to-br, #f0fdfa, #ccfbf1, #d1fae5)',
+      display: 'flex', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
-      {/* Left Panel */}
+      {/* Left Hero Section */}
       <div style={{
-        width: '50%', background: '#09090b',
-        display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '60px 64px',
-        position: 'relative'
+        width: '50%', background: 'linear-gradient(135deg, #00A08C, #47D2A7)',
+        position: 'relative', overflow: 'hidden', display: 'flex',
+        flexDirection: 'column', justifyContent: 'center', padding: '60px'
       }}>
-        <div style={{ position: 'relative', zIndex: 10 }}>
-          <div style={{ marginBottom: '40px' }}>
-            <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '48px', height: '48px', objectFit: 'contain', marginBottom: '32px', borderRadius: '8px' }} />
-            <h1 style={{ fontSize: '48px', fontWeight: '700', lineHeight: '1.05', margin: '0 0 16px', color: '#ffffff', letterSpacing: '-0.04em' }}>
-              Simplifiez votre facturation
+        <div style={{ position: 'absolute', top: '80px', left: '80px', width: '288px', height: '288px', background: 'rgba(255,255,255,0.1)', borderRadius: '50%', filter: 'blur(48px)' }} />
+        <div style={{ position: 'absolute', bottom: '80px', right: '80px', width: '384px', height: '384px', background: 'rgba(71,210,167,0.2)', borderRadius: '50%', filter: 'blur(48px)' }} />
+
+        <div style={{ position: 'relative', zIndex: 10, color: 'white' }}>
+          <div style={{ marginBottom: '32px' }}>
+            <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '64px', height: '64px', objectFit: 'contain', marginBottom: '24px', borderRadius: '12px' }} />
+            <h1 style={{ fontSize: '80px', fontWeight: 'bold', lineHeight: '1.1', margin: 0 }}>
+              Simplifiez votre
+              <span style={{ display: 'block', color: '#a7f3d0' }}>facturation</span>
             </h1>
-            <p style={{ fontSize: '16px', color: '#a1a1aa', lineHeight: '1.7', margin: 0, maxWidth: '440px' }}>
-              Gerez vos factures, devis et clients en toute simplicite avec notre solution complete pour entreprises canadiennes.
+            <p style={{ fontSize: '20px', color: 'rgba(255,255,255,0.8)', lineHeight: '1.6', margin: 0 }}>
+              Gerez vos factures, devis et clients en toute simplicite avec notre solution complete et intuitive.
             </p>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {features.map((feature, i) => {
-              const Icon = feature.icon;
-              return (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: '14px',
-                  background: 'rgba(255,255,255,0.05)', padding: '14px 18px',
-                  borderRadius: '6px', border: '1px solid rgba(255,255,255,0.08)'
-                }}>
-                  <Icon size={20} strokeWidth={1.5} color="#a1a1aa" />
-                  <div>
-                    <div style={{ fontWeight: '600', fontSize: '14px', color: '#ffffff' }}>{feature.title}</div>
-                    <div style={{ fontSize: '12px', color: '#71717a' }}>{feature.desc}</div>
-                  </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {[
+              { icon: '⚡', title: 'Facturation instantanee', desc: 'Creez et envoyez vos factures en quelques clics' },
+              { icon: '🔄', title: 'Recurrence automatique', desc: 'Programmez vos factures recurrentes' },
+              { icon: '🛡️', title: 'Securise et conforme', desc: 'Taxes canadiennes calculees automatiquement' }
+            ].map((feature, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: '16px',
+                background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
+                borderRadius: '12px', backdropFilter: 'blur(10px)'
+              }}>
+                <div style={{ fontSize: '28px' }}>{feature.icon}</div>
+                <div>
+                  <div style={{ fontWeight: '600', fontSize: '18px' }}>{feature.title}</div>
+                  <div style={{ fontSize: '14px', opacity: 0.9 }}>{feature.desc}</div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
-        </div>
-
-        {/* Subtle decoration */}
-        <div style={{ position: 'absolute', bottom: '32px', left: '64px', fontSize: '12px', color: '#3f3f46' }}>
-          FacturePro &copy; 2026
         </div>
       </div>
 
-      {/* Right Panel - Form */}
-      <div style={{ width: '50%', background: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
-        <div style={{ width: '100%', maxWidth: '400px' }}>
-          <div style={{ marginBottom: '32px' }}>
-            <h2 style={{ fontSize: '24px', fontWeight: '700', color: '#09090b', margin: '0 0 6px', letterSpacing: '-0.03em' }}>
+      {/* Right side - Form */}
+      <div style={{ width: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
+        <div style={{ width: '100%', maxWidth: '460px' }}>
+          <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '88px', height: '88px', borderRadius: '24px', marginBottom: '24px', overflow: 'hidden' }}>
+              <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '88px', height: '88px', objectFit: 'contain', borderRadius: '24px' }} />
+            </div>
+            <h1 style={{ fontSize: '36px', fontWeight: '800', color: '#1e293b', margin: '0 0 8px 0' }}>FacturePro</h1>
+            <h2 style={{ fontSize: '22px', fontWeight: '600', color: '#475569', margin: '0 0 8px 0' }}>
               {isLogin ? 'Connexion' : 'Creer un compte'}
             </h2>
-            <p style={{ color: '#a1a1aa', margin: 0, fontSize: '14px' }}>
-              {isLogin ? 'Accedez a votre tableau de bord' : 'Demarrez votre essai gratuit de 14 jours'}
+            <p style={{ color: '#64748b', margin: 0, fontSize: '16px' }}>
+              {isLogin ? 'Accedez a votre tableau de bord' : 'Demarrez votre essai gratuit aujourd\'hui'}
             </p>
           </div>
 
-          {error && (
-            <div style={{
-              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px',
-              padding: '12px 14px', marginBottom: '20px', color: '#dc2626', fontSize: '13px'
-            }}>{error}</div>
-          )}
+          <div style={{
+            background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)',
+            padding: '32px', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)', border: 'none'
+          }}>
+            {error && (
+              <div style={{
+                background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px',
+                padding: '16px', marginBottom: '24px', color: '#b91c1c', fontSize: '14px'
+              }}>{error}</div>
+            )}
 
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-            {!isLogin && (
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+              {!isLogin && (
+                <div>
+                  <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>
+                    Nom de l'entreprise *
+                  </label>
+                  <input type="text" name="companyName" value={formData.companyName} onChange={handleChange}
+                    placeholder="Mon Entreprise" required data-testid="register-company-input"
+                    style={{ width: '100%', height: '48px', fontSize: '16px', padding: '12px 16px', border: '1px solid #d1d5db', borderRadius: '12px', boxSizing: 'border-box' }} />
+                </div>
+              )}
+
               <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#52525b', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Nom de l'entreprise
-                </label>
-                <input type="text" name="companyName" value={formData.companyName} onChange={handleChange}
-                  placeholder="Mon Entreprise" required data-testid="register-company-input"
-                  style={inputStyle}
-                  onFocus={e => e.target.style.borderColor = '#09090b'}
-                  onBlur={e => e.target.style.borderColor = '#e4e4e7'}
-                />
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Adresse email *</label>
+                <input type="email" name="email" value={formData.email} onChange={handleChange}
+                  placeholder="votre@email.com" required data-testid="login-email-input"
+                  style={{ width: '100%', height: '48px', fontSize: '16px', padding: '12px 16px', border: '1px solid #d1d5db', borderRadius: '12px', boxSizing: 'border-box' }} />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '14px', fontWeight: '600', color: '#374151', marginBottom: '8px' }}>Mot de passe *</label>
+                <div style={{ position: 'relative' }}>
+                  <input type={showPassword ? "text" : "password"} name="password" value={formData.password}
+                    onChange={handleChange} placeholder="••••••••••" required data-testid="login-password-input"
+                    style={{ width: '100%', height: '48px', fontSize: '16px', padding: '12px 52px 12px 16px', border: '1px solid #d1d5db', borderRadius: '12px', boxSizing: 'border-box' }} />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} style={{
+                    position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: '20px'
+                  }}>
+                    {showPassword ? (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="m2 2 20 20"/>
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                      </svg>
+                    ) : (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <button type="submit" disabled={loading} data-testid="login-submit-btn" style={{
+                width: '100%', height: '48px', fontSize: '16px', fontWeight: '700',
+                background: loading ? '#94a3b8' : 'linear-gradient(135deg, #00A08C 0%, #47D2A7 100%)',
+                color: 'white', border: 'none', borderRadius: '12px',
+                cursor: loading ? 'not-allowed' : 'pointer', boxShadow: '0 10px 25px rgba(0,160,140,0.4)'
+              }}>
+                {loading ? 'Chargement...' : (isLogin ? 'Se connecter' : 'Creer mon compte')}
+              </button>
+            </form>
+
+            {isLogin && (
+              <div style={{ marginTop: '16px', textAlign: 'center' }}>
+                <button type="button" onClick={() => setShowForgotPassword(true)} data-testid="forgot-password-btn" style={{
+                  background: 'none', border: 'none', color: '#00A08C', fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
+                }}>
+                  Mot de passe oublie ?
+                </button>
               </div>
             )}
 
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#52525b', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Adresse email
-              </label>
-              <input type="email" name="email" value={formData.email} onChange={handleChange}
-                placeholder="votre@email.com" required data-testid="login-email-input"
-                style={inputStyle}
-                onFocus={e => e.target.style.borderColor = '#09090b'}
-                onBlur={e => e.target.style.borderColor = '#e4e4e7'}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#52525b', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Mot de passe
-              </label>
-              <div style={{ position: 'relative' }}>
-                <input type={showPassword ? "text" : "password"} name="password" value={formData.password}
-                  onChange={handleChange} placeholder="••••••••" required data-testid="login-password-input"
-                  style={{ ...inputStyle, paddingRight: '44px' }}
-                  onFocus={e => e.target.style.borderColor = '#09090b'}
-                  onBlur={e => e.target.style.borderColor = '#e4e4e7'}
-                />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} style={{
-                  position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)',
-                  background: 'none', border: 'none', cursor: 'pointer', color: '#a1a1aa', padding: '4px',
-                  display: 'flex', alignItems: 'center'
-                }}>
-                  {showPassword ? (
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="m2 2 20 20"/>
-                      <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/>
-                      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/>
-                    </svg>
-                  ) : (
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <button type="submit" disabled={loading} data-testid="login-submit-btn" style={{
-              width: '100%', height: '44px', fontSize: '14px', fontWeight: '600',
-              background: loading ? '#a1a1aa' : '#09090b',
-              color: '#ffffff', border: 'none', borderRadius: '6px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              transition: 'all 0.15s ease', marginTop: '4px'
-            }}
-            onMouseEnter={e => { if (!loading) e.target.style.background = '#27272a'; }}
-            onMouseLeave={e => { if (!loading) e.target.style.background = '#09090b'; }}
-            >
-              {loading ? 'Chargement...' : (isLogin ? 'Se connecter' : 'Creer mon compte')}
-            </button>
-          </form>
-
-          {isLogin && (
-            <div style={{ marginTop: '14px', textAlign: 'center' }}>
-              <button type="button" onClick={() => setShowForgotPassword(true)} data-testid="forgot-password-btn" style={{
-                background: 'none', border: 'none', color: '#a1a1aa', fontSize: '13px', cursor: 'pointer',
-                transition: 'color 0.15s'
-              }}
-              onMouseEnter={e => e.target.style.color = '#09090b'}
-              onMouseLeave={e => e.target.style.color = '#a1a1aa'}
-              >
-                Mot de passe oublie ?
+            <div style={{ marginTop: '24px', textAlign: 'center' }}>
+              <button type="button" data-testid="toggle-auth-btn" onClick={() => {
+                setIsLogin(!isLogin); setError('');
+                setFormData({ email: '', password: '', companyName: '' });
+              }} style={{ background: 'none', border: 'none', color: '#00A08C', fontSize: '16px', fontWeight: '600', cursor: 'pointer' }}>
+                {isLogin ? "Pas encore de compte ? S'inscrire" : "Deja un compte ? Se connecter"}
               </button>
             </div>
-          )}
-
-          <div style={{ marginTop: '24px', textAlign: 'center', borderTop: '1px solid #e4e4e7', paddingTop: '20px' }}>
-            <button type="button" data-testid="toggle-auth-btn" onClick={() => {
-              setIsLogin(!isLogin); setError('');
-              setFormData({ email: '', password: '', companyName: '' });
-            }} style={{ background: 'none', border: 'none', color: '#52525b', fontSize: '13px', cursor: 'pointer' }}>
-              {isLogin ? (
-                <>Pas encore de compte ? <strong style={{ color: '#09090b' }}>S'inscrire</strong></>
-              ) : (
-                <>Deja un compte ? <strong style={{ color: '#09090b' }}>Se connecter</strong></>
-              )}
-            </button>
           </div>
+
+          {!isLogin && (
+            <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#64748b' }}>
+              En creant un compte, vous acceptez nos{' '}
+              <a href="#terms" style={{ color: '#00A08C', textDecoration: 'none' }}>conditions d'utilisation</a>{' '}
+              et notre{' '}
+              <a href="#privacy" style={{ color: '#00A08C', textDecoration: 'none' }}>politique de confidentialite</a>
+            </div>
+          )}
         </div>
       </div>
 
       {showForgotPassword && <ForgotPasswordModal onClose={() => setShowForgotPassword(false)} />}
+
+      <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };
