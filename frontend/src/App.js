@@ -11,12 +11,13 @@ import EmployeesPage from './pages/EmployeesPage';
 import ExpensesPage from './pages/ExpensesPage';
 import ExportPage from './pages/ExportPage';
 import SettingsPage from './pages/SettingsPage';
+import SubscriptionPage from './pages/SubscriptionPage';
 
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
     window.location.pathname === '/' ? '/dashboard' : window.location.pathname
   );
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
 
   useEffect(() => {
     const handlePopState = () => {
@@ -35,7 +36,23 @@ function App() {
     return <LoginPage />;
   }
 
+  // Subscription gating: if expired, only allow subscription page and settings
+  const subStatus = user?.subscription_status;
+  const needsSubscription = subStatus === 'expired';
+  const allowedWhenExpired = ['/subscription', '/settings'];
+
+  if (needsSubscription && !allowedWhenExpired.includes(currentRoute)) {
+    // Redirect to subscription page
+    if (currentRoute !== '/subscription') {
+      window.history.replaceState({}, '', '/subscription');
+      setCurrentRoute('/subscription');
+    }
+  }
+
   const renderPage = () => {
+    if (needsSubscription && !allowedWhenExpired.includes(currentRoute)) {
+      return <SubscriptionPage />;
+    }
     switch (currentRoute) {
       case '/clients': return <ClientsPage />;
       case '/products': return <ProductsPage />;
@@ -45,12 +62,13 @@ function App() {
       case '/expenses': return <ExpensesPage />;
       case '/export': return <ExportPage />;
       case '/settings': return <SettingsPage />;
+      case '/subscription': return <SubscriptionPage />;
       default: return <Dashboard navigate={navigate} />;
     }
   };
 
   return (
-    <Layout currentRoute={currentRoute} navigate={navigate}>
+    <Layout currentRoute={currentRoute} navigate={navigate} needsSubscription={needsSubscription}>
       {renderPage()}
     </Layout>
   );

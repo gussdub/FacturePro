@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pymongo import MongoClient
@@ -32,6 +33,8 @@ JWT_SECRET = os.environ.get('JWT_SECRET')
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
+STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+SUBSCRIPTION_PRICE_CAD = 15.00
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -177,7 +180,25 @@ def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Dep
 
 @app.get("/api/auth/me")
 def get_me(current_user: User = Depends(get_current_user_with_access)):
-    return {"id": current_user.id, "email": current_user.email, "company_name": current_user.company_name}
+    user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0})
+    sub_status = user_doc.get("subscription_status", "trial")
+    trial_end = user_doc.get("trial_end_date")
+    is_exempt = user_doc.get("email") in EXEMPT_USERS
+    if sub_status == "trial" and trial_end and not is_exempt:
+        try:
+            trial_end_dt = datetime.fromisoformat(trial_end)
+            if datetime.now(timezone.utc) > trial_end_dt:
+                sub_status = "expired"
+        except Exception:
+            pass
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "company_name": current_user.company_name,
+        "subscription_status": "active" if is_exempt else sub_status,
+        "trial_end_date": trial_end,
+        "is_exempt": is_exempt
+    }
 
 # ─── Health ───
 @app.get("/")
@@ -1362,6 +1383,135 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: User = Depends
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
 
 
+# ─── Stripe Subscription ───
+@app.get("/api/subscription/current")
+def get_subscription(current_user: User = Depends(get_current_user_with_access)):
+    user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0})
+    sub_status = user_doc.get("subscription_status", "trial")
+    trial_end = user_doc.get("trial_end_date")
+    is_exempt = user_doc.get("email") in EXEMPT_USERS
+    if sub_status == "trial" and trial_end and not is_exempt:
+        try:
+            trial_end_dt = datetime.fromisoformat(trial_end)
+            if datetime.now(timezone.utc) > trial_end_dt:
+                sub_status = "expired"
+        except Exception:
+            pass
+    last_tx = db.payment_transactions.find_one(
+        {"user_id": current_user.id, "payment_status": "paid"},
+        {"_id": 0},
+        sort=[("created_at", -1)]
+    )
+    return {
+        "subscription_status": "active" if is_exempt else sub_status,
+        "trial_end_date": trial_end,
+        "is_exempt": is_exempt,
+        "last_payment": last_tx
+    }
+
+
+@app.post("/api/subscription/create-checkout")
+async def create_subscription_checkout(body: dict, request: Request, current_user: User = Depends(get_current_user_with_access)):
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe non configure")
+    origin_url = body.get("origin_url", "")
+    if not origin_url:
+        raise HTTPException(400, "origin_url requis")
+    success_url = f"{origin_url}/subscription?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin_url}/subscription"
+    host_url = str(request.base_url)
+    webhook_url = f"{host_url}api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    checkout_request = CheckoutSessionRequest(
+        amount=SUBSCRIPTION_PRICE_CAD,
+        currency="cad",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "user_id": current_user.id,
+            "email": current_user.email,
+            "plan": "facturepro_monthly"
+        }
+    )
+    session = await stripe_checkout.create_checkout_session(checkout_request)
+    tx_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "session_id": session.session_id,
+        "amount": SUBSCRIPTION_PRICE_CAD,
+        "currency": "cad",
+        "payment_status": "pending",
+        "status": "initiated",
+        "metadata": {"plan": "facturepro_monthly", "email": current_user.email},
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    db.payment_transactions.insert_one(tx_doc)
+    return {"url": session.url, "session_id": session.session_id}
+
+
+@app.get("/api/subscription/checkout-status/{session_id}")
+async def check_subscription_status(session_id: str, request: Request, current_user: User = Depends(get_current_user_with_access)):
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe non configure")
+    host_url = str(request.base_url)
+    webhook_url = f"{host_url}api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    checkout_status = await stripe_checkout.get_checkout_status(session_id)
+    tx = db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if tx and tx.get("payment_status") != "paid" and checkout_status.payment_status == "paid":
+        db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "payment_status": "paid",
+                "status": "complete",
+                "paid_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        db.users.update_one(
+            {"id": current_user.id},
+            {"$set": {
+                "subscription_status": "active",
+                "subscription_started_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+    return {
+        "status": checkout_status.status,
+        "payment_status": checkout_status.payment_status,
+        "amount_total": checkout_status.amount_total,
+        "currency": checkout_status.currency
+    }
+
+
+@app.post("/api/webhook/stripe")
+async def stripe_webhook(request: Request):
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe non configure")
+    body = await request.body()
+    sig = request.headers.get("Stripe-Signature", "")
+    host_url = str(request.base_url)
+    webhook_url = f"{host_url}api/webhook/stripe"
+    try:
+        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+        event = await stripe_checkout.handle_webhook(body, sig)
+        if event.payment_status == "paid":
+            tx = db.payment_transactions.find_one({"session_id": event.session_id}, {"_id": 0})
+            if tx and tx.get("payment_status") != "paid":
+                db.payment_transactions.update_one(
+                    {"session_id": event.session_id},
+                    {"$set": {"payment_status": "paid", "status": "complete", "paid_at": datetime.now(timezone.utc).isoformat()}}
+                )
+                user_id = tx.get("user_id") or (event.metadata or {}).get("user_id")
+                if user_id:
+                    db.users.update_one(
+                        {"id": user_id},
+                        {"$set": {"subscription_status": "active", "subscription_started_at": datetime.now(timezone.utc).isoformat()}}
+                    )
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
@@ -1381,6 +1531,8 @@ def seed_data():
         db.expenses.create_index([("user_id", 1)])
         db.company_settings.create_index("user_id", unique=True)
         db.files.create_index("id", unique=True)
+        db.payment_transactions.create_index("session_id", unique=True)
+        db.payment_transactions.create_index([("user_id", 1)])
         print("Database indexes created")
 
         try:

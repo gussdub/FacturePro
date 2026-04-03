@@ -13,7 +13,7 @@ const getImageUrl = (url) => {
 
 const factureProLogoUrl = `${BACKEND_URL}/api/files/${FACTUREPRO_LOGO_FILE_ID}`;
 
-const Layout = ({ currentRoute, navigate, children }) => {
+const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -41,6 +41,7 @@ const Layout = ({ currentRoute, navigate, children }) => {
     { name: 'Depenses', href: '/expenses', icon: '💳', current: currentRoute === '/expenses' },
     { name: 'Exports', href: '/export', icon: '📊', current: currentRoute === '/export' },
     { name: 'Parametres', href: '/settings', icon: '⚙️', current: currentRoute === '/settings' },
+    { name: 'Abonnement', href: '/subscription', icon: '💎', current: currentRoute === '/subscription' },
   ];
 
   return (
@@ -188,6 +189,34 @@ const Layout = ({ currentRoute, navigate, children }) => {
 
         {/* Page Content */}
         <main style={{ padding: '24px', flex: 1 }}>
+          {needsSubscription && currentRoute !== '/subscription' && (
+            <div data-testid="subscription-expired-banner" style={{
+              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px',
+              padding: '16px 24px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+            }}>
+              <span style={{ color: '#991b1b', fontWeight: '600', fontSize: '14px' }}>
+                Votre essai gratuit a expire. Abonnez-vous pour continuer.
+              </span>
+              <button onClick={() => navigate('/subscription')} style={{
+                background: '#00A08C', color: 'white', border: 'none', borderRadius: '8px',
+                padding: '8px 20px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'
+              }}>S'abonner</button>
+            </div>
+          )}
+          {user?.subscription_status === 'trial' && !user?.is_exempt && currentRoute !== '/subscription' && (
+            <div data-testid="trial-banner" style={{
+              background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '12px',
+              padding: '12px 24px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+            }}>
+              <span style={{ color: '#92400e', fontSize: '13px' }}>
+                Essai gratuit — Profitez de toutes les fonctionnalites gratuitement pendant votre periode d'essai.
+              </span>
+              <button onClick={() => navigate('/subscription')} style={{
+                background: 'transparent', color: '#92400e', border: '1px solid #f59e0b', borderRadius: '8px',
+                padding: '6px 16px', fontWeight: '600', cursor: 'pointer', fontSize: '12px'
+              }}>Voir les plans</button>
+            </div>
+          )}
           <div style={{ maxWidth: '1400px', margin: '0 auto' }}>{children}</div>
         </main>
       </div>
