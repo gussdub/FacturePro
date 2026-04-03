@@ -770,6 +770,37 @@ def import_csv_confirm(import_data: dict, current_user: User = Depends(get_curre
         created += 1
     return {"message": f"{created} depense(s) importee(s)", "created": created}
 
+@app.get("/api/dashboard/expense-analytics")
+def get_expense_analytics(current_user: User = Depends(get_current_user_with_access)):
+    expenses = list(db.expenses.find({"user_id": current_user.id}, {"_id": 0}))
+    by_category = {}
+    by_month = {}
+    for exp in expenses:
+        cat = exp.get("category", "").strip() or "Non classé"
+        amt = float(exp.get("amount", 0))
+        by_category[cat] = round(by_category.get(cat, 0) + amt, 2)
+        raw_date = exp.get("expense_date", "")
+        if isinstance(raw_date, datetime):
+            month_key = raw_date.strftime("%Y-%m")
+        else:
+            month_key = str(raw_date)[:7] if raw_date else ""
+        if month_key:
+            if month_key not in by_month:
+                by_month[month_key] = {}
+            by_month[month_key][cat] = round(by_month[month_key].get(cat, 0) + amt, 2)
+    categories_chart = sorted([{"name": k, "value": v} for k, v in by_category.items()], key=lambda x: -x["value"])
+    months_sorted = sorted(by_month.keys())
+    all_cats = sorted(by_category.keys())
+    monthly_chart = []
+    for m in months_sorted:
+        entry = {"month": m}
+        for cat in all_cats:
+            entry[cat] = by_month[m].get(cat, 0)
+        entry["total"] = round(sum(by_month[m].values()), 2)
+        monthly_chart.append(entry)
+    total = round(sum(by_category.values()), 2)
+    return {"by_category": categories_chart, "by_month": monthly_chart, "categories": all_cats, "total": total}
+
 # ─── Settings ───
 @app.get("/api/settings/company")
 def get_settings(current_user: User = Depends(get_current_user_with_access)):
