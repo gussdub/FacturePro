@@ -3,6 +3,11 @@ import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { BACKEND_URL, FACTUREPRO_LOGO_FILE_ID } from '../config';
 import NotificationsDropdown from './NotificationsDropdown';
+import {
+  LayoutDashboard, Users, Package, FileText, FilePen,
+  UserCheck, Receipt, Download, Settings, Gem,
+  LogOut, Search, Bell, ChevronRight
+} from 'lucide-react';
 
 const getImageUrl = (url) => {
   if (!url) return null;
@@ -15,7 +20,6 @@ const factureProLogoUrl = `${BACKEND_URL}/api/files/${FACTUREPRO_LOGO_FILE_ID}`;
 
 const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   const { user, logout } = useAuth();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settings, setSettings] = useState(null);
 
@@ -32,202 +36,212 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   }, []);
 
   const navigation = [
-    { name: 'Tableau de bord', href: '/dashboard', icon: '📊', current: currentRoute === '/dashboard' },
-    { name: 'Clients', href: '/clients', icon: '👥', current: currentRoute === '/clients' },
-    { name: 'Produits', href: '/products', icon: '📦', current: currentRoute === '/products' },
-    { name: 'Factures', href: '/invoices', icon: '📄', current: currentRoute === '/invoices' },
-    { name: 'Soumissions', href: '/quotes', icon: '📝', current: currentRoute === '/quotes' },
-    { name: 'Employes', href: '/employees', icon: '👨‍💼', current: currentRoute === '/employees' },
-    { name: 'Depenses', href: '/expenses', icon: '💳', current: currentRoute === '/expenses' },
-    { name: 'Exports', href: '/export', icon: '📊', current: currentRoute === '/export' },
-    { name: 'Parametres', href: '/settings', icon: '⚙️', current: currentRoute === '/settings' },
-    { name: 'Abonnement', href: '/subscription', icon: '💎', current: currentRoute === '/subscription' },
+    { name: 'Tableau de bord', href: '/dashboard', icon: LayoutDashboard, current: currentRoute === '/dashboard' },
+    { name: 'Clients', href: '/clients', icon: Users, current: currentRoute === '/clients' },
+    { name: 'Produits', href: '/products', icon: Package, current: currentRoute === '/products' },
+    { name: 'Factures', href: '/invoices', icon: FileText, current: currentRoute === '/invoices' },
+    { name: 'Soumissions', href: '/quotes', icon: FilePen, current: currentRoute === '/quotes' },
+    { name: 'Employes', href: '/employees', icon: UserCheck, current: currentRoute === '/employees' },
+    { name: 'Depenses', href: '/expenses', icon: Receipt, current: currentRoute === '/expenses' },
+    { name: 'Exports', href: '/export', icon: Download, current: currentRoute === '/export' },
+    { name: 'Parametres', href: '/settings', icon: Settings, current: currentRoute === '/settings' },
+    { name: 'Abonnement', href: '/subscription', icon: Gem, current: currentRoute === '/subscription' },
   ];
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#f4f4f5' }}>
       {/* Sidebar */}
       <aside style={{
-        width: '280px',
-        background: 'linear-gradient(180deg, #1e293b 0%, #334155 100%)',
-        boxShadow: '4px 0 6px -1px rgba(0, 0, 0, 0.1)',
-        display: 'flex', flexDirection: 'column'
+        width: '260px',
+        background: '#fafafa',
+        borderRight: '1px solid #e4e4e7',
+        display: 'flex', flexDirection: 'column',
+        flexShrink: 0
       }}>
         {/* Logo Section */}
-        <div style={{ padding: '24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '12px' }} />
+        <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid #e4e4e7' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: '36px', height: '36px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: '#fff', border: '1px solid #e4e4e7' }}>
+              <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '36px', height: '36px', objectFit: 'contain' }} />
             </div>
             <div>
-              <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
-              <div style={{ color: '#94a3b8', fontSize: '12px' }}>Solution complete</div>
+              <div style={{ color: '#09090b', fontSize: '16px', fontWeight: '700', letterSpacing: '-0.02em' }}>FacturePro</div>
+              <div style={{ color: '#a1a1aa', fontSize: '11px', fontWeight: '500', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Facturation</div>
             </div>
           </div>
         </div>
 
         {/* Navigation Menu */}
-        <nav style={{ padding: '0 16px', flex: 1 }}>
-          {navigation.map((item) => (
-            <button
-              key={item.name}
-              data-testid={`nav-${item.href.replace('/', '')}`}
-              onClick={() => navigate(item.href)}
-              style={{
-                display: 'flex', alignItems: 'center', width: '100%',
-                padding: '14px 16px', margin: '4px 0',
-                background: item.current ? 'rgba(0, 160, 140, 0.2)' : 'transparent',
-                color: item.current ? '#47D2A7' : '#cbd5e1',
-                border: 'none', borderRadius: '10px', cursor: 'pointer',
-                fontSize: '15px', fontWeight: '600', transition: 'all 0.3s ease', textAlign: 'left'
-              }}
-              onMouseEnter={(e) => { if (!item.current) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
-              onMouseLeave={(e) => { if (!item.current) e.currentTarget.style.background = 'transparent'; }}
-            >
-              <span style={{ marginRight: '14px', fontSize: '18px', filter: item.current ? 'none' : 'grayscale(1)' }}>
-                {item.icon}
-              </span>
-              {item.name}
-            </button>
-          ))}
+        <nav style={{ padding: '12px 10px', flex: 1, overflow: 'auto' }}>
+          {navigation.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.name}
+                data-testid={`nav-${item.href.replace('/', '')}`}
+                onClick={() => navigate(item.href)}
+                style={{
+                  display: 'flex', alignItems: 'center', width: '100%',
+                  padding: '9px 12px', margin: '1px 0',
+                  background: item.current ? '#09090b' : 'transparent',
+                  color: item.current ? '#ffffff' : '#52525b',
+                  border: 'none', borderRadius: '6px', cursor: 'pointer',
+                  fontSize: '13px', fontWeight: item.current ? '600' : '500',
+                  transition: 'all 0.15s ease', textAlign: 'left',
+                  letterSpacing: '-0.01em'
+                }}
+                onMouseEnter={(e) => { if (!item.current) { e.currentTarget.style.background = '#f4f4f5'; e.currentTarget.style.color = '#09090b'; } }}
+                onMouseLeave={(e) => { if (!item.current) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#52525b'; } }}
+              >
+                <Icon size={17} strokeWidth={1.8} style={{ marginRight: '10px', flexShrink: 0 }} />
+                {item.name}
+                {item.current && <ChevronRight size={14} style={{ marginLeft: 'auto', opacity: 0.5 }} />}
+              </button>
+            );
+          })}
         </nav>
 
         {/* User Section */}
-        <div style={{ padding: '20px', borderTop: '1px solid #334155' }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '16px' }}>
+        <div style={{ padding: '16px', borderTop: '1px solid #e4e4e7' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
             <div style={{
-              width: '40px', height: '40px',
-              background: settings?.logo_url ? 'white' : '#00A08C',
-              borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '12px',
-              overflow: 'hidden', border: settings?.logo_url ? '1px solid #475569' : 'none'
+              width: '32px', height: '32px',
+              background: settings?.logo_url ? '#fff' : '#09090b',
+              borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '10px',
+              overflow: 'hidden', border: '1px solid #e4e4e7', flexShrink: 0
             }}>
               {getImageUrl(settings?.logo_url) ? (
-                <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
+                <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
               ) : (
-                <span style={{ color: 'white', fontSize: '16px', fontWeight: '700' }}>
+                <span style={{ color: '#fff', fontSize: '13px', fontWeight: '700' }}>
                   {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
                 </span>
               )}
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: 'white', fontSize: '14px', fontWeight: '600' }}>{user?.company_name || 'Entreprise'}</div>
-              <div style={{ color: '#94a3b8', fontSize: '12px' }}>{user?.email}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: '#09090b', fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.company_name || 'Entreprise'}</div>
+              <div style={{ color: '#a1a1aa', fontSize: '11px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.email}</div>
             </div>
           </div>
           <button onClick={logout} data-testid="logout-btn" style={{
-            width: '100%', padding: '10px 16px', background: '#ef4444', color: 'white',
-            border: 'none', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', fontWeight: '600'
-          }}>
+            width: '100%', padding: '8px 12px', background: '#fff', color: '#dc2626',
+            border: '1px solid #e4e4e7', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+            transition: 'all 0.15s ease'
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = '#fef2f2'; e.currentTarget.style.borderColor = '#fecaca'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#e4e4e7'; }}
+          >
+            <LogOut size={14} strokeWidth={2} />
             Se deconnecter
           </button>
         </div>
       </aside>
 
       {/* Main Content Area */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Header */}
         <header style={{
-          background: 'white', padding: '16px 32px',
-          borderBottom: '1px solid #e5e7eb', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.1)'
+          background: '#ffffff', padding: '14px 28px',
+          borderBottom: '1px solid #e4e4e7'
         }}>
-          <div style={{ display: 'flex', justifyContent: 'between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ flex: 1 }}>
-              <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', margin: 0 }}>
+              <h1 style={{ fontSize: '20px', fontWeight: '700', color: '#09090b', margin: 0, letterSpacing: '-0.02em' }}>
                 {navigation.find(n => n.current)?.name || 'FacturePro'}
               </h1>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               {/* Search */}
               <div style={{ position: 'relative' }}>
                 <input type="text" placeholder="Rechercher..." style={{
-                  paddingLeft: '40px', paddingRight: '16px', paddingTop: '8px', paddingBottom: '8px',
-                  border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '14px', width: '200px'
-                }} />
-                <div style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', fontSize: '16px' }}>
-                  🔍
-                </div>
+                  paddingLeft: '34px', paddingRight: '12px', paddingTop: '7px', paddingBottom: '7px',
+                  border: '1px solid #e4e4e7', borderRadius: '6px', fontSize: '13px', width: '200px',
+                  background: '#fafafa', outline: 'none'
+                }}
+                onFocus={(e) => { e.target.style.borderColor = '#09090b'; e.target.style.background = '#fff'; }}
+                onBlur={(e) => { e.target.style.borderColor = '#e4e4e7'; e.target.style.background = '#fafafa'; }}
+                />
+                <Search size={15} strokeWidth={1.8} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#a1a1aa' }} />
               </div>
 
               {/* Notifications */}
               <div style={{ position: 'relative' }}>
-                <button onClick={() => setNotificationsOpen(!notificationsOpen)} style={{
-                  position: 'relative', background: 'none', border: 'none', padding: '8px',
-                  borderRadius: '8px', cursor: 'pointer', color: '#6b7280', fontSize: '18px'
-                }}>
-                  🔔
+                <button onClick={() => setNotificationsOpen(!notificationsOpen)} data-testid="notifications-btn" style={{
+                  position: 'relative', background: 'none', border: '1px solid #e4e4e7', padding: '7px',
+                  borderRadius: '6px', cursor: 'pointer', color: '#52525b', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#f4f4f5'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <Bell size={16} strokeWidth={1.8} />
                   <span style={{
-                    position: 'absolute', top: '6px', right: '6px', width: '8px', height: '8px',
-                    background: '#ef4444', borderRadius: '50%'
+                    position: 'absolute', top: '4px', right: '4px', width: '6px', height: '6px',
+                    background: '#dc2626', borderRadius: '50%'
                   }} />
                 </button>
                 <NotificationsDropdown isOpen={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
               </div>
 
-              {/* User Avatar */}
+              {/* User Badge */}
               <div style={{
-                display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px',
-                borderRadius: '8px', background: '#f8fafc', border: '1px solid #e2e8f0'
+                display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 12px 5px 6px',
+                borderRadius: '6px', border: '1px solid #e4e4e7'
               }}>
                 <div style={{
-                  width: '32px', height: '32px', background: settings?.logo_url ? 'white' : '#00A08C',
-                  borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  overflow: 'hidden', border: settings?.logo_url ? '1px solid #e2e8f0' : 'none'
+                  width: '26px', height: '26px', background: settings?.logo_url ? '#fff' : '#09090b',
+                  borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  overflow: 'hidden', border: settings?.logo_url ? '1px solid #e4e4e7' : 'none'
                 }}>
                   {getImageUrl(settings?.logo_url) ? (
-                    <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '32px', height: '32px', objectFit: 'contain' }} />
+                    <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '26px', height: '26px', objectFit: 'contain' }} />
                   ) : (
-                    <span style={{ color: 'white', fontSize: '14px', fontWeight: '700' }}>
+                    <span style={{ color: '#fff', fontSize: '11px', fontWeight: '700' }}>
                       {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>{user?.company_name}</div>
+                <span style={{ fontSize: '13px', fontWeight: '600', color: '#09090b' }}>{user?.company_name}</span>
               </div>
             </div>
           </div>
         </header>
 
         {/* Page Content */}
-        <main style={{ padding: '24px', flex: 1 }}>
+        <main style={{ padding: '24px 28px', flex: 1 }}>
           {needsSubscription && currentRoute !== '/subscription' && (
             <div data-testid="subscription-expired-banner" style={{
-              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '12px',
-              padding: '16px 24px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+              background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px',
+              padding: '12px 20px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
             }}>
-              <span style={{ color: '#991b1b', fontWeight: '600', fontSize: '14px' }}>
+              <span style={{ color: '#991b1b', fontWeight: '600', fontSize: '13px' }}>
                 Votre essai gratuit a expire. Abonnez-vous pour continuer.
               </span>
               <button onClick={() => navigate('/subscription')} style={{
-                background: '#00A08C', color: 'white', border: 'none', borderRadius: '8px',
-                padding: '8px 20px', fontWeight: '600', cursor: 'pointer', fontSize: '13px'
+                background: '#09090b', color: '#fff', border: 'none', borderRadius: '6px',
+                padding: '6px 16px', fontWeight: '600', cursor: 'pointer', fontSize: '12px',
+                transition: 'all 0.15s ease'
               }}>S'abonner</button>
             </div>
           )}
           {user?.subscription_status === 'trial' && !user?.is_exempt && currentRoute !== '/subscription' && (
             <div data-testid="trial-banner" style={{
-              background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '12px',
-              padding: '12px 24px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+              background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '6px',
+              padding: '10px 20px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
             }}>
-              <span style={{ color: '#92400e', fontSize: '13px' }}>
+              <span style={{ color: '#92400e', fontSize: '12px' }}>
                 Essai gratuit — Profitez de toutes les fonctionnalites gratuitement pendant votre periode d'essai.
               </span>
               <button onClick={() => navigate('/subscription')} style={{
-                background: 'transparent', color: '#92400e', border: '1px solid #f59e0b', borderRadius: '8px',
-                padding: '6px 16px', fontWeight: '600', cursor: 'pointer', fontSize: '12px'
+                background: 'transparent', color: '#92400e', border: '1px solid #f59e0b', borderRadius: '6px',
+                padding: '5px 14px', fontWeight: '600', cursor: 'pointer', fontSize: '11px'
               }}>Voir les plans</button>
             </div>
           )}
           <div style={{ maxWidth: '1400px', margin: '0 auto' }}>{children}</div>
         </main>
       </div>
-
-      {/* Mobile menu overlay */}
-      {sidebarOpen && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.6)', zIndex: 50,
-          display: window.innerWidth <= 1024 ? 'block' : 'none'
-        }} onClick={() => setSidebarOpen(false)} />
-      )}
     </div>
   );
 };

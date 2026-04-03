@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { BACKEND_URL, formatCurrency } from '../config';
+import { Check, Loader2 } from 'lucide-react';
 
 const SubscriptionPage = () => {
   const { user, refreshUser } = useAuth();
@@ -21,11 +22,8 @@ const SubscriptionPage = () => {
     }
   }, []);
 
-  useEffect(() => {
-    fetchSubscription();
-  }, [fetchSubscription]);
+  useEffect(() => { fetchSubscription(); }, [fetchSubscription]);
 
-  // Poll for checkout status if returning from Stripe
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const sessionId = params.get('session_id');
@@ -36,10 +34,7 @@ const SubscriptionPage = () => {
     const pollInterval = 2500;
 
     const poll = async () => {
-      if (attempts >= maxAttempts) {
-        setPollingStatus('timeout');
-        return;
-      }
+      if (attempts >= maxAttempts) { setPollingStatus('timeout'); return; }
       attempts++;
       setPollingStatus('polling');
       try {
@@ -48,7 +43,6 @@ const SubscriptionPage = () => {
           setPollingStatus('success');
           await fetchSubscription();
           if (refreshUser) refreshUser();
-          // Clean URL
           window.history.replaceState({}, '', '/subscription');
           return;
         }
@@ -58,9 +52,7 @@ const SubscriptionPage = () => {
           return;
         }
         setTimeout(poll, pollInterval);
-      } catch {
-        setTimeout(poll, pollInterval);
-      }
+      } catch { setTimeout(poll, pollInterval); }
     };
     poll();
   }, [fetchSubscription, refreshUser]);
@@ -71,22 +63,14 @@ const SubscriptionPage = () => {
       const res = await axios.post(`${BACKEND_URL}/api/subscription/create-checkout`, {
         origin_url: window.location.origin
       });
-      if (res.data.url) {
-        window.location.href = res.data.url;
-      }
+      if (res.data.url) window.location.href = res.data.url;
     } catch (err) {
       alert(err.response?.data?.detail || 'Erreur lors de la creation de la session de paiement');
-    } finally {
-      setCheckoutLoading(false);
-    }
+    } finally { setCheckoutLoading(false); }
   };
 
   if (loading) {
-    return (
-      <div style={{ textAlign: 'center', padding: '60px' }}>
-        <p style={{ fontSize: '18px', color: '#6b7280' }}>Chargement...</p>
-      </div>
-    );
+    return <div style={{ textAlign: 'center', padding: '60px' }}><p style={{ fontSize: '14px', color: '#a1a1aa' }}>Chargement...</p></div>;
   }
 
   const status = subscription?.subscription_status || user?.subscription_status || 'trial';
@@ -94,113 +78,91 @@ const SubscriptionPage = () => {
   const isActive = status === 'active';
   const isTrial = status === 'trial';
   const isExpired = status === 'expired';
-
-  const trialDaysLeft = trialEnd
-    ? Math.max(0, Math.ceil((new Date(trialEnd) - new Date()) / (1000 * 60 * 60 * 24)))
-    : 0;
+  const trialDaysLeft = trialEnd ? Math.max(0, Math.ceil((new Date(trialEnd) - new Date()) / (1000 * 60 * 60 * 24))) : 0;
 
   return (
-    <div data-testid="subscription-page" style={{ maxWidth: '800px', margin: '0 auto' }}>
-      {/* Polling status banner */}
+    <div data-testid="subscription-page" style={{ maxWidth: '720px', margin: '0 auto' }}>
+      {/* Polling banners */}
       {pollingStatus === 'polling' && (
         <div data-testid="payment-processing-banner" style={{
-          background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: '12px',
-          padding: '16px 24px', marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px'
+          background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '6px',
+          padding: '12px 20px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px'
         }}>
-          <div style={{ width: '24px', height: '24px', border: '3px solid #f59e0b', borderTop: '3px solid transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-          <span style={{ fontWeight: '600', color: '#92400e' }}>Verification du paiement en cours...</span>
+          <Loader2 size={16} strokeWidth={2} color="#92400e" style={{ animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontWeight: '600', color: '#92400e', fontSize: '13px' }}>Verification du paiement en cours...</span>
         </div>
       )}
       {pollingStatus === 'success' && (
         <div data-testid="payment-success-banner" style={{
-          background: '#d1fae5', border: '1px solid #10b981', borderRadius: '12px',
-          padding: '16px 24px', marginBottom: '24px', fontWeight: '600', color: '#065f46'
-        }}>
-          Paiement reussi ! Votre abonnement est maintenant actif.
-        </div>
+          background: '#f0fdf4', border: '1px solid #16a34a', borderRadius: '6px',
+          padding: '12px 20px', marginBottom: '20px', fontWeight: '600', color: '#065f46', fontSize: '13px'
+        }}>Paiement reussi ! Votre abonnement est maintenant actif.</div>
       )}
       {pollingStatus === 'timeout' && (
         <div style={{
-          background: '#fef2f2', border: '1px solid #ef4444', borderRadius: '12px',
-          padding: '16px 24px', marginBottom: '24px', fontWeight: '600', color: '#991b1b'
-        }}>
-          La verification du paiement a expire. Veuillez rafraichir la page ou contacter le support.
-        </div>
+          background: '#fef2f2', border: '1px solid #dc2626', borderRadius: '6px',
+          padding: '12px 20px', marginBottom: '20px', fontWeight: '600', color: '#991b1b', fontSize: '13px'
+        }}>La verification du paiement a expire. Veuillez rafraichir la page.</div>
       )}
 
-      {/* Current Status Card */}
+      {/* Current Status */}
       <div style={{
-        background: 'white', borderRadius: '16px', padding: '32px',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.06)', marginBottom: '32px',
-        border: isActive ? '2px solid #10b981' : isTrial ? '2px solid #f59e0b' : '2px solid #ef4444'
+        background: '#ffffff', borderRadius: '6px', padding: '24px',
+        border: `1px solid ${isActive ? '#16a34a' : isExpired ? '#dc2626' : '#e4e4e7'}`,
+        marginBottom: '24px'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <h2 style={{ fontSize: '24px', fontWeight: '800', color: '#1f2937', margin: 0 }}>
-            Votre abonnement
-          </h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#09090b', margin: 0, letterSpacing: '-0.02em' }}>Votre abonnement</h2>
           <span data-testid="subscription-status-badge" style={{
-            padding: '6px 16px', borderRadius: '20px', fontWeight: '700', fontSize: '13px',
-            background: isActive ? '#d1fae5' : isTrial ? '#fef3c7' : '#fef2f2',
-            color: isActive ? '#065f46' : isTrial ? '#92400e' : '#991b1b'
+            padding: '4px 12px', borderRadius: '4px', fontWeight: '600', fontSize: '12px',
+            background: isActive ? '#f0fdf4' : isTrial ? '#fffbeb' : '#fef2f2',
+            color: isActive ? '#16a34a' : isTrial ? '#92400e' : '#dc2626',
+            border: `1px solid ${isActive ? '#bbf7d0' : isTrial ? '#fcd34d' : '#fecaca'}`
           }}>
             {isActive ? 'Actif' : isTrial ? 'Essai gratuit' : 'Expire'}
           </span>
         </div>
 
         {isTrial && (
-          <div style={{ background: '#fffbeb', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#92400e', fontSize: '15px' }}>
-              <strong>Essai gratuit</strong> — Il vous reste <strong>{trialDaysLeft} jour{trialDaysLeft !== 1 ? 's' : ''}</strong> d'essai.
-              {trialDaysLeft <= 3 && ' Abonnez-vous pour continuer a utiliser FacturePro.'}
-            </p>
-          </div>
+          <p style={{ margin: 0, color: '#52525b', fontSize: '13px' }}>
+            Il vous reste <strong>{trialDaysLeft} jour{trialDaysLeft !== 1 ? 's' : ''}</strong> d'essai gratuit.
+            {trialDaysLeft <= 3 && ' Abonnez-vous pour continuer a utiliser FacturePro.'}
+          </p>
         )}
-
         {isExpired && (
-          <div style={{ background: '#fef2f2', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#991b1b', fontSize: '15px' }}>
-              <strong>Votre essai gratuit a expire.</strong> Abonnez-vous pour continuer a utiliser toutes les fonctionnalites de FacturePro.
-            </p>
-          </div>
+          <p style={{ margin: 0, color: '#dc2626', fontSize: '13px' }}>
+            Votre essai gratuit a expire. Abonnez-vous pour continuer a utiliser toutes les fonctionnalites.
+          </p>
         )}
-
         {isActive && (
-          <div style={{ background: '#f0fdf4', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#065f46', fontSize: '15px' }}>
-              <strong>Votre abonnement est actif.</strong> Vous avez acces a toutes les fonctionnalites de FacturePro.
-            </p>
-          </div>
+          <p style={{ margin: 0, color: '#16a34a', fontSize: '13px' }}>
+            Votre abonnement est actif. Acces complet a toutes les fonctionnalites.
+          </p>
         )}
 
         {subscription?.last_payment && (
-          <div style={{ fontSize: '14px', color: '#6b7280' }}>
+          <p style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '12px', marginBottom: 0 }}>
             Dernier paiement: {formatCurrency(subscription.last_payment.amount)} le {new Date(subscription.last_payment.paid_at || subscription.last_payment.created_at).toLocaleDateString('fr-CA')}
-          </div>
+          </p>
         )}
       </div>
 
       {/* Pricing Card */}
       {!isActive && (
         <div style={{
-          background: 'linear-gradient(135deg, #1e293b 0%, #334155 100%)',
-          borderRadius: '16px', padding: '40px', color: 'white',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.15)'
+          background: '#09090b', borderRadius: '6px', padding: '36px', color: '#ffffff'
         }}>
-          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <h3 style={{ fontSize: '28px', fontWeight: '800', margin: '0 0 8px 0' }}>
-              FacturePro Pro
-            </h3>
-            <p style={{ color: '#94a3b8', fontSize: '15px', margin: 0 }}>
-              Tout ce dont vous avez besoin pour gerer votre facturation
-            </p>
+          <div style={{ marginBottom: '28px' }}>
+            <h3 style={{ fontSize: '22px', fontWeight: '700', margin: '0 0 6px', letterSpacing: '-0.03em' }}>FacturePro Pro</h3>
+            <p style={{ color: '#71717a', fontSize: '13px', margin: 0 }}>Tout ce dont vous avez besoin pour gerer votre facturation</p>
           </div>
 
-          <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-            <span style={{ fontSize: '48px', fontWeight: '800' }}>15 $</span>
-            <span style={{ fontSize: '18px', color: '#94a3b8' }}> CAD / mois</span>
+          <div style={{ marginBottom: '28px' }}>
+            <span style={{ fontSize: '40px', fontWeight: '700', letterSpacing: '-0.04em' }}>15 $</span>
+            <span style={{ fontSize: '14px', color: '#71717a', marginLeft: '4px' }}>CAD / mois</span>
           </div>
 
-          <div style={{ marginBottom: '32px' }}>
+          <div style={{ marginBottom: '28px' }}>
             {[
               'Factures et soumissions illimitees',
               'Envoi par courriel avec PDF',
@@ -211,14 +173,9 @@ const SubscriptionPage = () => {
               'Gestion des clients et produits',
               'Parametres d\'entreprise personnalisables'
             ].map((feature, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0' }}>
-                <div style={{
-                  width: '20px', height: '20px', borderRadius: '50%', background: '#00A08C',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', flexShrink: 0
-                }}>
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                </div>
-                <span style={{ fontSize: '15px' }}>{feature}</span>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 0' }}>
+                <Check size={15} strokeWidth={2.5} color="#16a34a" />
+                <span style={{ fontSize: '13px', color: '#d4d4d8' }}>{feature}</span>
               </div>
             ))}
           </div>
@@ -228,27 +185,23 @@ const SubscriptionPage = () => {
             onClick={handleCheckout}
             disabled={checkoutLoading}
             style={{
-              width: '100%', padding: '16px', background: '#00A08C', color: 'white',
-              border: 'none', borderRadius: '12px', fontSize: '18px', fontWeight: '700',
+              width: '100%', padding: '12px', background: '#ffffff', color: '#09090b',
+              border: 'none', borderRadius: '6px', fontSize: '14px', fontWeight: '700',
               cursor: checkoutLoading ? 'not-allowed' : 'pointer',
               opacity: checkoutLoading ? 0.7 : 1,
-              transition: 'all 0.3s ease'
+              transition: 'all 0.15s ease'
             }}
           >
             {checkoutLoading ? 'Redirection vers Stripe...' : 'S\'abonner maintenant — 15 $/mois'}
           </button>
 
-          <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', marginTop: '16px' }}>
+          <p style={{ textAlign: 'center', color: '#52525b', fontSize: '11px', marginTop: '14px', marginBottom: 0 }}>
             Paiement securise via Stripe. Annulez a tout moment.
           </p>
         </div>
       )}
 
-      <style>{`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };
