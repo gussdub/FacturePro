@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
+import CurrencySelector from '../components/CurrencySelector';
 
 const STATUS_CONFIG = {
   pending:   { label: 'En attente', bg: '#fef3c7', color: '#92400e', icon: '⏳' },
@@ -28,7 +29,8 @@ const QuotesPage = () => {
 
   const defaultForm = () => ({
     client_id: '', quote_number: '', valid_until: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-    items: [], province: 'QC', notes: ''
+    items: [], province: 'QC', notes: '',
+    currency: 'CAD', exchange_rate_to_cad: 1.0
   });
   const [formData, setFormData] = useState(defaultForm());
 
@@ -111,7 +113,9 @@ const QuotesPage = () => {
         unit_price: it.unit_price || 0
       })) : [],
       province: quote.province || 'QC',
-      notes: quote.notes || ''
+      notes: quote.notes || '',
+      currency: quote.currency || 'CAD',
+      exchange_rate_to_cad: quote.exchange_rate_to_cad || 1.0
     });
     setSelectedProduct('');
     setShowForm(true);
@@ -266,12 +270,15 @@ const QuotesPage = () => {
                     </p>
                     {q.items && q.items.length > 0 && (
                       <p style={{ margin: '4px 0 0', color: '#9ca3af', fontSize: '12px' }}>
-                        {q.items.length} article(s) — Sous-total: {formatCurrency(q.subtotal)}
+                        {q.items.length} article(s) — Sous-total: {formatCurrency(q.subtotal, q.currency)}
                       </p>
                     )}
                   </div>
                   <div style={{ textAlign: 'right', minWidth: '140px' }}>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '8px' }}>{formatCurrency(q.total)}</div>
+                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '4px' }}>{formatCurrency(q.total, q.currency)}</div>
+                    {q.currency && q.currency !== 'CAD' && q.total_cad && (
+                      <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>= {formatCurrency(q.total_cad, 'CAD')}</div>
+                    )}
                     <select data-testid={`quote-status-select-${q.id}`} value={q.status || 'pending'}
                       onChange={e => handleStatusChange(q.id, e.target.value)}
                       style={{ ...inputStyle, width: 'auto', fontSize: '12px', padding: '4px 8px', marginBottom: '8px' }}>
@@ -351,6 +358,16 @@ const QuotesPage = () => {
                 </div>
               </div>
 
+              {/* Currency selector */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>Devise</label>
+                <CurrencySelector
+                  currency={formData.currency}
+                  amount={formSubtotal}
+                  onChange={(cur, rate) => setFormData(prev => ({ ...prev, currency: cur, exchange_rate_to_cad: rate }))}
+                />
+              </div>
+
               {/* Product catalog dropdown */}
               {products.length > 0 && (
                 <div style={{ marginBottom: '20px' }}>
@@ -409,7 +426,12 @@ const QuotesPage = () => {
 
               <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', textAlign: 'right' }}>
                 <span style={{ color: '#6b7280', fontSize: '14px' }}>Sous-total: </span>
-                <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal)}</span>
+                <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal, formData.currency)}</span>
+                {formData.currency !== 'CAD' && formData.exchange_rate_to_cad > 0 && (
+                  <span style={{ color: '#a1a1aa', fontSize: '13px', marginLeft: '8px' }}>
+                    = {formatCurrency(formSubtotal / formData.exchange_rate_to_cad, 'CAD')}
+                  </span>
+                )}
               </div>
 
               <div style={{ marginBottom: '24px' }}>

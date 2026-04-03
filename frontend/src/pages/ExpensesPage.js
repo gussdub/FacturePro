@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
+import CurrencySelector from '../components/CurrencySelector';
 
 const ExpensesPage = () => {
   const [expenses, setExpenses] = useState([]);
@@ -19,7 +20,8 @@ const ExpensesPage = () => {
   const [dragActive, setDragActive] = useState(false);
   const [previewReceipt, setPreviewReceipt] = useState(null);
   const [formData, setFormData] = useState({
-    employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: ''
+    employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '',
+    currency: 'CAD', exchange_rate_to_cad: 1.0
   });
 
   useEffect(() => { fetchData(); }, []);
@@ -36,7 +38,7 @@ const ExpensesPage = () => {
   };
 
   const resetForm = () => {
-    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '' });
+    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0 });
     setPreviewReceipt(null);
   };
 
@@ -247,7 +249,10 @@ const ExpensesPage = () => {
                     )}
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '8px' }}>{formatCurrency(exp.amount)}</div>
+                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '4px' }}>{formatCurrency(exp.amount, exp.currency)}</div>
+                    {exp.currency && exp.currency !== 'CAD' && exp.amount_cad && (
+                      <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>= {formatCurrency(exp.amount_cad, 'CAD')}</div>
+                    )}
                     <span style={{ background: st.bg, color: st.color, padding: '3px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>{st.label}</span>
                     <div style={{ display: 'flex', gap: '6px', marginTop: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                       {exp.status === 'pending' && (
@@ -284,10 +289,19 @@ const ExpensesPage = () => {
                   </select>
                 </div>
                 <div>
-                  <label style={labelStyle}>Montant (CAD) *</label>
+                  <label style={labelStyle}>Montant *</label>
                   <input type="number" step="0.01" data-testid="expense-amount-input" value={formData.amount}
                     onChange={e => setFormData(prev => ({ ...prev, amount: e.target.value }))} required style={inputStyle} />
                 </div>
+              </div>
+              {/* Currency selector */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={labelStyle}>Devise</label>
+                <CurrencySelector
+                  currency={formData.currency}
+                  amount={parseFloat(formData.amount) || 0}
+                  onChange={(cur, rate) => setFormData(prev => ({ ...prev, currency: cur, exchange_rate_to_cad: rate }))}
+                />
               </div>
               <div style={{ marginBottom: '16px' }}>
                 <label style={labelStyle}>Description *</label>

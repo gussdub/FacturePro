@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
+import CurrencySelector from '../components/CurrencySelector';
 
 const STATUS_CONFIG = {
   draft:   { label: 'Brouillon', bg: '#f3f4f6', color: '#374151', icon: '✎' },
@@ -36,7 +37,8 @@ const InvoicesPage = () => {
 
   const defaultForm = () => ({
     client_id: '', invoice_number: '', due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-    items: [], province: 'QC', notes: '', recurrence: 'none', next_send_date: ''
+    items: [], province: 'QC', notes: '', recurrence: 'none', next_send_date: '',
+    currency: 'CAD', exchange_rate_to_cad: 1.0
   });
   const [formData, setFormData] = useState(defaultForm());
 
@@ -125,7 +127,9 @@ const InvoicesPage = () => {
       province: invoice.province || 'QC',
       notes: invoice.notes || '',
       recurrence: invoice.recurrence || 'none',
-      next_send_date: invoice.next_send_date ? invoice.next_send_date.substring(0, 10) : ''
+      next_send_date: invoice.next_send_date ? invoice.next_send_date.substring(0, 10) : '',
+      currency: invoice.currency || 'CAD',
+      exchange_rate_to_cad: invoice.exchange_rate_to_cad || 1.0
     });
     setSelectedProduct('');
     setShowForm(true);
@@ -313,12 +317,15 @@ const InvoicesPage = () => {
                     )}
                     {inv.items && inv.items.length > 0 && (
                       <p style={{ margin: '4px 0 0', color: '#9ca3af', fontSize: '12px' }}>
-                        {inv.items.length} article(s) — Sous-total: {formatCurrency(inv.subtotal)}
+                        {inv.items.length} article(s) — Sous-total: {formatCurrency(inv.subtotal, inv.currency)}
                       </p>
                     )}
                   </div>
                   <div style={{ textAlign: 'right', minWidth: '140px' }}>
-                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '8px' }}>{formatCurrency(inv.total)}</div>
+                    <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '4px' }}>{formatCurrency(inv.total, inv.currency)}</div>
+                    {inv.currency && inv.currency !== 'CAD' && inv.total_cad && (
+                      <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>= {formatCurrency(inv.total_cad, 'CAD')}</div>
+                    )}
                     <select data-testid={`invoice-status-select-${inv.id}`} value={inv.status || 'draft'}
                       onChange={e => handleStatusChange(inv.id, e.target.value)}
                       style={{ ...inputStyle, width: 'auto', fontSize: '12px', padding: '4px 8px', marginBottom: '8px' }}>
@@ -399,6 +406,16 @@ const InvoicesPage = () => {
                 </div>
               </div>
 
+              {/* Currency selector */}
+              <div style={{ marginBottom: '20px' }}>
+                <label style={labelStyle}>Devise</label>
+                <CurrencySelector
+                  currency={formData.currency}
+                  amount={formSubtotal}
+                  onChange={(cur, rate) => setFormData(prev => ({ ...prev, currency: cur, exchange_rate_to_cad: rate }))}
+                />
+              </div>
+
               {/* Product catalog dropdown */}
               {products.length > 0 && (
                 <div style={{ marginBottom: '20px' }}>
@@ -457,7 +474,12 @@ const InvoicesPage = () => {
 
               <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', textAlign: 'right' }}>
                 <span style={{ color: '#6b7280', fontSize: '14px' }}>Sous-total: </span>
-                <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal)}</span>
+                <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal, formData.currency)}</span>
+                {formData.currency !== 'CAD' && formData.exchange_rate_to_cad > 0 && (
+                  <span style={{ color: '#a1a1aa', fontSize: '13px', marginLeft: '8px' }}>
+                    = {formatCurrency(formSubtotal / formData.exchange_rate_to_cad, 'CAD')}
+                  </span>
+                )}
               </div>
 
               {/* Recurrence */}

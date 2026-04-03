@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { BACKEND_URL } from '../config';
+import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
     company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
     logo_url: '', primary_color: '#00A08C', secondary_color: '#1F2937',
-    gst_number: '', pst_number: '', hst_number: '', default_due_days: 30
+    gst_number: '', pst_number: '', hst_number: '', default_due_days: 30,
+    default_currency: 'CAD'
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -219,6 +220,25 @@ const SettingsPage = () => {
               <input type="text" value={settings.hst_number || ''} onChange={(e) => setSettings(prev => ({ ...prev, hst_number: e.target.value }))}
                 placeholder="123456789 RT0001" data-testid="hst-number-input" style={inputStyle} />
             </div>
+          </div>
+        </div>
+
+        {/* Default Currency */}
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>Devise par defaut</h3>
+          <p style={{ color: '#6b7280', fontSize: '14px', margin: '0 0 16px' }}>Choisissez la devise utilisee par defaut pour vos factures et depenses. Vous pourrez toujours changer la devise par document.</p>
+          <div style={{ maxWidth: '320px' }}>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Devise</label>
+            <select
+              data-testid="default-currency-select"
+              value={settings.default_currency || 'CAD'}
+              onChange={(e) => setSettings(prev => ({ ...prev, default_currency: e.target.value }))}
+              style={inputStyle}
+            >
+              {Object.entries(CURRENCY_LABELS).map(([code, label]) => (
+                <option key={code} value={code}>{label}</option>
+              ))}
+            </select>
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
+import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pymongo import MongoClient
@@ -35,6 +36,8 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 SUBSCRIPTION_PRICE_CAD = 15.00
+SUPPORTED_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
+_exchange_rate_cache = {"rates": {}, "fetched_at": None}
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -381,6 +384,9 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
     province = invoice_data.get("province", "QC")
     gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
     total = round(subtotal + total_tax, 2)
+    currency = invoice_data.get("currency", "CAD")
+    exchange_rate = invoice_data.get("exchange_rate_to_cad", 1.0)
+    total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
     count = db.invoices.count_documents({"user_id": current_user.id})
     doc = {
         "id": str(uuid.uuid4()), "user_id": current_user.id,
@@ -391,6 +397,7 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
         "items": items, "subtotal": round(subtotal, 2),
         "gst_amount": gst, "pst_amount": pst, "hst_amount": hst,
         "total_tax": total_tax, "total": total, "province": province,
+        "currency": currency, "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad,
         "status": invoice_data.get("status", "draft"),
         "notes": invoice_data.get("notes", ""),
         "recurrence": invoice_data.get("recurrence", "none"),
@@ -410,7 +417,15 @@ def update_invoice(invoice_id: str, invoice_data: dict, current_user: User = Dep
         subtotal = sum(float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) for item in items)
         province = invoice_data.get("province", "QC")
         gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
-        invoice_data.update({"subtotal": round(subtotal, 2), "gst_amount": gst, "pst_amount": pst, "hst_amount": hst, "total_tax": total_tax, "total": round(subtotal + total_tax, 2)})
+        total = round(subtotal + total_tax, 2)
+        currency = invoice_data.get("currency", "CAD")
+        exchange_rate = invoice_data.get("exchange_rate_to_cad", 1.0)
+        total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
+        invoice_data.update({
+            "subtotal": round(subtotal, 2), "gst_amount": gst, "pst_amount": pst, "hst_amount": hst,
+            "total_tax": total_tax, "total": total, "currency": currency,
+            "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
+        })
     result = db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": invoice_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
@@ -515,6 +530,9 @@ def create_quote(quote_data: dict, current_user: User = Depends(get_current_user
     province = quote_data.get("province", "QC")
     gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
     total = round(subtotal + total_tax, 2)
+    currency = quote_data.get("currency", "CAD")
+    exchange_rate = quote_data.get("exchange_rate_to_cad", 1.0)
+    total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
     count = db.quotes.count_documents({"user_id": current_user.id})
     doc = {
         "id": str(uuid.uuid4()), "user_id": current_user.id,
@@ -525,6 +543,7 @@ def create_quote(quote_data: dict, current_user: User = Depends(get_current_user
         "items": items, "subtotal": round(subtotal, 2),
         "gst_amount": gst, "pst_amount": pst, "hst_amount": hst,
         "total_tax": total_tax, "total": total, "province": province,
+        "currency": currency, "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad,
         "status": "pending", "notes": quote_data.get("notes", ""),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -540,7 +559,15 @@ def update_quote(quote_id: str, quote_data: dict, current_user: User = Depends(g
         subtotal = sum(float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) for item in items)
         province = quote_data.get("province", "QC")
         gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
-        quote_data.update({"subtotal": round(subtotal, 2), "gst_amount": gst, "pst_amount": pst, "hst_amount": hst, "total_tax": total_tax, "total": round(subtotal + total_tax, 2)})
+        total = round(subtotal + total_tax, 2)
+        currency = quote_data.get("currency", "CAD")
+        exchange_rate = quote_data.get("exchange_rate_to_cad", 1.0)
+        total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
+        quote_data.update({
+            "subtotal": round(subtotal, 2), "gst_amount": gst, "pst_amount": pst, "hst_amount": hst,
+            "total_tax": total_tax, "total": total, "currency": currency,
+            "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
+        })
     result = db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": quote_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Quote not found")
@@ -561,6 +588,9 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: User = Dep
         "pst_amount": quote.get("pst_amount", 0), "hst_amount": quote.get("hst_amount", 0),
         "total_tax": quote.get("total_tax", 0), "total": quote.get("total", 0),
         "province": quote.get("province", "QC"), "status": "draft",
+        "currency": quote.get("currency", "CAD"),
+        "exchange_rate_to_cad": quote.get("exchange_rate_to_cad", 1.0),
+        "total_cad": quote.get("total_cad", quote.get("total", 0)),
         "notes": quote.get("notes", ""), "created_at": datetime.now(timezone.utc).isoformat()
     }
     db.invoices.insert_one(invoice_doc)
@@ -622,11 +652,16 @@ def get_expenses(current_user: User = Depends(get_current_user_with_access)):
 
 @app.post("/api/expenses")
 def create_expense(expense_data: dict, current_user: User = Depends(get_current_user_with_access)):
+    amount = float(expense_data.get("amount", 0))
+    currency = expense_data.get("currency", "CAD")
+    exchange_rate = expense_data.get("exchange_rate_to_cad", 1.0)
+    amount_cad = round(amount / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else amount
     doc = {
         "id": str(uuid.uuid4()), "user_id": current_user.id,
         "employee_id": expense_data.get("employee_id", ""),
         "description": expense_data.get("description", ""),
-        "amount": float(expense_data.get("amount", 0)),
+        "amount": amount, "currency": currency,
+        "exchange_rate_to_cad": exchange_rate, "amount_cad": amount_cad,
         "category": expense_data.get("category", ""),
         "expense_date": expense_data.get("expense_date", datetime.now(timezone.utc).isoformat()),
         "status": "pending", "receipt_url": expense_data.get("receipt_url", ""),
@@ -797,8 +832,8 @@ def get_expense_analytics(current_user: User = Depends(get_current_user_with_acc
     by_category = {}
     by_month = {}
     for exp in expenses:
-        cat = exp.get("category", "").strip() or "Non classé"
-        amt = float(exp.get("amount", 0))
+        cat = exp.get("category", "").strip() or "Non classe"
+        amt = float(exp.get("amount_cad", exp.get("amount", 0)))
         by_category[cat] = round(by_category.get(cat, 0) + amt, 2)
         raw_date = exp.get("expense_date", "")
         if isinstance(raw_date, datetime):
@@ -822,6 +857,47 @@ def get_expense_analytics(current_user: User = Depends(get_current_user_with_acc
     total = round(sum(by_category.values()), 2)
     return {"by_category": categories_chart, "by_month": monthly_chart, "categories": all_cats, "total": total}
 
+# ─── Exchange Rates ───
+def _get_exchange_rates():
+    """Fetch and cache exchange rates from frankfurter.dev (1h cache)."""
+    now = datetime.now(timezone.utc)
+    if _exchange_rate_cache["fetched_at"] and (now - _exchange_rate_cache["fetched_at"]).total_seconds() < 3600:
+        return _exchange_rate_cache["rates"]
+    try:
+        resp = httpx.get("https://api.frankfurter.dev/v1/latest?from=CAD&to=USD,EUR,GBP", timeout=10)
+        data = resp.json()
+        rates = data.get("rates", {})
+        result = {"CAD": 1.0}
+        for cur, rate in rates.items():
+            if rate > 0:
+                result[cur] = round(rate, 6)
+        _exchange_rate_cache["rates"] = result
+        _exchange_rate_cache["fetched_at"] = now
+        return result
+    except Exception as e:
+        print(f"Exchange rate fetch error: {e}")
+        if _exchange_rate_cache["rates"]:
+            return _exchange_rate_cache["rates"]
+        return {"CAD": 1.0, "USD": 0.73, "EUR": 0.67, "GBP": 0.57}
+
+
+def _convert_to_cad(amount, currency):
+    """Convert an amount from the given currency back to CAD."""
+    if currency == "CAD":
+        return round(amount, 2)
+    rates = _get_exchange_rates()
+    rate = rates.get(currency, 1.0)
+    if rate <= 0:
+        return round(amount, 2)
+    return round(amount / rate, 2)
+
+
+@app.get("/api/exchange-rates")
+def get_exchange_rates():
+    rates = _get_exchange_rates()
+    return {"base": "CAD", "rates": rates, "supported": SUPPORTED_CURRENCIES}
+
+
 # ─── Settings ───
 @app.get("/api/settings/company")
 def get_settings(current_user: User = Depends(get_current_user_with_access)):
@@ -832,7 +908,8 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
             "company_name": current_user.company_name, "email": current_user.email,
             "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
             "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
-            "default_due_days": 30, "gst_number": "", "pst_number": "", "hst_number": ""
+            "default_due_days": 30, "gst_number": "", "pst_number": "", "hst_number": "",
+            "default_currency": "CAD"
         }
         db.company_settings.insert_one(default)
         return {k: v for k, v in default.items() if k != "_id"}
@@ -934,8 +1011,8 @@ def get_stats(current_user: User = Depends(get_current_user_with_access)):
     total_products = db.products.count_documents({"user_id": current_user.id, "is_active": True})
     total_employees = db.employees.count_documents({"user_id": current_user.id, "is_active": True})
     total_expenses = db.expenses.count_documents({"user_id": current_user.id})
-    paid_invoices = list(db.invoices.find({"user_id": current_user.id, "status": "paid"}, {"total": 1, "_id": 0}))
-    total_revenue = sum(inv.get("total", 0) for inv in paid_invoices)
+    paid_invoices = list(db.invoices.find({"user_id": current_user.id, "status": "paid"}, {"total": 1, "total_cad": 1, "currency": 1, "_id": 0}))
+    total_revenue = sum(inv.get("total_cad", inv.get("total", 0)) for inv in paid_invoices)
     pending_count = db.invoices.count_documents({"user_id": current_user.id, "status": {"$in": ["sent", "overdue"]}})
     return {
         "total_clients": total_clients, "total_invoices": total_invoices,
@@ -1189,6 +1266,8 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
 
     # Items table
     items = document.get('items', [])
+    currency = document.get('currency', 'CAD')
+    csym = {'CAD': '$', 'USD': 'US$', 'EUR': '€', 'GBP': '£'}.get(currency, '$')
     table_header = ['Description', 'Qte', 'Prix unitaire', 'Total']
     table_data = [table_header]
 
@@ -1199,8 +1278,8 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         table_data.append([
             Paragraph(item.get('description', ''), company_style),
             f"{qty:.2f}",
-            f"{price:.2f} $",
-            f"{total:.2f} $"
+            f"{price:.2f} {csym}",
+            f"{total:.2f} {csym}"
         ])
 
     items_table = Table(table_data, colWidths=[3.5*inch, 1*inch, 1.5*inch, 1.5*inch])
@@ -1227,16 +1306,18 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     hst_amt = document.get('hst_amount', 0)
     total = document.get('total', 0)
 
-    totals_data = [['', 'Sous-total:', f"{subtotal:.2f} $"]]
+    totals_data = [['', 'Sous-total:', f"{subtotal:.2f} {csym}"]]
     province = document.get('province', 'QC')
     if province == 'QC':
         if gst_amt:
-            totals_data.append(['', 'TPS (5%):', f"{gst_amt:.2f} $"])
+            totals_data.append(['', 'TPS (5%):', f"{gst_amt:.2f} {csym}"])
         if pst_amt:
-            totals_data.append(['', 'TVQ (9.975%):', f"{pst_amt:.2f} $"])
+            totals_data.append(['', 'TVQ (9.975%):', f"{pst_amt:.2f} {csym}"])
     elif province == 'ON' and hst_amt:
-        totals_data.append(['', 'TVH (13%):', f"{hst_amt:.2f} $"])
-    totals_data.append(['', 'TOTAL:', f"{total:.2f} $"])
+        totals_data.append(['', 'TVH (13%):', f"{hst_amt:.2f} {csym}"])
+    totals_data.append(['', 'TOTAL:', f"{total:.2f} {csym}"])
+    if currency != 'CAD' and document.get('total_cad'):
+        totals_data.append(['', f'Equiv. CAD:', f"{document['total_cad']:.2f} $"])
 
     totals_table = Table(totals_data, colWidths=[4.5*inch, 1.5*inch, 1.5*inch])
     totals_table.setStyle(TableStyle([
