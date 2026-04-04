@@ -17,7 +17,6 @@ certifi==2025.8.3
 cffi==2.0.0
 charset-normalizer==3.4.3
 click==8.3.0
-cloudinary==1.36.0
 cryptography==46.0.1
 cssselect2==0.8.0
 distro==1.9.0
