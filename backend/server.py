@@ -1684,9 +1684,6 @@ def seed_data():
             if not pwd_doc:
                 db.user_passwords.insert_one({"user_id": uid, "hashed_password": hash_password("testpass123")})
                 print("Created missing password for gussdub@gmail.com")
-            elif not verify_password("testpass123", pwd_doc["hashed_password"]):
-                db.user_passwords.update_one({"user_id": uid}, {"$set": {"hashed_password": hash_password("testpass123")}})
-                print("Fixed password for gussdub@gmail.com")
             print("gussdub@gmail.com ready")
         else:
             user_id = str(uuid.uuid4())
