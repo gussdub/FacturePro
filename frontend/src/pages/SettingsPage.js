@@ -195,8 +195,23 @@ const SettingsPage = () => {
               <input type="tel" value={settings.phone || ''} onChange={(e) => setSettings(prev => ({ ...prev, phone: e.target.value }))} style={inputStyle} />
             </div>
             <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Adresse (numero et rue)</label>
+              <input type="text" value={settings.address || ''} onChange={(e) => setSettings(prev => ({ ...prev, address: e.target.value }))}
+                placeholder="123 Rue Exemple" data-testid="company-address-input" style={inputStyle} />
+            </div>
+            <div>
               <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Ville</label>
               <input type="text" value={settings.city || ''} onChange={(e) => setSettings(prev => ({ ...prev, city: e.target.value }))} style={inputStyle} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Code postal</label>
+              <input type="text" value={settings.postal_code || ''} onChange={(e) => setSettings(prev => ({ ...prev, postal_code: e.target.value }))}
+                placeholder="H1A 1A1" data-testid="company-postal-code-input" style={inputStyle} />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>Province / Pays</label>
+              <input type="text" value={settings.country || ''} onChange={(e) => setSettings(prev => ({ ...prev, country: e.target.value }))}
+                placeholder="Quebec, Canada" data-testid="company-country-input" style={inputStyle} />
             </div>
           </div>
         </div>
