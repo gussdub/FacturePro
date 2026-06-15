@@ -1148,6 +1148,8 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     comp_phone = company_settings.get('phone', '')
     comp_address = company_settings.get('address', '')
     comp_city = company_settings.get('city', '')
+    comp_postal = company_settings.get('postal_code', '')
+    comp_country = company_settings.get('country', '')
 
     # Try to load logo
     logo_elem = None
@@ -1173,8 +1175,10 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     left_parts.append(Spacer(1, 4))
     if comp_address:
         left_parts.append(Paragraph(comp_address, small_style))
-    if comp_city:
-        left_parts.append(Paragraph(comp_city, small_style))
+    if comp_city or comp_postal:
+        left_parts.append(Paragraph(f"{comp_city} {comp_postal}".strip(), small_style))
+    if comp_country:
+        left_parts.append(Paragraph(comp_country, small_style))
     if comp_email:
         left_parts.append(Paragraph(comp_email, small_style))
     if comp_phone:
