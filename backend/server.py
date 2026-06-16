@@ -18,6 +18,7 @@ import secrets
 import io
 import csv
 import base64
+import re
 from dotenv import load_dotenv
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch, mm
@@ -45,6 +46,28 @@ if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
 from bson import Binary
+
+# ─── Tax registration helpers (Section 2/3 du spec tax-registrations) ───
+
+TAX_FORMATS = {
+    "bn":  (r"^\d{9}$",          "9 chiffres"),
+    "gst": (r"^\d{9}RT\d{4}$",   "9 chiffres + RT0001"),
+    "qst": (r"^\d{10}TQ\d{4}$",  "10 chiffres + TQ0001"),
+    "hst": (r"^\d{9}RT\d{4}$",   "9 chiffres + RT0001"),
+    "neq": (r"^\d{10}$",         "10 chiffres"),
+}
+
+def normalize_tax_number(value):
+    """Normalise un numéro de taxe : strip + uppercase + retire espaces/tirets.
+    Idempotent. Tolère None."""
+    return (value or "").strip().upper().replace(" ", "").replace("-", "")
+
+def check_tax_number(value, kind):
+    """Retourne {'valid': bool, 'expected': str}. Vide considéré valide. Jamais bloquant."""
+    if not value:
+        return {"valid": True, "expected": ""}
+    pattern, hint = TAX_FORMATS[kind]
+    return {"valid": bool(re.match(pattern, value)), "expected": hint}
 
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
