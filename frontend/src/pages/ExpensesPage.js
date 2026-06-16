@@ -328,10 +328,11 @@ const ExpensesPage = () => {
                   required placeholder="Description de la depense" style={inputStyle} />
               </div>
               <div style={{ marginBottom: 14 }}>
-                <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
+                <label htmlFor="expense-category-select" style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
                   Categorie ARC
                 </label>
                 <select
+                  id="expense-category-select"
                   value={formData.category_code}
                   onChange={e => setFormData(prev => ({ ...prev, category_code: e.target.value }))}
                   style={{
@@ -374,12 +375,15 @@ const ExpensesPage = () => {
                   />
                 )}
 
-                {selectedCategory && selectedCategory.deductible_percentage < 100 && formData.amount && (
-                  <div style={{
-                    marginTop: 8, padding: '8px 12px',
-                    background: '#fef3c7', borderRadius: 6,
-                    fontSize: 12.5, color: '#92400e',
-                  }}>
+                {selectedCategory && selectedCategory.deductible_percentage < 100 && !isNaN(parseFloat(formData.amount)) && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    style={{
+                      marginTop: 8, padding: '8px 12px',
+                      background: '#fef3c7', borderRadius: 6,
+                      fontSize: 12.5, color: '#92400e',
+                    }}>
                     {selectedCategory.deductible_percentage}% seulement deductible — montant deductible : <strong>
                       {(parseFloat(formData.amount) * selectedCategory.deductible_percentage / 100).toFixed(2)} $
                     </strong> sur {parseFloat(formData.amount).toFixed(2)} $
