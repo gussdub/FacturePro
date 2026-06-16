@@ -1731,6 +1731,9 @@ def seed_data():
         db.trial_notifications.create_index([("user_id", 1), ("type", 1)], unique=True)
         print("Database indexes created")
 
+        # Migration tax_registrations (Section 2 du spec) — idempotente
+        migrate_pst_to_qst()
+
         existing = db.users.find_one({"email": "gussdub@gmail.com"})
         if existing:
             uid = existing["id"]
