@@ -318,12 +318,20 @@ def get_clients(current_user: User = Depends(get_current_user_with_access)):
 
 @app.post("/api/clients")
 def create_client(client_data: dict, current_user: User = Depends(get_current_user_with_access)):
+    for f in TAX_FIELDS:
+        if f in client_data:
+            client_data[f] = normalize_tax_number(client_data[f])
     doc = {
         "id": str(uuid.uuid4()), "user_id": current_user.id,
         "name": client_data.get("name", ""), "email": client_data.get("email", ""),
         "phone": client_data.get("phone", ""), "address": client_data.get("address", ""),
         "city": client_data.get("city", ""), "postal_code": client_data.get("postal_code", ""),
         "country": client_data.get("country", "Canada"),
+        "bn_number": client_data.get("bn_number", ""),
+        "gst_number": client_data.get("gst_number", ""),
+        "qst_number": client_data.get("qst_number", ""),
+        "hst_number": client_data.get("hst_number", ""),
+        "neq_number": client_data.get("neq_number", ""),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     db.clients.insert_one(doc)
@@ -333,6 +341,9 @@ def create_client(client_data: dict, current_user: User = Depends(get_current_us
 def update_client(client_id: str, client_data: dict, current_user: User = Depends(get_current_user_with_access)):
     for k in ("id", "user_id", "_id"):
         client_data.pop(k, None)
+    for f in TAX_FIELDS:
+        if f in client_data:
+            client_data[f] = normalize_tax_number(client_data[f])
     result = db.clients.update_one({"id": client_id, "user_id": current_user.id}, {"$set": client_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Client not found")

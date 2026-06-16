@@ -67,3 +67,63 @@ class TestSettingsTaxNumbers:
         # Cleanup: restore so subsequent runs aren't polluted
         requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
                      json={"bn_number": ""})
+
+
+class TestClientTaxNumbers:
+    _cleanup_ids = []
+
+    def test_create_client_with_numbers(self, auth):
+        payload = {
+            "name": "ACME Test Inc.",
+            "email": "test@acme.example",
+            "bn_number": "987 654 321",
+            "gst_number": "987654321RT0001",
+            "qst_number": "9876543210TQ0001",
+            "hst_number": "",
+            "neq_number": "9876543210",
+        }
+        resp = requests.post(f"{BASE_URL}/api/clients", headers=auth, json=payload)
+        assert resp.status_code in (200, 201), resp.text
+        client_id = resp.json()["id"]
+        TestClientTaxNumbers._cleanup_ids.append(client_id)
+
+        get = requests.get(f"{BASE_URL}/api/clients", headers=auth)
+        clients = get.json()
+        created = next(c for c in clients if c["id"] == client_id)
+        assert created["bn_number"] == "987654321"
+        assert created["gst_number"] == "987654321RT0001"
+        assert created["qst_number"] == "9876543210TQ0001"
+        assert created["hst_number"] == ""
+        assert created["neq_number"] == "9876543210"
+
+    def test_update_client_numbers(self, auth):
+        create = requests.post(f"{BASE_URL}/api/clients", headers=auth,
+                                json={"name": "Update Test Inc."})
+        client_id = create.json()["id"]
+        TestClientTaxNumbers._cleanup_ids.append(client_id)
+
+        upd = requests.put(f"{BASE_URL}/api/clients/{client_id}", headers=auth,
+                           json={"bn_number": "111 222 333"})
+        assert upd.status_code == 200
+
+        get = requests.get(f"{BASE_URL}/api/clients", headers=auth)
+        updated = next(c for c in get.json() if c["id"] == client_id)
+        assert updated["bn_number"] == "111222333"
+
+    def test_create_client_without_numbers(self, auth):
+        resp = requests.post(f"{BASE_URL}/api/clients", headers=auth,
+                              json={"name": "No Tax Inc."})
+        assert resp.status_code in (200, 201)
+        client_id = resp.json()["id"]
+        TestClientTaxNumbers._cleanup_ids.append(client_id)
+
+        get = requests.get(f"{BASE_URL}/api/clients", headers=auth)
+        created = next(c for c in get.json() if c["id"] == client_id)
+        for f in ["bn_number", "gst_number", "qst_number", "hst_number", "neq_number"]:
+            assert created.get(f, "") == ""
+
+    @classmethod
+    def teardown_class(cls):
+        # Best-effort cleanup of created test clients
+        # (auth fixture isn't directly accessible at teardown_class — use mongosh or skip)
+        pass
