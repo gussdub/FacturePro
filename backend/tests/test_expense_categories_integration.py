@@ -231,3 +231,39 @@ class TestExpenseSnapshotOnUpdate:
             except Exception:
                 pass
         cls._cleanup_ids = []
+
+
+class TestSettingsEntityType:
+    def test_get_returns_default_sole_proprietor(self, auth):
+        resp = requests.get(f"{BASE_URL}/api/settings/company", headers=auth)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "entity_type" in body
+        # Initial state may be already set from a prior test — both values are acceptable here
+        assert body["entity_type"] in ("sole_proprietor", "corporation")
+
+    def test_put_sole_proprietor(self, auth):
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"entity_type": "sole_proprietor"})
+        body = requests.get(f"{BASE_URL}/api/settings/company", headers=auth).json()
+        assert body["entity_type"] == "sole_proprietor"
+
+    def test_put_corporation(self, auth):
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"entity_type": "corporation"})
+        body = requests.get(f"{BASE_URL}/api/settings/company", headers=auth).json()
+        assert body["entity_type"] == "corporation"
+        # Restore
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"entity_type": "sole_proprietor"})
+
+    def test_put_invalid_value_ignored(self, auth):
+        # First set a known good value
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"entity_type": "sole_proprietor"})
+        # Try to set invalid
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"entity_type": "garbage_value"})
+        body = requests.get(f"{BASE_URL}/api/settings/company", headers=auth).json()
+        # Should still be sole_proprietor (invalid was ignored)
+        assert body["entity_type"] == "sole_proprietor"

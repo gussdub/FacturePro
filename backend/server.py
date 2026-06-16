@@ -1082,12 +1082,14 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
             "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
             "default_due_days": 30, "bn_number": "", "gst_number": "", "qst_number": "", "hst_number": "", "neq_number": "",
             "default_currency": "CAD",
+            "entity_type": "sole_proprietor",
         }
         db.company_settings.insert_one(default)
         settings = {k: v for k, v in default.items() if k != "_id"}
     # Ensure all 5 tax fields exist in response
     for f in TAX_FIELDS:
         settings.setdefault(f, "")
+    settings.setdefault("entity_type", "sole_proprietor")
     settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
@@ -1098,11 +1100,15 @@ def update_settings(settings_data: dict, current_user: User = Depends(get_curren
     settings_data.pop("tax_number_warnings", None)
     # Normalize tax numbers before saving
     normalize_tax_fields(settings_data)
+    # Validation entity_type : seules deux valeurs canoniques acceptées
+    if "entity_type" in settings_data and settings_data["entity_type"] not in ("sole_proprietor", "corporation"):
+        settings_data.pop("entity_type")
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": settings_data}, upsert=True)
     # Re-fetch + decorate so the frontend can update warnings without a separate GET
     settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
     for f in TAX_FIELDS:
         settings.setdefault(f, "")
+    settings.setdefault("entity_type", "sole_proprietor")
     settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
