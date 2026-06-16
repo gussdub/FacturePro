@@ -137,3 +137,114 @@ class TestClientTaxNumbers:
             except Exception:
                 pass  # best-effort
         cls._cleanup_ids = []
+
+
+class TestSnapshotOnCreate:
+    _cleanup = {"clients": [], "invoices": [], "quotes": []}
+    _auth_headers = None
+
+    def test_invoice_snapshots_company_and_client_numbers(self, auth):
+        TestSnapshotOnCreate._auth_headers = auth
+        # Pré-condition: configurer settings avec numéros
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth, json={
+            "bn_number": "555555555",
+            "gst_number": "555555555RT0001",
+            "qst_number": "5555555555TQ0001",
+        })
+        # Pré-condition: créer un client B2B avec numéros
+        client_resp = requests.post(f"{BASE_URL}/api/clients", headers=auth, json={
+            "name": "Snapshot Test Inc.",
+            "bn_number": "111111111",
+            "gst_number": "111111111RT0001",
+        })
+        client_id = client_resp.json()["id"]
+        TestSnapshotOnCreate._cleanup["clients"].append(client_id)
+
+        # Créer une facture
+        inv_resp = requests.post(f"{BASE_URL}/api/invoices", headers=auth, json={
+            "client_id": client_id,
+            "items": [{"description": "Snapshot test", "quantity": 1, "unit_price": 100}],
+            "province": "QC",
+        })
+        assert inv_resp.status_code in (200, 201), inv_resp.text
+        inv = inv_resp.json()
+        TestSnapshotOnCreate._cleanup["invoices"].append(inv["id"])
+
+        assert "tax_registrations" in inv
+        assert inv["tax_registrations"]["company"]["bn"] == "555555555"
+        assert inv["tax_registrations"]["company"]["gst"] == "555555555RT0001"
+        assert inv["tax_registrations"]["client"]["bn"] == "111111111"
+        assert inv["tax_registrations"]["client"]["gst"] == "111111111RT0001"
+
+    def test_invoice_snapshot_immutable_after_settings_change(self, auth):
+        TestSnapshotOnCreate._auth_headers = auth
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"bn_number": "777777777"})
+        client_resp = requests.post(f"{BASE_URL}/api/clients", headers=auth,
+                                    json={"name": "Frozen Test"})
+        client_id = client_resp.json()["id"]
+        TestSnapshotOnCreate._cleanup["clients"].append(client_id)
+
+        inv = requests.post(f"{BASE_URL}/api/invoices", headers=auth, json={
+            "client_id": client_id,
+            "items": [{"description": "x", "quantity": 1, "unit_price": 10}],
+            "province": "QC",
+        }).json()
+        inv_id = inv["id"]
+        TestSnapshotOnCreate._cleanup["invoices"].append(inv_id)
+
+        # Modifier les settings APRÈS création
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"bn_number": "999999999"})
+
+        # Re-fetch
+        get = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth)
+        assert get.status_code == 200
+        inv_after = get.json()
+        assert inv_after["tax_registrations"]["company"]["bn"] == "777777777"
+
+    def test_quote_snapshots_too(self, auth):
+        TestSnapshotOnCreate._auth_headers = auth
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"bn_number": "333333333"})
+        client = requests.post(f"{BASE_URL}/api/clients", headers=auth,
+                                json={"name": "Quote Test"}).json()
+        client_id = client["id"]
+        TestSnapshotOnCreate._cleanup["clients"].append(client_id)
+
+        quote = requests.post(f"{BASE_URL}/api/quotes", headers=auth, json={
+            "client_id": client_id,
+            "items": [{"description": "q", "quantity": 1, "unit_price": 50}],
+            "province": "QC",
+        }).json()
+        TestSnapshotOnCreate._cleanup["quotes"].append(quote["id"])
+
+        assert "tax_registrations" in quote
+        assert quote["tax_registrations"]["company"]["bn"] == "333333333"
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for cid in cls._cleanup["clients"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for iid in cls._cleanup["invoices"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/invoices/{iid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for qid in cls._cleanup["quotes"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/quotes/{qid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        # Restore settings to neutral state
+        try:
+            requests.put(f"{BASE_URL}/api/settings/company", headers=cls._auth_headers,
+                          json={"bn_number": ""})
+        except Exception:
+            pass
+        cls._cleanup = {"clients": [], "invoices": [], "quotes": []}

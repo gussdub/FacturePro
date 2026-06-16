@@ -97,6 +97,20 @@ def normalize_tax_fields(data):
         if f in data:
             data[f] = normalize_tax_number(data[f])
 
+def _build_tax_registrations(user_id, client_id):
+    """Snapshot des 10 numéros (5 entreprise + 5 client). Champs vides si absents."""
+    settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    client_doc = db.clients.find_one({"id": client_id, "user_id": user_id}, {"_id": 0}) or {}
+    def _take(doc):
+        return {
+            "bn":  doc.get("bn_number", ""),
+            "gst": doc.get("gst_number", ""),
+            "qst": doc.get("qst_number", ""),
+            "hst": doc.get("hst_number", ""),
+            "neq": doc.get("neq_number", ""),
+        }
+    return {"company": _take(settings), "client": _take(client_doc)}
+
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 
@@ -396,6 +410,13 @@ def delete_product(product_id: str, current_user: User = Depends(get_current_use
 def get_invoices(current_user: User = Depends(get_current_user_with_access)):
     return clean_docs(db.invoices.find({"user_id": current_user.id}, {"_id": 0}))
 
+@app.get("/api/invoices/{invoice_id}")
+def get_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
+    doc = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Invoice not found")
+    return clean_doc(doc)
+
 @app.post("/api/invoices")
 def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_access)):
     items = invoice_data.get("items", [])
@@ -424,6 +445,7 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
         "recurrence_active": invoice_data.get("recurrence", "none") != "none",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    doc["tax_registrations"] = _build_tax_registrations(current_user.id, doc.get("client_id"))
     db.invoices.insert_one(doc)
     return clean_doc(doc)
 
@@ -566,6 +588,7 @@ def create_quote(quote_data: dict, current_user: User = Depends(get_current_user
         "status": "pending", "notes": quote_data.get("notes", ""),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    doc["tax_registrations"] = _build_tax_registrations(current_user.id, doc.get("client_id"))
     db.quotes.insert_one(doc)
     return clean_doc(doc)
 
