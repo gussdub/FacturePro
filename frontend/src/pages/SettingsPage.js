@@ -8,7 +8,7 @@ const SettingsPage = () => {
     company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
     logo_url: '', primary_color: '#00A08C', secondary_color: '#1F2937',
     bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '',
-    default_due_days: 30, default_currency: 'CAD'
+    default_due_days: 30, default_currency: 'CAD', entity_type: 'sole_proprietor'
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -214,6 +214,30 @@ const SettingsPage = () => {
               <input type="text" value={settings.country || ''} onChange={(e) => setSettings(prev => ({ ...prev, country: e.target.value }))}
                 placeholder="Quebec, Canada" data-testid="company-country-input" style={inputStyle} />
             </div>
+          </div>
+        </div>
+
+        {/* Entity Type */}
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>Type d&#8217;entité</h3>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
+              Type d&#8217;entité fiscale
+              <span
+                title="Détermine le formulaire de déclaration fiscale utilisé pour exporter tes dépenses."
+                style={{ cursor: 'help', color: '#6b7280', fontSize: 14 }}
+              >
+                ⓘ
+              </span>
+            </label>
+            <select
+              value={settings.entity_type || 'sole_proprietor'}
+              onChange={(e) => setSettings(prev => ({ ...prev, entity_type: e.target.value }))}
+              style={inputStyle}
+            >
+              <option value="sole_proprietor">Travailleur autonome (T2125)</option>
+              <option value="corporation">Société par actions (T2)</option>
+            </select>
           </div>
         </div>
 
