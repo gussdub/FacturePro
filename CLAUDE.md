@@ -103,3 +103,14 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 - Pas de tests automatisés CI ; `backend_test.py` et `backend/tests/` existent mais à vérifier avant de s'en servir comme référence.
 - Ne pas modifier `.emergent/emergent.yml`.
 - Ignorer les `server_*.py` (sauf `server.py`) et les `App*.js` de backup sauf demande explicite.
+
+## Features livrées
+
+- **2026-06-16 — Numéros officiels canadiens sur PDF (feature #2)**
+  - 5 champs (BN, TPS, TVQ, TVH, NEQ) côté entreprise (`Settings`) et côté client (`Clients`)
+  - Snapshot `tax_registrations` sur création de facture/devis (audit immutability)
+  - Migration douce `pst_number` → `qst_number` au démarrage (idempotente)
+  - Validation souple, normalisation à la saisie (uppercase, suppression espaces/tirets)
+  - PDF refactor : entête épuré, ligne discrète dans la boîte "Facturer à", encadré "Numéros d'enregistrement" en bas
+  - Spec : `docs/superpowers/specs/2026-06-16-tax-registrations-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-16-tax-registrations.md`
