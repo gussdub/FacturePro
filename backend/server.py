@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
+import stripe
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
@@ -31,10 +31,12 @@ load_dotenv()
 MONGO_URL = os.environ.get('MONGO_URL')
 DB_NAME = os.environ.get('DB_NAME')
 JWT_SECRET = os.environ.get('JWT_SECRET')
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev')
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
+if STRIPE_API_KEY:
+    stripe.api_key = STRIPE_API_KEY
 SUBSCRIPTION_PRICE_CAD = 15.00
 SUPPORTED_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
 _exchange_rate_cache = {"rates": {}, "fetched_at": None}
@@ -42,48 +44,7 @@ _exchange_rate_cache = {"rates": {}, "fetched_at": None}
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-APP_NAME = "facturepro"
-storage_key = None
-
-def init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    if not EMERGENT_LLM_KEY:
-        print("WARNING: EMERGENT_LLM_KEY not set, file uploads disabled")
-        return None
-    try:
-        resp = http_requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
-        resp.raise_for_status()
-        storage_key = resp.json()["storage_key"]
-        return storage_key
-    except Exception as e:
-        print(f"Storage init error: {e}")
-        return None
-
-def put_object(path, data, content_type):
-    key = init_storage()
-    if not key:
-        raise HTTPException(500, "Storage not available")
-    resp = http_requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-def get_object(path):
-    key = init_storage()
-    if not key:
-        raise HTTPException(500, "Storage not available")
-    resp = http_requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60
-    )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+from bson import Binary
 
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
@@ -939,32 +900,28 @@ def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_c
     if len(data) > max_size:
         raise HTTPException(400, "Fichier trop volumineux (max 5 MB)")
 
-    ext = file.filename.split(".")[-1] if "." in file.filename else "bin"
-    storage_path = f"{APP_NAME}/uploads/{current_user.id}/{uuid.uuid4()}.{ext}"
-
-    result = put_object(storage_path, data, file.content_type or "application/octet-stream")
-
     file_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user.id,
-        "storage_path": result["path"],
+        "data": Binary(data),
         "original_filename": file.filename,
         "content_type": file.content_type,
-        "size": result.get("size", len(data)),
+        "size": len(data),
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     db.files.insert_one(file_doc)
 
-    return {"file_id": file_doc["id"], "storage_path": result["path"], "filename": file.filename}
+    return {"file_id": file_doc["id"], "filename": file.filename}
 
 @app.get("/api/files/{file_id}")
 def download_file(file_id: str):
     record = db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
     if not record:
         raise HTTPException(404, "File not found")
-    data, content_type = get_object(record["storage_path"])
-    return Response(content=data, media_type=record.get("content_type", content_type))
+    if "data" not in record:
+        raise HTTPException(410, "Fichier sur l'ancien stockage Emergent. Veuillez le re-televerser.")
+    return Response(content=bytes(record["data"]), media_type=record.get("content_type", "application/octet-stream"))
 
 @app.post("/api/settings/company/upload-logo-file")
 def upload_logo_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
@@ -976,18 +933,13 @@ def upload_logo_file(file: UploadFile = File(...), current_user: User = Depends(
     if len(data) > 2 * 1024 * 1024:
         raise HTTPException(400, "Logo trop volumineux (max 2 MB)")
 
-    ext = file.filename.split(".")[-1] if "." in file.filename else "png"
-    storage_path = f"{APP_NAME}/logos/{current_user.id}/{uuid.uuid4()}.{ext}"
-
-    result = put_object(storage_path, data, file.content_type)
-
     file_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user.id,
-        "storage_path": result["path"],
+        "data": Binary(data),
         "original_filename": file.filename,
         "content_type": file.content_type,
-        "size": result.get("size", len(data)),
+        "size": len(data),
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -1159,9 +1111,8 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
             if logo_url.startswith('/api/files/'):
                 file_id = logo_url.split('/')[-1]
                 record = db.files.find_one({"id": file_id, "is_deleted": False})
-                if record:
-                    data, _ = get_object(record["storage_path"])
-                    logo_buf = io.BytesIO(data)
+                if record and "data" in record:
+                    logo_buf = io.BytesIO(bytes(record["data"]))
                     logo_elem = RLImage(logo_buf, width=1.2*inch, height=1.2*inch)
         except Exception:
             pass
@@ -1496,7 +1447,7 @@ def get_subscription(current_user: User = Depends(get_current_user_with_access))
 
 
 @app.post("/api/subscription/create-checkout")
-async def create_subscription_checkout(body: dict, request: Request, current_user: User = Depends(get_current_user_with_access)):
+def create_subscription_checkout(body: dict, request: Request, current_user: User = Depends(get_current_user_with_access)):
     if not STRIPE_API_KEY:
         raise HTTPException(500, "Stripe non configure")
     origin_url = body.get("origin_url", "")
@@ -1504,12 +1455,17 @@ async def create_subscription_checkout(body: dict, request: Request, current_use
         raise HTTPException(400, "origin_url requis")
     success_url = f"{origin_url}/subscription?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin_url}/subscription"
-    host_url = str(request.base_url)
-    webhook_url = f"{host_url}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    checkout_request = CheckoutSessionRequest(
-        amount=SUBSCRIPTION_PRICE_CAD,
-        currency="cad",
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "cad",
+                "unit_amount": int(SUBSCRIPTION_PRICE_CAD * 100),
+                "product_data": {"name": "Abonnement FacturePro"},
+            },
+            "quantity": 1,
+        }],
+        mode="payment",
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={
@@ -1518,11 +1474,10 @@ async def create_subscription_checkout(body: dict, request: Request, current_use
             "plan": "facturepro_monthly"
         }
     )
-    session = await stripe_checkout.create_checkout_session(checkout_request)
     tx_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user.id,
-        "session_id": session.session_id,
+        "session_id": session.id,
         "amount": SUBSCRIPTION_PRICE_CAD,
         "currency": "cad",
         "payment_status": "pending",
@@ -1531,19 +1486,16 @@ async def create_subscription_checkout(body: dict, request: Request, current_use
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     db.payment_transactions.insert_one(tx_doc)
-    return {"url": session.url, "session_id": session.session_id}
+    return {"url": session.url, "session_id": session.id}
 
 
 @app.get("/api/subscription/checkout-status/{session_id}")
-async def check_subscription_status(session_id: str, request: Request, current_user: User = Depends(get_current_user_with_access)):
+def check_subscription_status(session_id: str, request: Request, current_user: User = Depends(get_current_user_with_access)):
     if not STRIPE_API_KEY:
         raise HTTPException(500, "Stripe non configure")
-    host_url = str(request.base_url)
-    webhook_url = f"{host_url}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    checkout_status = await stripe_checkout.get_checkout_status(session_id)
+    session = stripe.checkout.Session.retrieve(session_id)
     tx = db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
-    if tx and tx.get("payment_status") != "paid" and checkout_status.payment_status == "paid":
+    if tx and tx.get("payment_status") != "paid" and session.payment_status == "paid":
         db.payment_transactions.update_one(
             {"session_id": session_id},
             {"$set": {
@@ -1560,10 +1512,10 @@ async def check_subscription_status(session_id: str, request: Request, current_u
             }}
         )
     return {
-        "status": checkout_status.status,
-        "payment_status": checkout_status.payment_status,
-        "amount_total": checkout_status.amount_total,
-        "currency": checkout_status.currency
+        "status": session.status,
+        "payment_status": session.payment_status,
+        "amount_total": session.amount_total,
+        "currency": session.currency
     }
 
 
@@ -1573,24 +1525,29 @@ async def stripe_webhook(request: Request):
         raise HTTPException(500, "Stripe non configure")
     body = await request.body()
     sig = request.headers.get("Stripe-Signature", "")
-    host_url = str(request.base_url)
-    webhook_url = f"{host_url}api/webhook/stripe"
     try:
-        stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-        event = await stripe_checkout.handle_webhook(body, sig)
-        if event.payment_status == "paid":
-            tx = db.payment_transactions.find_one({"session_id": event.session_id}, {"_id": 0})
-            if tx and tx.get("payment_status") != "paid":
-                db.payment_transactions.update_one(
-                    {"session_id": event.session_id},
-                    {"$set": {"payment_status": "paid", "status": "complete", "paid_at": datetime.now(timezone.utc).isoformat()}}
-                )
-                user_id = tx.get("user_id") or (event.metadata or {}).get("user_id")
-                if user_id:
-                    db.users.update_one(
-                        {"id": user_id},
-                        {"$set": {"subscription_status": "active", "subscription_started_at": datetime.now(timezone.utc).isoformat()}}
+        if STRIPE_WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(body, sig, STRIPE_WEBHOOK_SECRET)
+        else:
+            print("WARNING: STRIPE_WEBHOOK_SECRET not set, accepting webhook without signature verification")
+            import json
+            event = json.loads(body)
+        if event["type"] == "checkout.session.completed":
+            session_data = event["data"]["object"]
+            if session_data.get("payment_status") == "paid":
+                session_id = session_data["id"]
+                tx = db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+                if tx and tx.get("payment_status") != "paid":
+                    db.payment_transactions.update_one(
+                        {"session_id": session_id},
+                        {"$set": {"payment_status": "paid", "status": "complete", "paid_at": datetime.now(timezone.utc).isoformat()}}
                     )
+                    user_id = tx.get("user_id") or (session_data.get("metadata") or {}).get("user_id")
+                    if user_id:
+                        db.users.update_one(
+                            {"id": user_id},
+                            {"$set": {"subscription_status": "active", "subscription_started_at": datetime.now(timezone.utc).isoformat()}}
+                        )
         return {"status": "ok"}
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -1674,12 +1631,6 @@ def seed_data():
         db.payment_transactions.create_index([("user_id", 1)])
         db.trial_notifications.create_index([("user_id", 1), ("type", 1)], unique=True)
         print("Database indexes created")
-
-        try:
-            init_storage()
-            print("Object storage initialized")
-        except Exception as e:
-            print(f"Storage init warning (uploads disabled): {e}")
 
         existing = db.users.find_one({"email": "gussdub@gmail.com"})
         if existing:

@@ -336,3 +336,7 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Local MongoDB dumps (copies de prod - NE PAS COMMITER)
+.mongo-dumps/
+
