@@ -810,13 +810,14 @@ def create_expense(expense_data: dict, current_user: User = Depends(get_current_
     currency = expense_data.get("currency", "CAD")
     exchange_rate = expense_data.get("exchange_rate_to_cad", 1.0)
     amount_cad = round(amount / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else amount
+    cat_snapshot = _build_expense_category_snapshot(expense_data, amount_cad)
     doc = {
         "id": str(uuid.uuid4()), "user_id": current_user.id,
         "employee_id": expense_data.get("employee_id", ""),
         "description": expense_data.get("description", ""),
         "amount": amount, "currency": currency,
         "exchange_rate_to_cad": exchange_rate, "amount_cad": amount_cad,
-        "category": expense_data.get("category", ""),
+        **cat_snapshot,
         "expense_date": expense_data.get("expense_date", datetime.now(timezone.utc).isoformat()),
         "status": "pending", "receipt_url": expense_data.get("receipt_url", ""),
         "notes": expense_data.get("notes", ""), "created_at": datetime.now(timezone.utc).isoformat()
