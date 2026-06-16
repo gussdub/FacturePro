@@ -114,3 +114,13 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - PDF refactor : entête épuré, ligne discrète dans la boîte "Facturer à", encadré "Numéros d'enregistrement" en bas
   - Spec : `docs/superpowers/specs/2026-06-16-tax-registrations-design.md`
   - Plan : `docs/superpowers/plans/2026-06-16-tax-registrations.md`
+
+- **2026-06-16 — Catégories de dépenses ARC (feature #3)**
+  - 17 catégories canoniques + "Autre" libre, organisées en 5 groupes (T2125/T2 GIFI)
+  - Snapshot sur chaque dépense : code, label, ligne ARC, % déductible, montant déductible calculé
+  - Règle 50 % sur les repas appliquée automatiquement (`deductible_amount`)
+  - Sélecteur d'entité fiscale (sole_proprietor / corporation) dans Settings — pour la future feature #10 (export T2125/T2)
+  - Picker UI groupé natif + zone d'aide jaune pour les catégories partiellement déductibles
+  - Endpoint public `GET /api/expense-categories`
+  - Spec : `docs/superpowers/specs/2026-06-16-expense-categories-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-16-expense-categories.md`
