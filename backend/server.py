@@ -84,6 +84,14 @@ def migrate_pst_to_qst(database=None):
         print(f"Migrated {result.modified_count} company_settings: pst_number → qst_number")
     return result.modified_count
 
+TAX_FIELDS = ["bn_number", "gst_number", "qst_number", "hst_number", "neq_number"]
+TAX_FIELD_KINDS = {"bn_number": "bn", "gst_number": "gst", "qst_number": "qst",
+                   "hst_number": "hst", "neq_number": "neq"}
+
+def _tax_warnings(doc):
+    """Retourne {field: {valid, expected}} pour chaque champ taxe du doc."""
+    return {f: check_tax_number(doc.get(f, ""), TAX_FIELD_KINDS[f]) for f in TAX_FIELDS}
+
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 
@@ -907,16 +915,26 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
             "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
             "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
             "default_due_days": 30, "gst_number": "", "pst_number": "", "hst_number": "",
-            "default_currency": "CAD"
+            "default_currency": "CAD",
+            "bn_number": "", "qst_number": "", "neq_number": "",
         }
         db.company_settings.insert_one(default)
-        return {k: v for k, v in default.items() if k != "_id"}
+        settings = {k: v for k, v in default.items() if k != "_id"}
+    # Ensure all 5 tax fields exist in response
+    for f in TAX_FIELDS:
+        settings.setdefault(f, "")
+    settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
 @app.put("/api/settings/company")
 def update_settings(settings_data: dict, current_user: User = Depends(get_current_user_with_access)):
     settings_data.pop("_id", None)
     settings_data.pop("user_id", None)
+    settings_data.pop("tax_number_warnings", None)
+    # Normalize tax numbers before saving
+    for f in TAX_FIELDS:
+        if f in settings_data:
+            settings_data[f] = normalize_tax_number(settings_data[f])
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": settings_data}, upsert=True)
     return clean_doc(db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}))
 
