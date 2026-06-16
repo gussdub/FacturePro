@@ -173,6 +173,50 @@ def _find_category(code):
         return None
     return next((c for c in EXPENSE_CATEGORIES if c["code"] == code), None)
 
+
+def _build_expense_category_snapshot(expense_data, amount_cad):
+    """Retourne les 6 champs catégorie à snapshoter dans une dépense.
+
+    Args:
+        expense_data: dict envoyé par le frontend (peut contenir category_code,
+                      category_custom_label, ou un legacy 'category' libre).
+        amount_cad: montant déjà converti en CAD (calcul indépendant de la devise).
+
+    Returns:
+        dict avec category, category_code, category_custom_label,
+        category_arc_line, deductible_percentage, deductible_amount.
+
+    Comportement :
+    - Si category_code est un code canonique → snapshot depuis le catalogue.
+    - Si category_code == "other" → utilise category_custom_label (fallback "Autre").
+    - Sinon (vide, inconnu) → graceful : reprend le label legacy "category",
+      arc_line="", percentage=100.
+    """
+    code = (expense_data.get("category_code") or "").strip()
+    custom_label = expense_data.get("category_custom_label", "").strip()
+    cat = _find_category(code)
+    if code == "other":
+        label = custom_label or "Autre"
+        arc_line, percentage = "", 100
+    elif cat:
+        label = cat["label_fr"]
+        arc_line = cat["arc_line"]
+        percentage = cat["deductible_percentage"]
+    else:
+        # Unknown or empty code: graceful — use whatever raw category text was sent.
+        label = expense_data.get("category", "")
+        arc_line, percentage = "", 100
+    deductible = round(amount_cad * percentage / 100, 2)
+    return {
+        "category": label,
+        "category_code": code,
+        "category_custom_label": custom_label if code == "other" else "",
+        "category_arc_line": arc_line,
+        "deductible_percentage": percentage,
+        "deductible_amount": deductible,
+    }
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 

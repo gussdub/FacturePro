@@ -80,3 +80,79 @@ class TestFindCategory:
 
     def test_returns_none_for_none(self):
         assert _find_category(None) is None
+
+
+from server import _build_expense_category_snapshot
+
+
+class TestBuildExpenseCategorySnapshot:
+    def test_canonical_code_uses_catalog(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "office_expenses"}, amount_cad=100.0
+        )
+        assert snap["category"] == "Frais de bureau"
+        assert snap["category_code"] == "office_expenses"
+        assert snap["category_custom_label"] == ""
+        assert snap["category_arc_line"] == "8810"
+        assert snap["deductible_percentage"] == 100
+        assert snap["deductible_amount"] == 100.0
+
+    def test_meals_entertainment_is_50_percent_of_amount_cad(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "meals_entertainment"}, amount_cad=200.0
+        )
+        assert snap["category"] == "Repas et représentation"
+        assert snap["deductible_percentage"] == 50
+        assert snap["deductible_amount"] == 100.0
+
+    def test_other_with_custom_label(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "other", "category_custom_label": "Cotisations syndicales"},
+            amount_cad=50.0,
+        )
+        assert snap["category"] == "Cotisations syndicales"
+        assert snap["category_code"] == "other"
+        assert snap["category_custom_label"] == "Cotisations syndicales"
+        assert snap["category_arc_line"] == ""
+        assert snap["deductible_percentage"] == 100
+        assert snap["deductible_amount"] == 50.0
+
+    def test_other_without_custom_label_defaults_to_autre(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "other"}, amount_cad=50.0
+        )
+        assert snap["category"] == "Autre"
+        assert snap["category_custom_label"] == ""
+
+    def test_unknown_code_graceful_fallback(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "doesnt_exist", "category": "legacy text"},
+            amount_cad=30.0,
+        )
+        assert snap["category"] == "legacy text"
+        assert snap["category_code"] == "doesnt_exist"
+        assert snap["category_arc_line"] == ""
+        assert snap["deductible_percentage"] == 100
+        assert snap["deductible_amount"] == 30.0
+
+    def test_empty_code_graceful_fallback(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "", "category": "Old way"}, amount_cad=10.0
+        )
+        assert snap["category"] == "Old way"
+        assert snap["category_code"] == ""
+        assert snap["deductible_amount"] == 10.0
+
+    def test_custom_label_cleared_for_non_other(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "office_expenses", "category_custom_label": "Stale value"},
+            amount_cad=100.0,
+        )
+        # Custom label is only kept when code == "other"
+        assert snap["category_custom_label"] == ""
+
+    def test_deductible_amount_rounded_2_decimals(self):
+        snap = _build_expense_category_snapshot(
+            {"category_code": "meals_entertainment"}, amount_cad=33.33
+        )
+        assert snap["deductible_amount"] == round(33.33 * 50 / 100, 2)
