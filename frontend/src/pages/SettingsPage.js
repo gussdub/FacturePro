@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, CURRENCY_LABELS } from '../config';
+import TaxNumberInput from '../components/TaxNumberInput';
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
     company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
     logo_url: '', primary_color: '#00A08C', secondary_color: '#1F2937',
-    gst_number: '', pst_number: '', hst_number: '', default_due_days: 30,
-    default_currency: 'CAD'
+    bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '',
+    default_due_days: 30, default_currency: 'CAD'
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -218,24 +219,50 @@ const SettingsPage = () => {
 
         {/* Tax Numbers */}
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
-          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>Numeros de taxes canadiens</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>TPS (Federal)</label>
-              <input type="text" value={settings.gst_number || ''} onChange={(e) => setSettings(prev => ({ ...prev, gst_number: e.target.value }))}
-                placeholder="123456789 RT0001" data-testid="gst-number-input" style={inputStyle} />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>TVQ (Quebec)</label>
-              <input type="text" value={settings.pst_number || ''} onChange={(e) => setSettings(prev => ({ ...prev, pst_number: e.target.value }))}
-                placeholder="1234567890 TQ0001" data-testid="pst-number-input" style={inputStyle} />
-            </div>
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>HST (Ontario)</label>
-              <input type="text" value={settings.hst_number || ''} onChange={(e) => setSettings(prev => ({ ...prev, hst_number: e.target.value }))}
-                placeholder="123456789 RT0001" data-testid="hst-number-input" style={inputStyle} />
-            </div>
-          </div>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '700' }}>Num&#233;ros officiels</h3>
+          <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: '#6b7280' }}>
+            Ces num&#233;ros apparaissent dans l&#8217;encadr&#233; &#171;&#160;Num&#233;ros d&#8217;enregistrement&#160;&#187; en bas des factures et devis.
+          </p>
+          <TaxNumberInput
+            label="BN &#8212; Num&#233;ro d&#8217;entreprise f&#233;d&#233;ral"
+            fieldName="bn_number"
+            value={settings.bn_number}
+            onChange={(v) => setSettings(prev => ({ ...prev, bn_number: v }))}
+            placeholder="123456789"
+            tooltip="9 chiffres attribu&#233;s par l&#8217;ARC"
+          />
+          <TaxNumberInput
+            label="TPS / GST"
+            fieldName="gst_number"
+            value={settings.gst_number}
+            onChange={(v) => setSettings(prev => ({ ...prev, gst_number: v }))}
+            placeholder="123456789RT0001"
+            tooltip="BN suivi de RT0001"
+          />
+          <TaxNumberInput
+            label="TVQ / QST"
+            fieldName="qst_number"
+            value={settings.qst_number}
+            onChange={(v) => setSettings(prev => ({ ...prev, qst_number: v }))}
+            placeholder="1234567890TQ0001"
+            tooltip="10 chiffres suivis de TQ0001 (Revenu Qu&#233;bec)"
+          />
+          <TaxNumberInput
+            label="TVH / HST"
+            fieldName="hst_number"
+            value={settings.hst_number}
+            onChange={(v) => setSettings(prev => ({ ...prev, hst_number: v }))}
+            placeholder="123456789RT0001"
+            tooltip="Pour ON, NB, NS, PE, NL (taxe harmonis&#233;e)"
+          />
+          <TaxNumberInput
+            label="NEQ &#8212; Num&#233;ro d&#8217;entreprise Qu&#233;bec"
+            fieldName="neq_number"
+            value={settings.neq_number}
+            onChange={(v) => setSettings(prev => ({ ...prev, neq_number: v }))}
+            placeholder="1234567890"
+            tooltip="10 chiffres attribu&#233;s par le REQ (corporations QC)"
+          />
         </div>
 
         {/* Default Currency */}
