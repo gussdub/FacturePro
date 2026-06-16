@@ -340,3 +340,7 @@ credentials.json
 # Local MongoDB dumps (copies de prod - NE PAS COMMITER)
 .mongo-dumps/
 
+
+# Visual brainstorming companion artifacts
+.superpowers/
+
