@@ -97,22 +97,25 @@ def normalize_tax_fields(data):
         if f in data:
             data[f] = normalize_tax_number(data[f])
 
+client = MongoClient(MONGO_URL)
+db = client[DB_NAME]
+
 def _build_tax_registrations(user_id, client_id):
-    """Snapshot des 10 numéros (5 entreprise + 5 client). Champs vides si absents."""
+    """Snapshot des 10 numéros (5 entreprise + 5 client). Champs vides si absents.
+    Si client_id est vide/None (facture B2C sans client), client section reste vide."""
     settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
-    client_doc = db.clients.find_one({"id": client_id, "user_id": user_id}, {"_id": 0}) or {}
+    client_doc = {}
+    if client_id:
+        client_doc = db.clients.find_one({"id": client_id, "user_id": user_id}, {"_id": 0}) or {}
     def _take(doc):
         return {
-            "bn":  doc.get("bn_number", ""),
+            "bn": doc.get("bn_number", ""),
             "gst": doc.get("gst_number", ""),
             "qst": doc.get("qst_number", ""),
             "hst": doc.get("hst_number", ""),
             "neq": doc.get("neq_number", ""),
         }
     return {"company": _take(settings), "client": _take(client_doc)}
-
-client = MongoClient(MONGO_URL)
-db = client[DB_NAME]
 
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()

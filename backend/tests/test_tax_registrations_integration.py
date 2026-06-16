@@ -221,6 +221,9 @@ class TestSnapshotOnCreate:
 
         assert "tax_registrations" in quote
         assert quote["tax_registrations"]["company"]["bn"] == "333333333"
+        # Client created without tax numbers → all empty
+        assert quote["tax_registrations"]["client"]["bn"] == ""
+        assert quote["tax_registrations"]["client"]["gst"] == ""
 
     @classmethod
     def teardown_class(cls):
