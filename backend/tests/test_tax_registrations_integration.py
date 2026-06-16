@@ -30,6 +30,9 @@ class TestSettingsTaxNumbers:
         assert "tax_number_warnings" in body
         for key in ["bn_number", "gst_number", "qst_number", "hst_number", "neq_number"]:
             assert key in body["tax_number_warnings"]
+            w = body["tax_number_warnings"][key]
+            assert "valid" in w
+            assert "expected" in w
 
     def test_put_accepts_all_5_numbers(self, auth):
         payload = {
@@ -60,3 +63,7 @@ class TestSettingsTaxNumbers:
         body = get.json()
         assert body["bn_number"] == "ABC"
         assert body["tax_number_warnings"]["bn_number"]["valid"] is False
+
+        # Cleanup: restore so subsequent runs aren't polluted
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                     json={"bn_number": ""})

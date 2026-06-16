@@ -85,12 +85,11 @@ def migrate_pst_to_qst(database=None):
     return result.modified_count
 
 TAX_FIELDS = ["bn_number", "gst_number", "qst_number", "hst_number", "neq_number"]
-TAX_FIELD_KINDS = {"bn_number": "bn", "gst_number": "gst", "qst_number": "qst",
-                   "hst_number": "hst", "neq_number": "neq"}
 
 def _tax_warnings(doc):
-    """Retourne {field: {valid, expected}} pour chaque champ taxe du doc."""
-    return {f: check_tax_number(doc.get(f, ""), TAX_FIELD_KINDS[f]) for f in TAX_FIELDS}
+    """Retourne {field: {valid, expected}} pour chaque champ taxe du doc.
+    Le kind est dérivé du nom du champ ("bn_number" -> "bn")."""
+    return {f: check_tax_number(doc.get(f, ""), f.removesuffix("_number")) for f in TAX_FIELDS}
 
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
@@ -914,9 +913,8 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
             "company_name": current_user.company_name, "email": current_user.email,
             "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
             "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
-            "default_due_days": 30, "gst_number": "", "pst_number": "", "hst_number": "",
+            "default_due_days": 30, "bn_number": "", "gst_number": "", "qst_number": "", "hst_number": "", "neq_number": "",
             "default_currency": "CAD",
-            "bn_number": "", "qst_number": "", "neq_number": "",
         }
         db.company_settings.insert_one(default)
         settings = {k: v for k, v in default.items() if k != "_id"}
@@ -936,7 +934,12 @@ def update_settings(settings_data: dict, current_user: User = Depends(get_curren
         if f in settings_data:
             settings_data[f] = normalize_tax_number(settings_data[f])
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": settings_data}, upsert=True)
-    return clean_doc(db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}))
+    # Re-fetch + decorate so the frontend can update warnings without a separate GET
+    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    for f in TAX_FIELDS:
+        settings.setdefault(f, "")
+    settings["tax_number_warnings"] = _tax_warnings(settings)
+    return settings
 
 @app.post("/api/settings/company/upload-logo")
 def upload_logo(logo_data: dict, current_user: User = Depends(get_current_user_with_access)):
