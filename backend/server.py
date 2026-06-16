@@ -638,6 +638,10 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: User = Dep
         "total_cad": quote.get("total_cad", quote.get("total", 0)),
         "notes": quote.get("notes", ""), "created_at": datetime.now(timezone.utc).isoformat()
     }
+    # Preserve the quote's original tax_registrations snapshot (audit immutability).
+    # Fallback for old quotes pre-snapshot: rebuild from current state.
+    invoice_doc["tax_registrations"] = quote.get("tax_registrations") or \
+        _build_tax_registrations(current_user.id, quote.get("client_id"))
     db.invoices.insert_one(invoice_doc)
     db.quotes.update_one({"id": quote_id}, {"$set": {"status": "converted"}})
     return clean_doc(invoice_doc)

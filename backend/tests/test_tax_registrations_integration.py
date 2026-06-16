@@ -225,6 +225,33 @@ class TestSnapshotOnCreate:
         assert quote["tax_registrations"]["client"]["bn"] == ""
         assert quote["tax_registrations"]["client"]["gst"] == ""
 
+    def test_convert_carries_snapshot(self, auth):
+        TestSnapshotOnCreate._auth_headers = auth
+        # Settings with a specific BN
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"bn_number": "222222222"})
+        client = requests.post(f"{BASE_URL}/api/clients", headers=auth,
+                                json={"name": "Convert Test"}).json()
+        client_id = client["id"]
+        TestSnapshotOnCreate._cleanup["clients"].append(client_id)
+        # Create a quote (snapshots BN=222...)
+        q = requests.post(f"{BASE_URL}/api/quotes", headers=auth, json={
+            "client_id": client_id,
+            "items": [{"description": "convert", "quantity": 1, "unit_price": 30}],
+            "province": "QC",
+        }).json()
+        TestSnapshotOnCreate._cleanup["quotes"].append(q["id"])
+        # Change settings AFTER quote creation
+        requests.put(f"{BASE_URL}/api/settings/company", headers=auth,
+                      json={"bn_number": "444444444"})
+        # Convert quote → invoice (body is required by the endpoint even if empty)
+        conv = requests.post(f"{BASE_URL}/api/quotes/{q['id']}/convert", headers=auth, json={})
+        assert conv.status_code in (200, 201), conv.text
+        inv = conv.json()
+        TestSnapshotOnCreate._cleanup["invoices"].append(inv["id"])
+        # Invoice must have the QUOTE's original snapshot, NOT the new BN
+        assert inv["tax_registrations"]["company"]["bn"] == "222222222"
+
     @classmethod
     def teardown_class(cls):
         if not cls._auth_headers:
