@@ -21,10 +21,18 @@ const ExpensesPage = () => {
   const [previewReceipt, setPreviewReceipt] = useState(null);
   const [formData, setFormData] = useState({
     employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '',
-    currency: 'CAD', exchange_rate_to_cad: 1.0
+    currency: 'CAD', exchange_rate_to_cad: 1.0,
+    category_code: '', category_custom_label: ''
   });
+  const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
 
   useEffect(() => { fetchData(); }, []);
+
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/expense-categories`)
+      .then(resp => setCategoryCatalog(resp.data))
+      .catch(err => console.error('Failed to fetch expense categories:', err));
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -38,7 +46,7 @@ const ExpensesPage = () => {
   };
 
   const resetForm = () => {
-    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0 });
+    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0, category_code: '', category_custom_label: '' });
     setPreviewReceipt(null);
   };
 
@@ -184,6 +192,16 @@ const ExpensesPage = () => {
   const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', fontSize: '14px' };
   const btnSecondary = { background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', fontWeight: '500', fontSize: '14px' };
 
+  const groupedCategories = (categoryCatalog.categories || []).reduce((acc, cat) => {
+    if (!acc[cat.group]) acc[cat.group] = [];
+    acc[cat.group].push(cat);
+    return acc;
+  }, {});
+
+  const selectedCategory = (categoryCatalog.categories || []).find(
+    c => c.code === formData.category_code
+  );
+
   if (loading) return <div style={{ textAlign: 'center', padding: '64px' }}><p style={{ color: '#6b7280' }}>Chargement des depenses...</p></div>;
 
   return (
@@ -309,18 +327,69 @@ const ExpensesPage = () => {
                   onChange={e => setFormData(prev => ({ ...prev, description: e.target.value }))}
                   required placeholder="Description de la depense" style={inputStyle} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
-                <div>
-                  <label style={labelStyle}>Categorie</label>
-                  <input type="text" value={formData.category}
-                    onChange={e => setFormData(prev => ({ ...prev, category: e.target.value }))}
-                    placeholder="Transport, Repas..." style={inputStyle} />
-                </div>
-                <div>
-                  <label style={labelStyle}>Date</label>
-                  <input type="date" value={formData.expense_date}
-                    onChange={e => setFormData(prev => ({ ...prev, expense_date: e.target.value }))} style={inputStyle} />
-                </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
+                  Categorie ARC
+                </label>
+                <select
+                  value={formData.category_code}
+                  onChange={e => setFormData(prev => ({ ...prev, category_code: e.target.value }))}
+                  style={{
+                    width: '100%', padding: '12px',
+                    border: '1.5px solid #d1d5db', borderRadius: 8,
+                    fontSize: 14, background: 'white', boxSizing: 'border-box',
+                  }}
+                >
+                  <option value="">— Choisir une categorie —</option>
+                  {Object.entries(groupedCategories)
+                    .filter(([groupKey]) => groupKey !== 'other')
+                    .map(([groupKey, cats]) => (
+                      <optgroup key={groupKey} label={categoryCatalog.groups[groupKey] || groupKey}>
+                        {cats.map(cat => (
+                          <option key={cat.code} value={cat.code}>
+                            {cat.label_fr}
+                            {cat.deductible_percentage < 100 ? ` ${cat.deductible_percentage}%` : ''}
+                            {cat.arc_line ? ` (${cat.arc_line})` : ''}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))
+                  }
+                  <optgroup label={categoryCatalog.groups && categoryCatalog.groups.other ? categoryCatalog.groups.other : 'Autre'}>
+                    <option value="other">Autre categorie…</option>
+                  </optgroup>
+                </select>
+
+                {formData.category_code === 'other' && (
+                  <input
+                    type="text"
+                    placeholder="Preciser la categorie (ex: Cotisations syndicales)"
+                    value={formData.category_custom_label}
+                    onChange={e => setFormData(prev => ({ ...prev, category_custom_label: e.target.value }))}
+                    style={{
+                      width: '100%', padding: '12px', marginTop: 8,
+                      border: '1.5px dashed #f59e0b', borderRadius: 8,
+                      fontSize: 14, background: '#fffbeb', boxSizing: 'border-box',
+                    }}
+                  />
+                )}
+
+                {selectedCategory && selectedCategory.deductible_percentage < 100 && formData.amount && (
+                  <div style={{
+                    marginTop: 8, padding: '8px 12px',
+                    background: '#fef3c7', borderRadius: 6,
+                    fontSize: 12.5, color: '#92400e',
+                  }}>
+                    {selectedCategory.deductible_percentage}% seulement deductible — montant deductible : <strong>
+                      {(parseFloat(formData.amount) * selectedCategory.deductible_percentage / 100).toFixed(2)} $
+                    </strong> sur {parseFloat(formData.amount).toFixed(2)} $
+                  </div>
+                )}
+              </div>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={labelStyle}>Date</label>
+                <input type="date" value={formData.expense_date}
+                  onChange={e => setFormData(prev => ({ ...prev, expense_date: e.target.value }))} style={inputStyle} />
               </div>
 
               {/* Receipt Drag & Drop */}
