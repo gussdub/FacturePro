@@ -71,8 +71,11 @@ class TestSettingsTaxNumbers:
 
 class TestClientTaxNumbers:
     _cleanup_ids = []
+    _auth_headers = None
 
     def test_create_client_with_numbers(self, auth):
+        # Capture auth on first run for teardown
+        TestClientTaxNumbers._auth_headers = auth
         payload = {
             "name": "ACME Test Inc.",
             "email": "test@acme.example",
@@ -97,6 +100,7 @@ class TestClientTaxNumbers:
         assert created["neq_number"] == "9876543210"
 
     def test_update_client_numbers(self, auth):
+        TestClientTaxNumbers._auth_headers = auth
         create = requests.post(f"{BASE_URL}/api/clients", headers=auth,
                                 json={"name": "Update Test Inc."})
         client_id = create.json()["id"]
@@ -111,6 +115,7 @@ class TestClientTaxNumbers:
         assert updated["bn_number"] == "111222333"
 
     def test_create_client_without_numbers(self, auth):
+        TestClientTaxNumbers._auth_headers = auth
         resp = requests.post(f"{BASE_URL}/api/clients", headers=auth,
                               json={"name": "No Tax Inc."})
         assert resp.status_code in (200, 201)
@@ -124,6 +129,11 @@ class TestClientTaxNumbers:
 
     @classmethod
     def teardown_class(cls):
-        # Best-effort cleanup of created test clients
-        # (auth fixture isn't directly accessible at teardown_class — use mongosh or skip)
-        pass
+        if not cls._auth_headers:
+            return
+        for cid in cls._cleanup_ids:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass  # best-effort
+        cls._cleanup_ids = []
