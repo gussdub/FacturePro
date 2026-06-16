@@ -83,6 +83,11 @@ class TestCheckTaxNumber:
         result = check_tax_number("123456789", "neq")
         assert result["valid"] is False
 
+    def test_unknown_kind_raises(self):
+        import pytest
+        with pytest.raises(ValueError, match="Unknown tax kind"):
+            check_tax_number("123", "unknown")
+
 
 class TestTaxFormats:
     def test_all_keys_present(self):

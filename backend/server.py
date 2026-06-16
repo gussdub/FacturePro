@@ -63,9 +63,12 @@ def normalize_tax_number(value):
     return (value or "").strip().upper().replace(" ", "").replace("-", "")
 
 def check_tax_number(value, kind):
-    """Retourne {'valid': bool, 'expected': str}. Vide considéré valide. Jamais bloquant."""
+    """Retourne {'valid': bool, 'expected': str}. Vide considéré valide. Jamais bloquant.
+    Tolère None. Lève ValueError si kind inconnu (erreur de programmation)."""
     if not value:
         return {"valid": True, "expected": ""}
+    if kind not in TAX_FORMATS:
+        raise ValueError(f"Unknown tax kind: {kind!r}")
     pattern, hint = TAX_FORMATS[kind]
     return {"valid": bool(re.match(pattern, value)), "expected": hint}
 
@@ -680,7 +683,6 @@ def delete_expense(expense_id: str, current_user: User = Depends(get_current_use
 # ─── CSV Import for Expenses ───
 import csv
 import io
-import re as re_module
 
 FIELD_PATTERNS = {
     "expense_date": [r"date", r"jour", r"day", r"posted", r"effective"],
@@ -700,7 +702,7 @@ def detect_column_mapping(headers):
                 continue
             h_lower = h.lower().strip()
             for pat in patterns:
-                if re_module.search(pat, h_lower):
+                if re.search(pat, h_lower):
                     best = i
                     break
             if best is not None:
@@ -718,7 +720,7 @@ def parse_amount(val):
     neg = val.startswith("(") and val.endswith(")")
     if neg:
         val = val[1:-1]
-    val = re_module.sub(r"[^\d.\-]", "", val)
+    val = re.sub(r"[^\d.\-]", "", val)
     try:
         result = abs(float(val))
         return -result if neg else result
