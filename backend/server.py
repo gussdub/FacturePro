@@ -795,6 +795,11 @@ def delete_employee(employee_id: str, current_user: User = Depends(get_current_u
     return {"message": "Employee deleted"}
 
 # ─── Expenses CRUD ───
+@app.get("/api/expense-categories")
+def get_expense_categories():
+    """Liste publique des catégories ARC + groupes (utilisée par le picker frontend)."""
+    return {"categories": EXPENSE_CATEGORIES, "groups": EXPENSE_CATEGORY_GROUPS}
+
 @app.get("/api/expenses")
 def get_expenses(current_user: User = Depends(get_current_user_with_access)):
     return clean_docs(db.expenses.find({"user_id": current_user.id}, {"_id": 0}))
