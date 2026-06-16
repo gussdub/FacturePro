@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BACKEND_URL } from '../config';
+import TaxNumberInput from '../components/TaxNumberInput';
 
 const ClientsPage = () => {
   const [clients, setClients] = useState([]);
@@ -12,8 +13,10 @@ const ClientsPage = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [formData, setFormData] = useState({
-    name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: ''
+    name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
+    bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '',
   });
+  const [showTaxNumbers, setShowTaxNumbers] = useState(false);
 
   useEffect(() => { fetchClients(); }, []);
 
@@ -48,7 +51,8 @@ const ClientsPage = () => {
         setSuccess('Client cree avec succes');
       }
       setShowForm(false); setEditingClient(null);
-      setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+      setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '', bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '' });
+      setShowTaxNumbers(false);
       fetchClients();
     } catch (err) {
       setError(err.response?.data?.detail || 'Erreur lors de la sauvegarde');
@@ -57,7 +61,7 @@ const ClientsPage = () => {
 
   const handleEdit = (client) => {
     setEditingClient(client);
-    setFormData({ name: client.name, email: client.email, phone: client.phone || '', address: client.address || '', city: client.city || '', postal_code: client.postal_code || '', country: client.country || '' });
+    setFormData({ name: client.name, email: client.email, phone: client.phone || '', address: client.address || '', city: client.city || '', postal_code: client.postal_code || '', country: client.country || '', bn_number: client.bn_number || '', gst_number: client.gst_number || '', qst_number: client.qst_number || '', hst_number: client.hst_number || '', neq_number: client.neq_number || '' });
     setShowForm(true);
   };
 
@@ -75,7 +79,8 @@ const ClientsPage = () => {
 
   const closeForm = () => {
     setShowForm(false); setEditingClient(null);
-    setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '' });
+    setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '', bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '' });
+    setShowTaxNumbers(false);
   };
 
   if (loading) {
@@ -222,6 +227,65 @@ const ClientsPage = () => {
                       placeholder="Canada" data-testid="client-country-input"
                       style={{ width: '100%', padding: '12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '16px', boxSizing: 'border-box' }} />
                   </div>
+                </div>
+                <div style={{ marginTop: 16, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowTaxNumbers(!showTaxNumbers)}
+                    style={{
+                      background: 'none', border: 0, padding: 0, color: '#00A08C',
+                      fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                    aria-expanded={showTaxNumbers}
+                  >
+                    <span>{showTaxNumbers ? '▼' : '▶'}</span>
+                    Numéros officiels (B2B, optionnel)
+                  </button>
+                  {showTaxNumbers && (
+                    <div style={{ marginTop: 16 }}>
+                      <TaxNumberInput
+                        label="BN — Numéro d'entreprise fédéral"
+                        fieldName="bn_number"
+                        value={formData.bn_number}
+                        onChange={(v) => setFormData(prev => ({ ...prev, bn_number: v }))}
+                        placeholder="123456789"
+                        tooltip="9 chiffres attribués par l'ARC"
+                      />
+                      <TaxNumberInput
+                        label="TPS / GST"
+                        fieldName="gst_number"
+                        value={formData.gst_number}
+                        onChange={(v) => setFormData(prev => ({ ...prev, gst_number: v }))}
+                        placeholder="123456789RT0001"
+                        tooltip="BN suivi de RT0001"
+                      />
+                      <TaxNumberInput
+                        label="TVQ / QST"
+                        fieldName="qst_number"
+                        value={formData.qst_number}
+                        onChange={(v) => setFormData(prev => ({ ...prev, qst_number: v }))}
+                        placeholder="1234567890TQ0001"
+                        tooltip="10 chiffres + TQ0001 (Revenu Québec)"
+                      />
+                      <TaxNumberInput
+                        label="TVH / HST"
+                        fieldName="hst_number"
+                        value={formData.hst_number}
+                        onChange={(v) => setFormData(prev => ({ ...prev, hst_number: v }))}
+                        placeholder="123456789RT0001"
+                        tooltip="Pour ON, NB, NS, PE, NL"
+                      />
+                      <TaxNumberInput
+                        label="NEQ — Numéro d'entreprise Québec"
+                        fieldName="neq_number"
+                        value={formData.neq_number}
+                        onChange={(v) => setFormData(prev => ({ ...prev, neq_number: v }))}
+                        placeholder="1234567890"
+                        tooltip="10 chiffres attribués par le REQ (corporations QC)"
+                      />
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', paddingTop: '16px', borderTop: '1px solid #e5e7eb' }}>
                   <button type="button" onClick={closeForm} style={{
