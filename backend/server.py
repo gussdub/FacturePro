@@ -100,6 +100,25 @@ def normalize_tax_fields(data):
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 
+def _take_regs(doc):
+    """Extrait les 5 numéros officiels d'un doc (settings ou client).
+    Retourne {bn, gst, qst, hst, neq} avec valeurs vides si absent.
+    Utilisé pour le snapshot et le fallback PDF."""
+    return {
+        "bn":  doc.get("bn_number", ""),
+        "gst": doc.get("gst_number", ""),
+        "qst": doc.get("qst_number", ""),
+        "hst": doc.get("hst_number", ""),
+        "neq": doc.get("neq_number", ""),
+    }
+
+_TAX_LABELS = {"bn": "BN", "gst": "TPS", "qst": "TVQ", "hst": "TVH", "neq": "NEQ"}
+
+def _reg_label_parts(regs):
+    """Retourne la liste 'LABEL valeur' pour les numéros renseignés (ordre BN/TPS/TVQ/TVH/NEQ).
+    Utilisé par le PDF pour afficher la ligne client et l'encadré entreprise."""
+    return [f"{_TAX_LABELS[k]} {regs[k]}" for k in _TAX_LABELS if regs.get(k)]
+
 def _build_tax_registrations(user_id, client_id):
     """Snapshot des 10 numéros (5 entreprise + 5 client). Champs vides si absents.
     Si client_id est vide/None (facture B2C sans client), client section reste vide."""
@@ -107,15 +126,7 @@ def _build_tax_registrations(user_id, client_id):
     client_doc = {}
     if client_id:
         client_doc = db.clients.find_one({"id": client_id, "user_id": user_id}, {"_id": 0}) or {}
-    def _take(doc):
-        return {
-            "bn": doc.get("bn_number", ""),
-            "gst": doc.get("gst_number", ""),
-            "qst": doc.get("qst_number", ""),
-            "hst": doc.get("hst_number", ""),
-            "neq": doc.get("neq_number", ""),
-        }
-    return {"company": _take(settings), "client": _take(client_doc)}
+    return {"company": _take_regs(settings), "client": _take_regs(client_doc)}
 
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
@@ -1193,20 +1204,8 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
 
     # Source: snapshot if present (immutable), fallback to current company_settings/client_info for old docs
     tax_regs = document.get('tax_registrations') or {
-        "company": {
-            "bn":  company_settings.get('bn_number', ''),
-            "gst": company_settings.get('gst_number', ''),
-            "qst": company_settings.get('qst_number', ''),
-            "hst": company_settings.get('hst_number', ''),
-            "neq": company_settings.get('neq_number', ''),
-        },
-        "client": {
-            "bn":  (client_info or {}).get('bn_number', ''),
-            "gst": (client_info or {}).get('gst_number', ''),
-            "qst": (client_info or {}).get('qst_number', ''),
-            "hst": (client_info or {}).get('hst_number', ''),
-            "neq": (client_info or {}).get('neq_number', ''),
-        },
+        "company": _take_regs(company_settings),
+        "client":  _take_regs(client_info or {}),
     }
 
     elements = []
@@ -1321,13 +1320,7 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         bill_to.append(Paragraph(client_email, ParagraphStyle('ClientEmail', parent=small_style, leading=14)))
 
     # Numéros officiels du client (B2B), affichés en monospace si renseignés
-    client_regs = tax_regs.get('client', {})
-    client_num_parts = []
-    if client_regs.get('bn'):  client_num_parts.append(f"BN {client_regs['bn']}")
-    if client_regs.get('gst'): client_num_parts.append(f"TPS {client_regs['gst']}")
-    if client_regs.get('qst'): client_num_parts.append(f"TVQ {client_regs['qst']}")
-    if client_regs.get('hst'): client_num_parts.append(f"TVH {client_regs['hst']}")
-    if client_regs.get('neq'): client_num_parts.append(f"NEQ {client_regs['neq']}")
+    client_num_parts = _reg_label_parts(tax_regs.get('client', {}))
     if client_num_parts:
         bill_to.append(Spacer(1, 4))
         client_nums_style = ParagraphStyle('ClientNums', parent=small_style,
@@ -1429,13 +1422,7 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         elements.append(Paragraph(terms, terms_style))
 
     # Encadré "Numéros d'enregistrement" côté entreprise, si au moins un renseigné
-    company_regs = tax_regs.get('company', {})
-    company_num_parts = []
-    if company_regs.get('bn'):  company_num_parts.append(f"BN {company_regs['bn']}")
-    if company_regs.get('gst'): company_num_parts.append(f"TPS {company_regs['gst']}")
-    if company_regs.get('qst'): company_num_parts.append(f"TVQ {company_regs['qst']}")
-    if company_regs.get('hst'): company_num_parts.append(f"TVH {company_regs['hst']}")
-    if company_regs.get('neq'): company_num_parts.append(f"NEQ {company_regs['neq']}")
+    company_num_parts = _reg_label_parts(tax_regs.get('company', {}))
     if company_num_parts:
         elements.append(Spacer(1, 0.3*inch))
         reg_title_style = ParagraphStyle('RegTitle', parent=small_style,
