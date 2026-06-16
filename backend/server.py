@@ -128,6 +128,51 @@ def _build_tax_registrations(user_id, client_id):
         client_doc = db.clients.find_one({"id": client_id, "user_id": user_id}, {"_id": 0}) or {}
     return {"company": _take_regs(settings), "client": _take_regs(client_doc)}
 
+# ─── Expense categories ARC (feature #3 du spec expense-categories) ───
+
+EXPENSE_CATEGORY_GROUPS = {
+    "office":    "Bureau et administration",
+    "marketing": "Marketing",
+    "premises":  "Local et services publics",
+    "travel":    "Déplacements et véhicule",
+    "personnel": "Personnel et services",
+    "other":     "Autre",
+}
+
+EXPENSE_CATEGORIES = [
+    # Bureau et administration
+    {"code": "office_expenses",    "label_fr": "Frais de bureau",         "label_en": "Office expenses",         "arc_line": "8810", "deductible_percentage": 100, "group": "office"},
+    {"code": "office_supplies",    "label_fr": "Fournitures",             "label_en": "Office supplies",         "arc_line": "8811", "deductible_percentage": 100, "group": "office"},
+    {"code": "professional_fees",  "label_fr": "Honoraires professionnels","label_en": "Professional fees",      "arc_line": "8860", "deductible_percentage": 100, "group": "office"},
+    {"code": "bank_charges",       "label_fr": "Frais bancaires",         "label_en": "Bank charges",            "arc_line": "8620", "deductible_percentage": 100, "group": "office"},
+    {"code": "subscriptions",      "label_fr": "Abonnements et licences", "label_en": "Subscriptions & licences", "arc_line": "8740", "deductible_percentage": 100, "group": "office"},
+    # Marketing
+    {"code": "advertising",        "label_fr": "Publicité et promotion",  "label_en": "Advertising & promotion", "arc_line": "8520", "deductible_percentage": 100, "group": "marketing"},
+    {"code": "meals_entertainment","label_fr": "Repas et représentation", "label_en": "Meals & entertainment",   "arc_line": "8523", "deductible_percentage": 50,  "group": "marketing"},
+    # Local et services publics
+    {"code": "rent",               "label_fr": "Loyer",                   "label_en": "Rent",                    "arc_line": "8910", "deductible_percentage": 100, "group": "premises"},
+    {"code": "utilities",          "label_fr": "Services publics",        "label_en": "Utilities",               "arc_line": "9220", "deductible_percentage": 100, "group": "premises"},
+    {"code": "insurance",          "label_fr": "Assurances",              "label_en": "Insurance",               "arc_line": "8690", "deductible_percentage": 100, "group": "premises"},
+    {"code": "repairs_maintenance","label_fr": "Entretien et réparations","label_en": "Repairs & maintenance",   "arc_line": "8960", "deductible_percentage": 100, "group": "premises"},
+    # Déplacements et véhicule
+    {"code": "travel",             "label_fr": "Frais de déplacement",    "label_en": "Travel",                  "arc_line": "9200", "deductible_percentage": 100, "group": "travel"},
+    {"code": "vehicle_expenses",   "label_fr": "Frais de véhicule",       "label_en": "Vehicle expenses",        "arc_line": "9281", "deductible_percentage": 100, "group": "travel"},
+    {"code": "delivery",           "label_fr": "Livraison et fret",       "label_en": "Delivery & freight",      "arc_line": "9275", "deductible_percentage": 100, "group": "travel"},
+    # Personnel et services
+    {"code": "salaries",           "label_fr": "Salaires et avantages",   "label_en": "Salaries & benefits",     "arc_line": "9060", "deductible_percentage": 100, "group": "personnel"},
+    {"code": "subcontracts",       "label_fr": "Sous-traitance",          "label_en": "Subcontracts",            "arc_line": "9367", "deductible_percentage": 100, "group": "personnel"},
+    {"code": "management_fees",    "label_fr": "Frais de gestion",        "label_en": "Management fees",         "arc_line": "8871", "deductible_percentage": 100, "group": "personnel"},
+    # Autre
+    {"code": "other",              "label_fr": "Autre",                   "label_en": "Other",                   "arc_line": "",     "deductible_percentage": 100, "group": "other"},
+]
+
+
+def _find_category(code):
+    """Retourne le dict catalogue correspondant à code, ou None si inconnu/vide/None."""
+    if not code:
+        return None
+    return next((c for c in EXPENSE_CATEGORIES if c["code"] == code), None)
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
