@@ -1191,6 +1191,24 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=10, textColor=dark, alignment=TA_RIGHT)
     terms_style = ParagraphStyle('Terms', parent=styles['Normal'], fontSize=8, textColor=gray, leading=11)
 
+    # Source: snapshot if present (immutable), fallback to current company_settings/client_info for old docs
+    tax_regs = document.get('tax_registrations') or {
+        "company": {
+            "bn":  company_settings.get('bn_number', ''),
+            "gst": company_settings.get('gst_number', ''),
+            "qst": company_settings.get('qst_number', ''),
+            "hst": company_settings.get('hst_number', ''),
+            "neq": company_settings.get('neq_number', ''),
+        },
+        "client": {
+            "bn":  (client_info or {}).get('bn_number', ''),
+            "gst": (client_info or {}).get('gst_number', ''),
+            "qst": (client_info or {}).get('qst_number', ''),
+            "hst": (client_info or {}).get('hst_number', ''),
+            "neq": (client_info or {}).get('neq_number', ''),
+        },
+    }
+
     elements = []
 
     # Header with company info
@@ -1234,12 +1252,7 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     if comp_phone:
         left_parts.append(Paragraph(comp_phone, small_style))
 
-    gst = company_settings.get('gst_number', '')
-    pst = company_settings.get('qst_number', '')
-    if gst:
-        left_parts.append(Paragraph(f"TPS: {gst}", small_style))
-    if pst:
-        left_parts.append(Paragraph(f"TVQ: {pst}", small_style))
+    # Les numéros officiels sont désormais affichés dans l'encadré en bas de page.
 
     doc_label = "SOUMISSION" if doc_type == "quote" else "FACTURE"
     doc_number = document.get('quote_number' if doc_type == 'quote' else 'invoice_number', 'N/A')
@@ -1306,6 +1319,20 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     if client_email:
         bill_to.append(Spacer(1, 3))
         bill_to.append(Paragraph(client_email, ParagraphStyle('ClientEmail', parent=small_style, leading=14)))
+
+    # Numéros officiels du client (B2B), affichés en monospace si renseignés
+    client_regs = tax_regs.get('client', {})
+    client_num_parts = []
+    if client_regs.get('bn'):  client_num_parts.append(f"BN {client_regs['bn']}")
+    if client_regs.get('gst'): client_num_parts.append(f"TPS {client_regs['gst']}")
+    if client_regs.get('qst'): client_num_parts.append(f"TVQ {client_regs['qst']}")
+    if client_regs.get('hst'): client_num_parts.append(f"TVH {client_regs['hst']}")
+    if client_regs.get('neq'): client_num_parts.append(f"NEQ {client_regs['neq']}")
+    if client_num_parts:
+        bill_to.append(Spacer(1, 4))
+        client_nums_style = ParagraphStyle('ClientNums', parent=small_style,
+                                            fontName='Courier', fontSize=8, leading=11)
+        bill_to.append(Paragraph(' &nbsp;·&nbsp; '.join(client_num_parts), client_nums_style))
 
     client_table = Table([[bill_to]], colWidths=[7*inch])
     client_table.setStyle(TableStyle([
@@ -1400,6 +1427,36 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         elements.append(Paragraph("<b>Conditions generales:</b>", company_style))
         elements.append(Spacer(1, 4))
         elements.append(Paragraph(terms, terms_style))
+
+    # Encadré "Numéros d'enregistrement" côté entreprise, si au moins un renseigné
+    company_regs = tax_regs.get('company', {})
+    company_num_parts = []
+    if company_regs.get('bn'):  company_num_parts.append(f"BN {company_regs['bn']}")
+    if company_regs.get('gst'): company_num_parts.append(f"TPS {company_regs['gst']}")
+    if company_regs.get('qst'): company_num_parts.append(f"TVQ {company_regs['qst']}")
+    if company_regs.get('hst'): company_num_parts.append(f"TVH {company_regs['hst']}")
+    if company_regs.get('neq'): company_num_parts.append(f"NEQ {company_regs['neq']}")
+    if company_num_parts:
+        elements.append(Spacer(1, 0.3*inch))
+        reg_title_style = ParagraphStyle('RegTitle', parent=small_style,
+                                          fontName='Helvetica-Bold', fontSize=8.5, textColor=dark)
+        reg_body_style = ParagraphStyle('RegBody', parent=small_style,
+                                         fontName='Courier', fontSize=8, leading=11)
+        reg_inner = [
+            Paragraph("Numeros d'enregistrement", reg_title_style),
+            Spacer(1, 3),
+            Paragraph(' &nbsp;·&nbsp; '.join(company_num_parts), reg_body_style),
+        ]
+        reg_table = Table([[reg_inner]], colWidths=[7*inch])
+        reg_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), HexColor('#f8fafb')),
+            ('BOX', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('LEFTPADDING', (0, 0), (-1, -1), 14),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 14),
+        ]))
+        elements.append(reg_table)
 
     # Footer
     elements.append(Spacer(1, 0.5*inch))
