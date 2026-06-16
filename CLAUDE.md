@@ -1,22 +1,22 @@
 # FacturePro
 
-Application de facturation (SaaS) créée à l'origine avec Emergent, maintenant éditable depuis Claude Code.
+Application de facturation (SaaS). Créée à l'origine avec Emergent, **migrée pour fonctionner sans Emergent** le 2026-06-16. Maintenant 100 % éditable et déployable depuis Claude Code.
 
 ## Stack
 
-- **Backend** : FastAPI Python 3.11 + MongoDB (pymongo synchrone) + JWT + Stripe + Resend + ReportLab (PDF). Port interne 8001 en prod, 8000 en dev local.
-- **Frontend** : React 18 (CRA) + axios + recharts + lucide-react — pas de router lib, navigation manuelle via `window.history`. Port 3000.
-- **DB** : MongoDB Atlas, cluster `facturepro-production`, db `facturepro`. Collections : `users`, `user_passwords`, `invoices`, `quotes`, `clients`, `products`, `employees`, `expenses`, `company_settings`, `files`, `payment_transactions`, `trial_notifications`.
-- **Object Storage** : Emergent Object Storage (clé `EMERGENT_LLM_KEY`) pour logos/reçus uploadés. Pas d'équivalent local — les uploads peuvent être cassés en dev sans cette clé.
-- **Services externes** : Resend (emails), Stripe (abonnement $15/mois CAD), Frankfurter.dev (taux de change, gratuit sans clé).
-- **Déploiement** :
-  - **Emergent** = preview/dev. URL : `https://billing-app-32.preview.emergentagent.com`. `MONGO_URL` et les autres secrets sont stockés ici.
-  - **Render** (prod) = Web Service côté backend. URL : `https://facturepro-api.onrender.com`. Build : `cd backend && pip install -r requirements.txt`. Start : `cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT`. ⚠️ Free tier — dort après 15 min, premier hit prend ~30-60s pour réveiller.
-  - **Vercel** = frontend (`https://facturepro.ca`).
-  - **Render Postgres `facturepro-database`** : créée mais INUTILISÉE. Vestige, à ignorer ou supprimer.
+- **Backend** : FastAPI Python 3.11 + MongoDB (pymongo synchrone) + JWT + Stripe (lib officielle) + Resend + ReportLab (PDF).
+- **Frontend** : React 18 (CRA) + axios + recharts + lucide-react — pas de router lib, navigation manuelle via `window.history`.
+- **DB** : MongoDB Atlas, cluster `facturepro-production`, db `facturepro`. Collections : `users`, `user_passwords`, `invoices`, `quotes`, `clients`, `products`, `employees`, `expenses`, `company_settings`, `files` (binary inline), `payment_transactions`, `trial_notifications`, `quote_tokens`, `password_resets`.
+- **Object Storage** : ⚠️ MIGRÉ — les fichiers sont stockés **en binary BSON inline dans `db.files`** (champ `data`). Plus aucune dépendance Emergent storage. Les 8 anciens fichiers qui pointaient vers Emergent storage retournent **HTTP 410** et doivent être re-uploadés.
+- **Services externes** : Resend (emails), Stripe (abonnement $15/mois CAD via Checkout, mode payment), Frankfurter.dev (taux de change, gratuit).
+- **Déploiement (sans Emergent)** :
+  - **Render** : Web Service `facturepro-backend` (compte gussdub), URL `https://facturepro-backend-dkvn.onrender.com`. Build : `cd backend && pip install -r requirements.txt`. Start : `cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT`. ⚠️ Free tier — dort après 15 min, premier hit ~30-60s.
+  - **Vercel** : projet `facturepro` (équipe `profiremanagers-projects`), URL temporaire `https://facturepro-psi.vercel.app`, domaine custom `https://facturepro.ca`. Root directory : `frontend`. CRA auto-détecté. Env var : `REACT_APP_BACKEND_URL=https://facturepro-backend-dkvn.onrender.com`.
+  - **DNS** : Ionos, A record + TXT validation Vercel. Migration 2026-06-16.
+  - **Services obsolètes (à supprimer quand prêt)** : `facturepro-api.onrender.com` (ancien backend Emergent), `facturepro-database` (Postgres Render inutilisée), projet Vercel d'Emergent.
 - **Domaine prod** : facturepro.ca
 - **Repo** : https://github.com/gussdub/FacturePro
-- ⚠️ **Sync des env vars** : si tu modifies un secret dans Emergent (`MONGO_URL`, `STRIPE_API_KEY`, etc.), tu dois aussi le mettre à jour manuellement dans Render. Aucune synchro automatique.
+- **Workflow push → prod** : `git push main` → Render redéploie backend, Vercel redéploie frontend. Aucune intervention manuelle.
 
 ## Structure (fichiers qui comptent)
 
@@ -44,19 +44,21 @@ frontend/
 
 ## Variables d'environnement
 
-Backend (`backend/.env` — non commité, à demander à Emergent) :
+Backend (`backend/.env` — non commité ; le script `setup_env.sh` à la racine génère le squelette pour dev local) :
 
 ```
-MONGO_URL=mongodb+srv://...@facturepro-production...    # depuis Emergent env vars
+MONGO_URL=mongodb://localhost:27017               # dev local (copie de prod restaurée)
 DB_NAME=facturepro
-JWT_SECRET=...                                          # même valeur que prod
-STRIPE_API_KEY=sk_test_emergent                         # ou sk_test_/sk_live_ Stripe perso
-EMERGENT_LLM_KEY=...                                    # Object Storage (logos/reçus)
-RESEND_API_KEY=...
+JWT_SECRET=...                                    # n'importe quoi en dev ; valeur prod = celle des env vars Render
+STRIPE_API_KEY=sk_test_...                        # ta propre clé Stripe test/live
+STRIPE_WEBHOOK_SECRET=whsec_...                   # depuis Stripe Dashboard → Webhooks
+RESEND_API_KEY=re_...
 SENDER_EMAIL=noreply@facturepro.ca
 CORS_ORIGINS=http://localhost:3000
 PORT=8000
 ```
+
+Plus de `EMERGENT_LLM_KEY` — storage migré vers MongoDB inline.
 
 Frontend (`frontend/.env`) :
 
@@ -81,25 +83,19 @@ npm install
 npm start                                 # → http://localhost:3000
 ```
 
-⚠️ `requirements.txt` référence `emergentintegrations` via `--extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/` (utilisé pour Stripe Checkout). Si l'install échoue hors Emergent, isoler l'import à `server.py:3` et remplacer par l'API Stripe directe.
+`requirements.txt` est désormais sans dépendance Emergent.
 
-## Workflow Emergent ↔ Claude Code
+## Workflow
 
-Les commits sur `main` ressemblent à `auto-commit for <job_id>` — c'est Emergent qui pousse à chaque "Save to GitHub". Donc oui : un save côté Emergent met à jour ce repo.
+Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le déploiement sont gérés à 100 % depuis Claude Code :
 
-**Règle d'or pour éviter les conflits** :
+1. Éditer en local
+2. Tester sur `localhost:3000` / `localhost:8000` (DB locale = copie restaurée de prod)
+3. `git add ... && git commit -m "..." && git push origin main`
+4. Render redéploie `facturepro-backend` automatiquement (~3 min)
+5. Vercel redéploie `facturepro.ca` automatiquement (~2 min)
 
-1. **Avant** d'éditer depuis Claude Code → `git pull` pour récupérer les modifs Emergent récentes.
-2. **Après** une session Claude Code → `git push` pour qu'Emergent reparte de ta base à jour.
-3. **Ne jamais** éditer en parallèle des deux côtés sur le même fichier — Emergent ne sait pas merger, ça écrasera tes changements locaux au prochain auto-commit.
-
-Si conflit : résoudre manuellement, jamais `--force` sur `main`.
-
-## Déploiement
-
-- Push sur `main` → Render redéploie le backend automatiquement, Vercel redéploie le frontend.
-- Variables d'env de prod : configurées dans les dashboards Render et Vercel (pas dans le repo).
-- Voir `DEPLOYMENT_GUIDE.md` pour les détails MongoDB Atlas / Render / Vercel.
+`DEPLOYMENT_GUIDE.md` à la racine est **obsolète** (parle de l'ancienne setup MongoDB Atlas + Render). Ce CLAUDE.md est la source de vérité.
 
 ## Pour Claude
 
