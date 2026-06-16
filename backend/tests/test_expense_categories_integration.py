@@ -149,3 +149,85 @@ class TestExpenseSnapshotOnCreate:
             except Exception:
                 pass
         cls._cleanup_ids = []
+
+
+class TestExpenseSnapshotOnUpdate:
+    _cleanup_ids = []
+    _auth_headers = None
+
+    def _create(self, auth, code, amount):
+        resp = requests.post(f"{BASE_URL}/api/expenses", headers=auth, json={
+            "description": "Test update",
+            "amount": amount,
+            "currency": "CAD",
+            "category_code": code,
+            "expense_date": "2026-06-16",
+        })
+        eid = resp.json()["id"]
+        TestExpenseSnapshotOnUpdate._cleanup_ids.append(eid)
+        TestExpenseSnapshotOnUpdate._auth_headers = auth
+        return eid
+
+    def test_change_category_resnapshots_all_5_fields(self, auth):
+        eid = self._create(auth, "office_expenses", 100)
+        upd = requests.put(f"{BASE_URL}/api/expenses/{eid}", headers=auth,
+                            json={"category_code": "meals_entertainment"})
+        assert upd.status_code == 200
+        exp = upd.json()
+        assert exp["category"] == "Repas et représentation"
+        assert exp["category_code"] == "meals_entertainment"
+        assert exp["category_arc_line"] == "8523"
+        assert exp["deductible_percentage"] == 50
+        # Amount unchanged (100) but deductible recalculated
+        assert exp["deductible_amount"] == 50.0
+
+    def test_change_amount_only_recalculates_deductible_keeps_snapshot(self, auth):
+        eid = self._create(auth, "meals_entertainment", 100)
+        upd = requests.put(f"{BASE_URL}/api/expenses/{eid}", headers=auth,
+                            json={"amount": 200.0})
+        assert upd.status_code == 200
+        exp = upd.json()
+        # Category snapshot UNCHANGED
+        assert exp["category_code"] == "meals_entertainment"
+        assert exp["category_arc_line"] == "8523"
+        assert exp["deductible_percentage"] == 50
+        # Deductible recalculated with new amount
+        assert exp["amount"] == 200.0
+        assert exp["deductible_amount"] == 100.0
+
+    def test_update_unrelated_field_does_not_recalculate(self, auth):
+        eid = self._create(auth, "meals_entertainment", 100)
+        initial = requests.get(f"{BASE_URL}/api/expenses", headers=auth).json()
+        initial_exp = next(e for e in initial if e["id"] == eid)
+        initial_deductible = initial_exp["deductible_amount"]
+        upd = requests.put(f"{BASE_URL}/api/expenses/{eid}", headers=auth,
+                            json={"description": "Updated description"})
+        assert upd.status_code == 200
+        get = requests.get(f"{BASE_URL}/api/expenses", headers=auth).json()
+        updated_exp = next(e for e in get if e["id"] == eid)
+        assert updated_exp["deductible_amount"] == initial_deductible
+
+    def test_change_category_to_other_with_custom_label(self, auth):
+        eid = self._create(auth, "office_expenses", 80)
+        upd = requests.put(f"{BASE_URL}/api/expenses/{eid}", headers=auth,
+                            json={
+                                "category_code": "other",
+                                "category_custom_label": "Permis spécial",
+                            })
+        assert upd.status_code == 200
+        exp = upd.json()
+        assert exp["category"] == "Permis spécial"
+        assert exp["category_code"] == "other"
+        assert exp["category_custom_label"] == "Permis spécial"
+        assert exp["category_arc_line"] == ""
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for eid in cls._cleanup_ids:
+            try:
+                requests.delete(f"{BASE_URL}/api/expenses/{eid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        cls._cleanup_ids = []

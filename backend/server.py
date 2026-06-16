@@ -829,9 +829,27 @@ def create_expense(expense_data: dict, current_user: User = Depends(get_current_
 def update_expense(expense_id: str, expense_data: dict, current_user: User = Depends(get_current_user_with_access)):
     for k in ("id", "user_id", "_id"):
         expense_data.pop(k, None)
-    result = db.expenses.update_one({"id": expense_id, "user_id": current_user.id}, {"$set": expense_data})
-    if result.matched_count == 0:
+    # Charger l'état actuel pour décider si on doit re-snapshot la catégorie ou recalculer deductible_amount.
+    current = db.expenses.find_one({"id": expense_id, "user_id": current_user.id}, {"_id": 0})
+    if current is None:
         raise HTTPException(404, "Expense not found")
+    # Calculer le nouveau amount_cad si amount/currency/exchange_rate change
+    new_amount = float(expense_data.get("amount", current.get("amount", 0)))
+    new_currency = expense_data.get("currency", current.get("currency", "CAD"))
+    new_rate = expense_data.get("exchange_rate_to_cad", current.get("exchange_rate_to_cad", 1.0))
+    new_amount_cad = round(new_amount / new_rate, 2) if new_rate > 0 and new_currency != "CAD" else new_amount
+    # Décider: re-snapshot complet, recalc deductible only, ou rien
+    if "category_code" in expense_data:
+        # Re-snapshot complet des 6 champs catégorie + recalc deductible_amount
+        cat_snapshot = _build_expense_category_snapshot(expense_data, new_amount_cad)
+        expense_data.update(cat_snapshot)
+        expense_data["amount_cad"] = new_amount_cad
+    elif "amount" in expense_data or "currency" in expense_data or "exchange_rate_to_cad" in expense_data:
+        # L'amount_cad a possiblement changé : recalcule deductible_amount avec le pct stocké
+        stored_pct = current.get("deductible_percentage", 100)
+        expense_data["amount_cad"] = new_amount_cad
+        expense_data["deductible_amount"] = round(new_amount_cad * stored_pct / 100, 2)
+    db.expenses.update_one({"id": expense_id, "user_id": current_user.id}, {"$set": expense_data})
     return clean_doc(db.expenses.find_one({"id": expense_id}, {"_id": 0}))
 
 @app.put("/api/expenses/{expense_id}/status")
