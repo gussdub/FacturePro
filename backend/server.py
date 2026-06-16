@@ -72,6 +72,18 @@ def check_tax_number(value, kind):
     pattern, hint = TAX_FORMATS[kind]
     return {"valid": bool(re.match(pattern, value)), "expected": hint}
 
+def migrate_pst_to_qst(database=None):
+    """Renomme pst_number en qst_number dans company_settings. Idempotent.
+    Si `database` est None, utilise la DB par défaut (`db` global)."""
+    target = database if database is not None else db
+    result = target.company_settings.update_many(
+        {"pst_number": {"$exists": True}, "qst_number": {"$exists": False}},
+        [{"$set": {"qst_number": "$pst_number"}}, {"$unset": "pst_number"}]
+    )
+    if result.modified_count:
+        print(f"Migrated {result.modified_count} company_settings: pst_number → qst_number")
+    return result.modified_count
+
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 

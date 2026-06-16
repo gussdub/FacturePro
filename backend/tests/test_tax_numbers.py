@@ -8,7 +8,20 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("DB_NAME", "facturepro_test_unit")
 os.environ.setdefault("JWT_SECRET", "test")
 
+import pytest
+from pymongo import MongoClient
+
 from server import normalize_tax_number, check_tax_number, TAX_FORMATS
+
+
+@pytest.fixture
+def test_db():
+    """Fournit une DB MongoDB de test isolée. Drop à la fin."""
+    client = MongoClient("mongodb://localhost:27017")
+    db_name = "facturepro_test_migration"
+    db = client[db_name]
+    yield db
+    client.drop_database(db_name)
 
 
 class TestNormalizeTaxNumber:
@@ -97,3 +110,39 @@ class TestTaxFormats:
         for kind, (pattern, hint) in TAX_FORMATS.items():
             assert isinstance(pattern, str)
             assert isinstance(hint, str)
+
+
+class TestMigration:
+    def test_migrates_pst_to_qst(self, test_db):
+        from server import migrate_pst_to_qst
+        test_db.company_settings.insert_one({"user_id": "u1", "pst_number": "test1"})
+        migrate_pst_to_qst(test_db)
+        doc = test_db.company_settings.find_one({"user_id": "u1"})
+        assert doc["qst_number"] == "test1"
+        assert "pst_number" not in doc
+
+    def test_idempotent(self, test_db):
+        from server import migrate_pst_to_qst
+        test_db.company_settings.insert_one({"user_id": "u1", "pst_number": "x"})
+        migrate_pst_to_qst(test_db)
+        doc_after_first = test_db.company_settings.find_one({"user_id": "u1"})
+        migrate_pst_to_qst(test_db)
+        doc_after_second = test_db.company_settings.find_one({"user_id": "u1"})
+        assert doc_after_first == doc_after_second
+
+    def test_skips_when_qst_already_exists(self, test_db):
+        from server import migrate_pst_to_qst
+        # Doc with both: should not overwrite qst
+        test_db.company_settings.insert_one({"user_id": "u1", "pst_number": "old", "qst_number": "new"})
+        migrate_pst_to_qst(test_db)
+        doc = test_db.company_settings.find_one({"user_id": "u1"})
+        assert doc["qst_number"] == "new"
+        # pst_number left untouched in this corner case
+        assert doc.get("pst_number") == "old"
+
+    def test_skips_when_no_pst(self, test_db):
+        from server import migrate_pst_to_qst
+        test_db.company_settings.insert_one({"user_id": "u1", "qst_number": "x"})
+        migrate_pst_to_qst(test_db)
+        doc = test_db.company_settings.find_one({"user_id": "u1"})
+        assert doc["qst_number"] == "x"
