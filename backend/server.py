@@ -861,6 +861,10 @@ def create_expense(expense_data: dict, current_user: User = Depends(get_current_
         "amount": amount, "currency": currency,
         "exchange_rate_to_cad": exchange_rate, "amount_cad": amount_cad,
         **cat_snapshot,
+        "gst_paid_cad": float(expense_data.get("gst_paid_cad", 0) or 0),
+        "qst_paid_cad": float(expense_data.get("qst_paid_cad", 0) or 0),
+        "hst_paid_cad": float(expense_data.get("hst_paid_cad", 0) or 0),
+        "taxes_auto_computed": bool(expense_data.get("taxes_auto_computed", False)),
         "expense_date": expense_data.get("expense_date", datetime.now(timezone.utc).isoformat()),
         "status": "pending", "receipt_url": expense_data.get("receipt_url", ""),
         "notes": expense_data.get("notes", ""), "created_at": datetime.now(timezone.utc).isoformat()
@@ -872,6 +876,12 @@ def create_expense(expense_data: dict, current_user: User = Depends(get_current_
 def update_expense(expense_id: str, expense_data: dict, current_user: User = Depends(get_current_user_with_access)):
     for k in ("id", "user_id", "_id"):
         expense_data.pop(k, None)
+    # Cast des champs taxes payées si présents (le frontend peut envoyer des strings)
+    for k in ("gst_paid_cad", "qst_paid_cad", "hst_paid_cad"):
+        if k in expense_data:
+            expense_data[k] = float(expense_data[k] or 0)
+    if "taxes_auto_computed" in expense_data:
+        expense_data["taxes_auto_computed"] = bool(expense_data["taxes_auto_computed"])
     # Charger l'état actuel pour décider si on doit re-snapshot la catégorie ou recalculer deductible_amount.
     current = db.expenses.find_one({"id": expense_id, "user_id": current_user.id}, {"_id": 0})
     if current is None:
