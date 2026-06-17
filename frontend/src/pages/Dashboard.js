@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { BACKEND_URL, formatCurrency } from '../config';
 import QuickActionCard from '../components/QuickActionCard';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Users, FileText, FilePen, DollarSign, AlertTriangle, CheckCircle, ArrowUpRight, Receipt } from 'lucide-react';
+import { Users, FileText, FilePen, DollarSign, AlertTriangle, CheckCircle, ArrowUpRight, Receipt, Wallet } from 'lucide-react';
 
 const CHART_COLORS = ['#09090b', '#52525b', '#a1a1aa', '#002FA7', '#d4d4d8', '#71717a', '#3f3f46', '#e4e4e7'];
 
@@ -13,10 +13,11 @@ const Dashboard = ({ navigate }) => {
   const [stats, setStats] = useState({ loading: true });
   const [overdue, setOverdue] = useState({ loading: true, data: null });
   const [analytics, setAnalytics] = useState({ loading: true, data: null });
+  const [outstanding, setOutstanding] = useState({ total_outstanding_cad: 0, invoice_count: 0 });
   const [sendingReminder, setSendingReminder] = useState(null);
   const [reminderMsg, setReminderMsg] = useState('');
 
-  useEffect(() => { fetchStats(); fetchOverdue(); fetchAnalytics(); }, []);
+  useEffect(() => { fetchStats(); fetchOverdue(); fetchAnalytics(); fetchOutstanding(); }, []);
 
   const fetchStats = async () => {
     try {
@@ -37,6 +38,13 @@ const Dashboard = ({ navigate }) => {
       const res = await axios.get(`${BACKEND_URL}/api/dashboard/expense-analytics`);
       setAnalytics({ loading: false, data: res.data });
     } catch { setAnalytics({ loading: false, data: null }); }
+  };
+
+  const fetchOutstanding = async () => {
+    try {
+      const res = await axios.get(`${BACKEND_URL}/api/dashboard/outstanding`);
+      setOutstanding(res.data);
+    } catch {}
   };
 
   const sendReminder = async (inv) => {
@@ -81,7 +89,7 @@ const Dashboard = ({ navigate }) => {
       </div>
 
       {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '28px' }}>
         {[
           { id: 'clients', icon: Users, val: stats.data?.total_clients || 0, label: 'Clients' },
           { id: 'invoices', icon: FileText, val: stats.data?.total_invoices || 0, label: 'Factures' },
@@ -103,6 +111,25 @@ const Dashboard = ({ navigate }) => {
             </div>
           );
         })}
+        {/* Total à recevoir */}
+        <div
+          data-testid="stat-outstanding"
+          onClick={() => navigate('/invoices')}
+          style={{
+            background: '#fffbeb', border: '1px solid #fde68a', padding: '20px',
+            borderRadius: '6px', transition: 'all 0.15s ease', cursor: 'pointer'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+            <Wallet size={18} strokeWidth={1.5} color="#f59e0b" />
+            <ArrowUpRight size={14} strokeWidth={1.5} color="#f59e0b" />
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: '700', color: '#92400e', marginBottom: '2px', letterSpacing: '-0.03em' }}>
+            {outstanding.total_outstanding_cad.toFixed(2)} $
+          </div>
+          <div style={{ fontSize: '12px', color: '#b45309', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total à recevoir</div>
+          <div style={{ fontSize: '11px', color: '#d97706', marginTop: '4px' }}>{outstanding.invoice_count} facture(s)</div>
+        </div>
       </div>
 
       {/* Overdue Tracker */}
