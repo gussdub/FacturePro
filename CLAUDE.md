@@ -136,3 +136,13 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Fix : POST /api/invoices et /api/quotes respectent maintenant `issue_date` envoyé par client
   - Spec : `docs/superpowers/specs/2026-06-16-tax-report-design.md`
   - Plan : `docs/superpowers/plans/2026-06-16-tax-report.md`
+
+- **2026-06-16 — État des résultats simplifié P&L (feature #5)**
+  - `GET /api/reports/pnl?start&end&basis&compare` retourne revenus, dépenses groupées par catégorie ARC + sous-totaux par groupe, 2 nets (gestion + imposable)
+  - `GET /api/reports/pnl/pdf?...` génère un PDF avec sommaire et détail
+  - Frontend : ReportsPage en onglets (Rapport TPS/TVQ + État des résultats)
+  - Sélecteurs multi-période (mois / trimestre / année / personnalisée), basis (exercice/caisse), comparaison (aucune/précédente/année précédente)
+  - Tableau collapsible par groupe avec brut + déductible côte à côte
+  - Limitation v1 : cash basis = filtre `status=paid` sur `issue_date` (approximation)
+  - Spec : `docs/superpowers/specs/2026-06-16-pnl-report-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-16-pnl-report.md`
