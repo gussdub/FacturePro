@@ -865,7 +865,7 @@ def add_invoice_payment(invoice_id: str, body: dict,
         {"id": invoice_id, "user_id": current_user.id},
         {"$push": {"payments": payment}, "$set": {"status": new_status}}
     )
-    fresh = db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+    fresh = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
     return _enrich_invoice(fresh)
 
 @app.delete("/api/invoices/{invoice_id}")
