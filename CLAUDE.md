@@ -124,3 +124,15 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Endpoint public `GET /api/expense-categories`
   - Spec : `docs/superpowers/specs/2026-06-16-expense-categories-design.md`
   - Plan : `docs/superpowers/plans/2026-06-16-expense-categories.md`
+
+- **2026-06-16 — Rapport TPS/TVQ trimestriel (feature #4)**
+  - Tracking TPS/TVQ/TVH payées sur dépenses via 4 champs sur `expenses` + bouton "Calculer auto"
+  - Champ `province` sur `company_settings` (13 valeurs CA, défaut QC)
+  - `GET /api/reports/sales-tax?start&end` retourne sommaire + détail CRA (T1) + détail Revenu Québec (FP-2500)
+  - `GET /api/reports/sales-tax/pdf?start&end` génère un PDF avec sommaire et tableaux ligne-par-ligne
+  - Nouvelle page Rapports avec quick-picker trimestre (4 dernières années) + plage personnalisée
+  - Filtre invoices : exclut `draft`, inclut `sent/paid/overdue` (accrual basis)
+  - Multi-devise : conversion via `exchange_rate_to_cad` snapshoté
+  - Fix : POST /api/invoices et /api/quotes respectent maintenant `issue_date` envoyé par client
+  - Spec : `docs/superpowers/specs/2026-06-16-tax-report-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-16-tax-report.md`
