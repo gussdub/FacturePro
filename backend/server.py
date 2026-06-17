@@ -10,7 +10,7 @@ import jwt
 import bcrypt
 import resend
 import requests as http_requests
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -258,6 +258,54 @@ def _quarter_to_dates(year, quarter):
     """Q1=jan-mar, Q2=avr-jun, Q3=jul-sep, Q4=oct-dec.
     Retourne (start: 'YYYY-MM-DD', end: 'YYYY-MM-DD')."""
     return (f"{year}-{_QUARTER_STARTS[quarter]}", f"{year}-{_QUARTER_ENDS[quarter]}")
+
+
+# ─── P&L report helpers (feature #5 du spec pnl-report) ───
+
+def _parse_date(s):
+    """YYYY-MM-DD → date. Retourne None si invalide."""
+    try:
+        y, m, d = map(int, s.split("-"))
+        return date(y, m, d)
+    except Exception:
+        return None
+
+
+def _compute_compare_period(start, end, mode):
+    """Retourne (start, end) de la période de comparaison, ou None si mode == 'none'
+    ou si les dates sont invalides.
+
+    - mode='previous'   : fenêtre de même durée juste avant start.
+    - mode='prior_year' : même fenêtre, année précédente (clamp 29 février).
+    """
+    if mode == "none":
+        return None
+    s = _parse_date(start)
+    e = _parse_date(end)
+    if not s or not e:
+        return None
+    if mode == "previous":
+        delta = (e - s).days
+        new_e = s - timedelta(days=1)
+        new_s = s - timedelta(days=max(1, delta))
+        return (new_s.isoformat(), new_e.isoformat())
+    if mode == "prior_year":
+        def _shift_year(d):
+            try:
+                return d.replace(year=d.year - 1)
+            except ValueError:
+                # 29 février → 28 février année non-bissextile
+                return d.replace(year=d.year - 1, day=28)
+        return (_shift_year(s).isoformat(), _shift_year(e).isoformat())
+    return None
+
+
+def _pct_delta(previous, current):
+    """Pourcentage de variation. Convention : si previous == 0 et current != 0 → 100 %.
+    Si les deux sont 0, retourne 0. Arrondi à 1 décimale."""
+    if previous == 0:
+        return 0.0 if current == 0 else 100.0
+    return round((current - previous) / previous * 100, 1)
 
 
 app = FastAPI(title="FacturePro API", version="2.0.0")
