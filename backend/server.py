@@ -217,6 +217,49 @@ def _build_expense_category_snapshot(expense_data, amount_cad):
     }
 
 
+# ─── Sales tax report helpers (feature #4 du spec tax-report) ───
+
+PROVINCES_VALID = frozenset({
+    "QC", "ON", "BC", "AB", "SK", "MB",
+    "NB", "NS", "PE", "NL", "YT", "NU", "NT",
+})
+
+
+def _compute_taxes_paid(amount_gross, province):
+    """Calcule les taxes incluses dans un montant brut TTC selon la province.
+    Toutes les valeurs retournées sont des floats CAD arrondis à 2 décimales.
+
+    QC      : 5 % TPS + 9.975 % TVQ → diviseur 114.975
+    ON      : 13 % TVH               → diviseur 113
+    NB/NS/PE/NL : 15 % TVH           → diviseur 115
+    autres (BC, AB, SK, MB, YT, NU, NT, inconnu) : 5 % TPS → diviseur 105
+    """
+    if not amount_gross or amount_gross <= 0:
+        return {"gst": 0, "qst": 0, "hst": 0}
+    if province == "QC":
+        return {
+            "gst": round(amount_gross * 5 / 114.975, 2),
+            "qst": round(amount_gross * 9.975 / 114.975, 2),
+            "hst": 0,
+        }
+    if province == "ON":
+        return {"gst": 0, "qst": 0, "hst": round(amount_gross * 13 / 113, 2)}
+    if province in ("NB", "NS", "PE", "NL"):
+        return {"gst": 0, "qst": 0, "hst": round(amount_gross * 15 / 115, 2)}
+    # BC, AB, SK, MB, YT, NU, NT, ou inconnu → TPS seule
+    return {"gst": round(amount_gross * 5 / 105, 2), "qst": 0, "hst": 0}
+
+
+_QUARTER_STARTS = {"Q1": "01-01", "Q2": "04-01", "Q3": "07-01", "Q4": "10-01"}
+_QUARTER_ENDS = {"Q1": "03-31", "Q2": "06-30", "Q3": "09-30", "Q4": "12-31"}
+
+
+def _quarter_to_dates(year, quarter):
+    """Q1=jan-mar, Q2=avr-jun, Q3=jul-sep, Q4=oct-dec.
+    Retourne (start: 'YYYY-MM-DD', end: 'YYYY-MM-DD')."""
+    return (f"{year}-{_QUARTER_STARTS[quarter]}", f"{year}-{_QUARTER_ENDS[quarter]}")
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
