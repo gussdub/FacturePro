@@ -1126,6 +1126,7 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
             "default_due_days": 30, "bn_number": "", "gst_number": "", "qst_number": "", "hst_number": "", "neq_number": "",
             "default_currency": "CAD",
             "entity_type": "sole_proprietor",
+            "province": "QC",
         }
         db.company_settings.insert_one(default)
         settings = {k: v for k, v in default.items() if k != "_id"}
@@ -1133,6 +1134,7 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
     for f in TAX_FIELDS:
         settings.setdefault(f, "")
     settings.setdefault("entity_type", "sole_proprietor")
+    settings.setdefault("province", "QC")
     settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
@@ -1146,12 +1148,16 @@ def update_settings(settings_data: dict, current_user: User = Depends(get_curren
     # Validation entity_type : seules deux valeurs canoniques acceptées
     if "entity_type" in settings_data and settings_data["entity_type"] not in ("sole_proprietor", "corporation"):
         settings_data.pop("entity_type")
+    # Validation province : seules les 13 valeurs canadiennes acceptées
+    if "province" in settings_data and settings_data["province"] not in PROVINCES_VALID:
+        settings_data.pop("province")
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": settings_data}, upsert=True)
     # Re-fetch + decorate so the frontend can update warnings without a separate GET
     settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
     for f in TAX_FIELDS:
         settings.setdefault(f, "")
     settings.setdefault("entity_type", "sole_proprietor")
+    settings.setdefault("province", "QC")
     settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
