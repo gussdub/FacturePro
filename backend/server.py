@@ -446,6 +446,37 @@ def _merge_expense_groups(current_groups, previous_groups):
     return merged
 
 
+# ─── Partial payments helpers (feature #6 du spec partial-payments) ───
+
+
+def _recompute_invoice_status(invoice):
+    """Détermine le statut basé sur le total payé vs total. Ne touche pas draft.
+
+    - total_paid >= total et total > 0 → 'paid'
+    - 0 < total_paid < total → 'partial'
+    - total_paid == 0 → on conserve le statut actuel (sent ou overdue)
+    """
+    payments = invoice.get("payments", []) or []
+    total_paid = sum(float(p.get("amount_cad", 0) or 0) for p in payments)
+    total = float(invoice.get("total", 0) or 0)
+    if total_paid >= total and total > 0:
+        return "paid"
+    if total_paid > 0:
+        return "partial"
+    return invoice.get("status", "sent")
+
+
+def _enrich_invoice(invoice):
+    """Ajoute total_paid_cad et outstanding_cad au doc invoice. Mutation in-place.
+    Retourne le dict pour chaînage."""
+    payments = invoice.get("payments", []) or []
+    total_paid = round(sum(float(p.get("amount_cad", 0) or 0) for p in payments), 2)
+    total = float(invoice.get("total", 0) or 0)
+    invoice["total_paid_cad"] = total_paid
+    invoice["outstanding_cad"] = round(max(0, total - total_paid), 2)
+    return invoice
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
