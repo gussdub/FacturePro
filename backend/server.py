@@ -457,8 +457,8 @@ def _recompute_invoice_status(invoice):
     - total_paid == 0 → on conserve le statut actuel (sent ou overdue)
     """
     payments = invoice.get("payments", []) or []
-    total_paid = sum(float(p.get("amount_cad", 0) or 0) for p in payments)
-    total = float(invoice.get("total", 0) or 0)
+    total_paid = round(sum(float(p.get("amount_cad", 0) or 0) for p in payments), 2)
+    total = round(float(invoice.get("total", 0) or 0), 2)
     if total_paid >= total and total > 0:
         return "paid"
     if total_paid > 0:
@@ -771,14 +771,15 @@ def delete_product(product_id: str, current_user: User = Depends(get_current_use
 # ─── Invoices CRUD ───
 @app.get("/api/invoices")
 def get_invoices(current_user: User = Depends(get_current_user_with_access)):
-    return clean_docs(db.invoices.find({"user_id": current_user.id}, {"_id": 0}))
+    return [_enrich_invoice(clean_doc(doc))
+            for doc in db.invoices.find({"user_id": current_user.id}, {"_id": 0})]
 
 @app.get("/api/invoices/{invoice_id}")
 def get_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
     doc = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Invoice not found")
-    return clean_doc(doc)
+    return _enrich_invoice(clean_doc(doc))
 
 @app.post("/api/invoices")
 def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -841,6 +842,31 @@ def update_invoice_status(invoice_id: str, status_data: dict, current_user: User
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
     return {"message": "Status updated"}
+
+@app.post("/api/invoices/{invoice_id}/payments")
+def add_invoice_payment(invoice_id: str, body: dict,
+                         current_user: User = Depends(get_current_user_with_access)):
+    """Enregistre un paiement partiel ou complet. Recalcule le statut automatiquement."""
+    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    payment = {
+        "id": str(uuid.uuid4()),
+        "date": body.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "amount_cad": float(body.get("amount_cad", 0) or 0),
+        "method": body.get("method", "other"),
+        "reference": body.get("reference", ""),
+        "notes": body.get("notes", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    invoice.setdefault("payments", []).append(payment)
+    new_status = _recompute_invoice_status(invoice)
+    db.invoices.update_one(
+        {"id": invoice_id, "user_id": current_user.id},
+        {"$push": {"payments": payment}, "$set": {"status": new_status}}
+    )
+    fresh = db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+    return _enrich_invoice(fresh)
 
 @app.delete("/api/invoices/{invoice_id}")
 def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
