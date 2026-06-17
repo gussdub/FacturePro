@@ -8,7 +8,7 @@ const SettingsPage = () => {
     company_name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '',
     logo_url: '', primary_color: '#00A08C', secondary_color: '#1F2937',
     bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '',
-    default_due_days: 30, default_currency: 'CAD', entity_type: 'sole_proprietor'
+    default_due_days: 30, default_currency: 'CAD', entity_type: 'sole_proprietor', province: 'QC'
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -237,6 +237,40 @@ const SettingsPage = () => {
             >
               <option value="sole_proprietor">Travailleur autonome (T2125)</option>
               <option value="corporation">Société par actions (T2)</option>
+            </select>
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: '#374151', marginBottom: 4 }}>
+              Province
+              <span
+                title="Utilisée pour le calcul automatique des taxes sur tes dépenses (TPS/TVQ/TVH)."
+                style={{ cursor: 'help', color: '#6b7280', fontSize: 14 }}
+              >
+                ⓘ
+              </span>
+            </label>
+            <select
+              value={settings.province || 'QC'}
+              onChange={(e) => setSettings(prev => ({ ...prev, province: e.target.value }))}
+              style={{
+                width: '100%', padding: '12px',
+                border: '1.5px solid #d1d5db', borderRadius: 8,
+                fontSize: 14, background: 'white', boxSizing: 'border-box',
+              }}
+            >
+              <option value="QC">Québec</option>
+              <option value="ON">Ontario</option>
+              <option value="BC">Colombie-Britannique</option>
+              <option value="AB">Alberta</option>
+              <option value="SK">Saskatchewan</option>
+              <option value="MB">Manitoba</option>
+              <option value="NB">Nouveau-Brunswick</option>
+              <option value="NS">Nouvelle-Écosse</option>
+              <option value="PE">Île-du-Prince-Édouard</option>
+              <option value="NL">Terre-Neuve-et-Labrador</option>
+              <option value="YT">Yukon</option>
+              <option value="NU">Nunavut</option>
+              <option value="NT">Territoires du Nord-Ouest</option>
             </select>
           </div>
         </div>
