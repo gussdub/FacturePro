@@ -6,7 +6,7 @@ import NotificationsDropdown from './NotificationsDropdown';
 import {
   LayoutDashboard, Users, Package, FileText, FilePen,
   UserCheck, Receipt, Download, Settings, Gem,
-  LogOut, Search, Bell
+  LogOut, Search, Bell, BarChart2
 } from 'lucide-react';
 
 const getImageUrl = (url) => {
@@ -44,6 +44,7 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
     { name: 'Employes', href: '/employees', icon: UserCheck, current: currentRoute === '/employees' },
     { name: 'Depenses', href: '/expenses', icon: Receipt, current: currentRoute === '/expenses' },
     { name: 'Exports', href: '/export', icon: Download, current: currentRoute === '/export' },
+    { name: 'Rapports', href: '/reports', icon: BarChart2, current: currentRoute === '/reports' },
     { name: 'Parametres', href: '/settings', icon: Settings, current: currentRoute === '/settings' },
     { name: 'Abonnement', href: '/subscription', icon: Gem, current: currentRoute === '/subscription' },
   ];

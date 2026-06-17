@@ -12,6 +12,7 @@ import ExpensesPage from './pages/ExpensesPage';
 import ExportPage from './pages/ExportPage';
 import SettingsPage from './pages/SettingsPage';
 import SubscriptionPage from './pages/SubscriptionPage';
+import ReportsPage from './pages/ReportsPage';
 
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
@@ -61,6 +62,7 @@ function App() {
       case '/employees': return <EmployeesPage />;
       case '/expenses': return <ExpensesPage />;
       case '/export': return <ExportPage />;
+      case '/reports': return <ReportsPage />;
       case '/settings': return <SettingsPage />;
       case '/subscription': return <SubscriptionPage />;
       default: return <Dashboard navigate={navigate} />;
