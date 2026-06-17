@@ -315,3 +315,37 @@ class TestDashboardOutstanding:
             except Exception:
                 pass
         cls._cleanup = {"clients": set(), "invoices": set()}
+
+
+class TestPdfWithPayments:
+    _cleanup = {"clients": set(), "invoices": set()}
+    _auth_headers = None
+
+    def test_pdf_with_payments_renders(self, auth):
+        TestPdfWithPayments._auth_headers = auth
+        inv_id, c_id = _create_test_invoice(auth)[:2]
+        TestPdfWithPayments._cleanup["invoices"].add(inv_id)
+        TestPdfWithPayments._cleanup["clients"].add(c_id)
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": 100, "method": "cheque",
+                                          "reference": "Test1234"})
+        resp = requests.get(f"{BASE_URL}/api/invoices/{inv_id}/pdf", headers=auth)
+        assert resp.status_code == 200
+        assert resp.content[:4] == b"%PDF"
+        assert len(resp.content) > 2000
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for iid in cls._cleanup["invoices"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/invoices/{iid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for cid in cls._cleanup["clients"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        cls._cleanup = {"clients": set(), "invoices": set()}

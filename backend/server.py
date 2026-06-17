@@ -1905,6 +1905,43 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         ]))
         elements.append(reg_table)
 
+    # Section Paiements (feature #6) — seulement pour invoices avec paiements
+    payments = document.get("payments", []) or []
+    if doc_type == "invoice" and payments:
+        method_labels = {
+            "cash": "Comptant", "cheque": "Chèque", "transfer": "Virement",
+            "card": "Carte", "etransfer": "Virement Interac",
+            "stripe": "Stripe", "other": "Autre",
+        }
+        elements.append(Spacer(1, 0.25*inch))
+        elements.append(Paragraph("<b>Paiements reçus</b>", company_style))
+        elements.append(Spacer(1, 6))
+        pay_rows = [["Date", "Méthode", "Référence", "Montant"]]
+        total_paid_pdf = 0.0
+        for p in payments:
+            pay_rows.append([
+                p.get("date", ""),
+                method_labels.get(p.get("method", "other"), p.get("method", "")),
+                p.get("reference", "") or "—",
+                f"{float(p.get('amount_cad', 0)):.2f} $",
+            ])
+            total_paid_pdf += float(p.get("amount_cad", 0) or 0)
+        outstanding_pdf = max(0, float(document.get("total", 0) or 0) - total_paid_pdf)
+        pay_rows.append(["", "", "Total payé :", f"{total_paid_pdf:.2f} $"])
+        pay_rows.append(["", "", "Solde restant :", f"{outstanding_pdf:.2f} $"])
+        pay_table = Table(pay_rows, colWidths=[1.2*inch, 1.4*inch, 2.4*inch, 1.2*inch])
+        pay_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f8fafb')),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+            ('ALIGN', (-1, 0), (-1, -1), 'RIGHT'),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('FONTNAME', (2, -2), (-1, -1), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (2, -1), (-1, -1), HexColor('#dc2626') if outstanding_pdf > 0 else HexColor('#059669')),
+        ]))
+        elements.append(pay_table)
+
     # Footer
     elements.append(Spacer(1, 0.5*inch))
     elements.append(Paragraph(f"Merci pour votre confiance ! — {comp_name}", ParagraphStyle('Footer', parent=styles['Normal'], fontSize=10, textColor=teal, alignment=TA_CENTER)))
