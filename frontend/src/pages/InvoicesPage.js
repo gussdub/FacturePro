@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
+import { DollarSign } from 'lucide-react';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
+import PaymentModal from '../components/PaymentModal';
 
 const STATUS_CONFIG = {
   draft:   { label: 'Brouillon', bg: '#f3f4f6', color: '#374151', icon: '✎' },
   sent:    { label: 'Envoyée',   bg: '#dbeafe', color: '#1e40af', icon: '📨' },
+  partial: { label: 'Partielle', bg: '#fef3c7', color: '#92400e', icon: '◑' },
   paid:    { label: 'Payée',     bg: '#dcfce7', color: '#166534', icon: '✓' },
   overdue: { label: 'En retard', bg: '#fef2f2', color: '#991b1b', icon: '!' },
 };
@@ -34,6 +37,7 @@ const InvoicesPage = () => {
   const [sending, setSending] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [paymentInvoice, setPaymentInvoice] = useState(null);
 
   const defaultForm = () => ({
     client_id: '', invoice_number: '', due_date: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
@@ -326,6 +330,16 @@ const InvoicesPage = () => {
                     {inv.currency && inv.currency !== 'CAD' && inv.total_cad && (
                       <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>= {formatCurrency(inv.total_cad, 'CAD')}</div>
                     )}
+                    {(() => {
+                      const outstanding = inv.outstanding_cad != null
+                        ? inv.outstanding_cad
+                        : (inv.total_cad || inv.total || 0) - (inv.total_paid_cad || 0);
+                      return (
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: outstanding > 0 ? '#dc2626' : '#9ca3af', marginBottom: '6px' }}>
+                          Solde: {formatCurrency(outstanding, 'CAD')}
+                        </div>
+                      );
+                    })()}
                     <select data-testid={`invoice-status-select-${inv.id}`} value={inv.status || 'draft'}
                       onChange={e => handleStatusChange(inv.id, e.target.value)}
                       style={{ ...inputStyle, width: 'auto', fontSize: '12px', padding: '4px 8px', marginBottom: '8px' }}>
@@ -344,6 +358,14 @@ const InvoicesPage = () => {
                         title="Envoyer par email" style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Email
                       </button>
+                      {inv.status !== 'draft' && (
+                        <button data-testid={`payment-btn-${inv.id}`}
+                          onClick={(e) => { e.stopPropagation(); setPaymentInvoice(inv); }}
+                          title="Paiements"
+                          style={{ background: '#fdf4ff', color: '#7e22ce', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <DollarSign size={14} />
+                        </button>
+                      )}
                       {inv.recurrence && inv.recurrence !== 'none' && (
                         <button data-testid={`toggle-recurrence-${inv.id}`} onClick={() => toggleRecurrence(inv)}
                           title={inv.recurrence_active ? 'Mettre en pause' : 'Reprendre'}
@@ -527,6 +549,18 @@ const InvoicesPage = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* ═══ Payment Modal ═══ */}
+      {paymentInvoice && (
+        <PaymentModal
+          invoice={paymentInvoice}
+          onClose={() => setPaymentInvoice(null)}
+          onUpdated={(updatedInv) => {
+            setPaymentInvoice(updatedInv);
+            setInvoices((prev) => prev.map((i) => (i.id === updatedInv.id ? updatedInv : i)));
+          }}
+        />
       )}
 
       {/* ═══ Email Modal ═══ */}
