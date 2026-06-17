@@ -234,6 +234,17 @@ class TestSalesTaxReport:
         assert body["invoice_count"] == 0
         assert body["expense_count"] == 0
 
+    def test_pdf_endpoint(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(
+            f"{BASE_URL}/api/reports/sales-tax/pdf",
+            headers=auth, params={"start": "2099-04-01", "end": "2099-06-30"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/pdf")
+        # PDF starts with %PDF magic bytes
+        assert resp.content[:4] == b"%PDF"
+        assert len(resp.content) > 1000  # not empty
+
     @classmethod
     def teardown_class(cls):
         if not cls._auth_headers:

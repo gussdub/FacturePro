@@ -2013,6 +2013,133 @@ def get_sales_tax_report(start: str = Query(...), end: str = Query(...),
     return _aggregate_sales_tax(current_user.id, start, end)
 
 
+def generate_sales_tax_report_pdf(user_id, start, end):
+    """Génère un PDF A4 du rapport TPS/TVQ."""
+    data = _aggregate_sales_tax(user_id, start, end)
+    company_settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+
+    buffer = io.BytesIO()
+    pdf = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch,
+                            bottomMargin=0.5*inch, leftMargin=0.6*inch, rightMargin=0.6*inch)
+    styles = getSampleStyleSheet()
+    teal = HexColor('#00A08C')
+    dark = HexColor('#1f2937')
+    gray = HexColor('#6b7280')
+    title_style = ParagraphStyle('T', parent=styles['Heading1'], fontSize=22, textColor=teal, spaceAfter=6)
+    sub_style = ParagraphStyle('S', parent=styles['Normal'], fontSize=11, textColor=gray)
+    small = ParagraphStyle('Small', parent=styles['Normal'], fontSize=9, textColor=gray, leading=12)
+    bold = ParagraphStyle('B', parent=styles['Normal'], fontSize=10, textColor=dark, fontName='Helvetica-Bold')
+
+    elements = []
+    # Header
+    comp_name = company_settings.get('company_name', 'Mon Entreprise')
+    elements.append(Paragraph(comp_name, ParagraphStyle('C', parent=styles['Normal'], fontSize=13, textColor=dark, fontName='Helvetica-Bold')))
+    elements.append(Paragraph("Rapport TPS / TVQ", title_style))
+    elements.append(Paragraph(f"Période : {start} au {end}", sub_style))
+    elements.append(Spacer(1, 0.2*inch))
+
+    # Numéros d'enregistrement (réutilise les helpers de feature #2)
+    regs = _take_regs(company_settings)
+    parts = _reg_label_parts(regs)
+    if parts:
+        elements.append(Paragraph("Numéros d'enregistrement", bold))
+        elements.append(Paragraph(' &nbsp;·&nbsp; '.join(parts), small))
+        elements.append(Spacer(1, 0.2*inch))
+
+    # Summary cards (3 colonnes : TPS, TVQ, TVH)
+    summary = data["summary"]
+    def fmt(v):
+        return f"{v:,.2f} $".replace(",", " ")
+    card_data = [
+        ['TPS', 'TVQ', 'TVH'],
+        [
+            f"Perçue : {fmt(summary['gst']['collected'])}\nPayée : {fmt(summary['gst']['paid'])}\nNet : {fmt(summary['gst']['net'])}",
+            f"Perçue : {fmt(summary['qst']['collected'])}\nPayée : {fmt(summary['qst']['paid'])}\nNet : {fmt(summary['qst']['net'])}",
+            f"Perçue : {fmt(summary['hst']['collected'])}\nPayée : {fmt(summary['hst']['paid'])}\nNet : {fmt(summary['hst']['net'])}",
+        ]
+    ]
+    cards = Table(card_data, colWidths=[2.3*inch, 2.3*inch, 2.3*inch])
+    cards.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), teal),
+        ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+    ]))
+    elements.append(cards)
+    elements.append(Spacer(1, 0.3*inch))
+
+    # Détail CRA T1
+    elements.append(Paragraph("Détail format ARC (T1 GST/HST)", bold))
+    cra = data["cra_detail"]
+    cra_rows = [
+        ['Ligne', 'Description', 'Montant'],
+        ['101', 'Ventes et autres recettes', fmt(cra['line_101_sales'])],
+        ['103', 'TPS perçue', fmt(cra['line_103_gst_collected'])],
+        ['103', 'TVH perçue', fmt(cra['line_103_hst_collected'])],
+        ['106', 'CTI TPS', fmt(cra['line_106_itc_gst'])],
+        ['106', 'CTI TVH', fmt(cra['line_106_itc_hst'])],
+        ['109', 'Taxe nette TPS', fmt(cra['line_109_net_gst'])],
+        ['109', 'Taxe nette TVH', fmt(cra['line_109_net_hst'])],
+    ]
+    cra_t = Table(cra_rows, colWidths=[0.7*inch, 3.5*inch, 1.5*inch])
+    cra_t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f8fafb')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(cra_t)
+    elements.append(Spacer(1, 0.2*inch))
+
+    # Détail Revenu Québec FP-2500
+    elements.append(Paragraph("Détail format Revenu Québec (FP-2500)", bold))
+    rq = data["rq_detail"]
+    rq_rows = [
+        ['Ligne', 'Description', 'Montant'],
+        ['201', 'Ventes taxables au Québec', fmt(rq['line_201_taxable_sales_qc'])],
+        ['203', 'TVQ perçue', fmt(rq['line_203_qst_collected'])],
+        ['205', 'RTI TVQ', fmt(rq['line_205_itr_qst'])],
+        ['209', 'TVQ nette', fmt(rq['line_209_net_qst'])],
+    ]
+    rq_t = Table(rq_rows, colWidths=[0.7*inch, 3.5*inch, 1.5*inch])
+    rq_t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f8fafb')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(rq_t)
+    elements.append(Spacer(1, 0.3*inch))
+
+    # Footer
+    elements.append(Paragraph(
+        f"{data['invoice_count']} factures · {data['expense_count']} dépenses incluses",
+        small))
+    elements.append(Paragraph(
+        f"Généré le {datetime.now(timezone.utc).strftime('%Y-%m-%d')} — FacturePro",
+        small))
+
+    pdf.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+@app.get("/api/reports/sales-tax/pdf")
+def get_sales_tax_report_pdf(start: str = Query(...), end: str = Query(...),
+                              current_user: User = Depends(get_current_user_with_access)):
+    pdf_buffer = generate_sales_tax_report_pdf(current_user.id, start, end)
+    filename = f"rapport-tps-tvq-{start}-au-{end}.pdf"
+    return StreamingResponse(pdf_buffer, media_type="application/pdf",
+                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
