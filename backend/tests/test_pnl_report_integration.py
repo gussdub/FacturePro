@@ -144,6 +144,24 @@ class TestPnlReport:
         assert body["compare"] == "none"
         assert "compare_period" not in body
 
+    def test_pdf_endpoint(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(f"{BASE_URL}/api/reports/pnl/pdf", headers=auth,
+                            params={"start": "2099-04-01", "end": "2099-06-30",
+                                    "basis": "accrual", "compare": "none"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/pdf")
+        assert resp.content[:4] == b"%PDF"
+        assert len(resp.content) > 1000
+
+    def test_pdf_with_compare(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(f"{BASE_URL}/api/reports/pnl/pdf", headers=auth,
+                            params={"start": "2099-04-01", "end": "2099-06-30",
+                                    "basis": "accrual", "compare": "previous"})
+        assert resp.status_code == 200
+        assert resp.content[:4] == b"%PDF"
+
     @classmethod
     def teardown_class(cls):
         if not cls._auth_headers:

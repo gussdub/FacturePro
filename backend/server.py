@@ -2385,6 +2385,138 @@ def get_pnl_report(
     return out
 
 
+def generate_pnl_report_pdf(user_id, data):
+    """Génère un PDF du rapport P&L. `data` est la sortie de get_pnl_report."""
+    company_settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    buffer = io.BytesIO()
+    pdf = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch,
+                            bottomMargin=0.5*inch, leftMargin=0.6*inch, rightMargin=0.6*inch)
+    styles = getSampleStyleSheet()
+    teal = HexColor('#00A08C')
+    dark = HexColor('#1f2937')
+    gray = HexColor('#6b7280')
+    title_style = ParagraphStyle('T', parent=styles['Heading1'], fontSize=22, textColor=teal, spaceAfter=6)
+    sub_style = ParagraphStyle('S', parent=styles['Normal'], fontSize=11, textColor=gray)
+    small = ParagraphStyle('Small', parent=styles['Normal'], fontSize=9, textColor=gray, leading=12)
+    bold = ParagraphStyle('B', parent=styles['Normal'], fontSize=10, textColor=dark, fontName='Helvetica-Bold')
+
+    elements = []
+    comp_name = company_settings.get('company_name', 'Mon Entreprise')
+    elements.append(Paragraph(comp_name, ParagraphStyle('C', parent=styles['Normal'],
+                                                          fontSize=13, textColor=dark,
+                                                          fontName='Helvetica-Bold')))
+    elements.append(Paragraph("État des résultats", title_style))
+    p = data['period']
+    basis_label = "Comptabilité d'exercice" if data['basis'] == 'accrual' else "Comptabilité de caisse"
+    elements.append(Paragraph(f"Période : {p['start']} au {p['end']}  ·  {basis_label}", sub_style))
+    if data.get('compare_period'):
+        cp = data['compare_period']
+        elements.append(Paragraph(f"Comparaison : {cp['start']} au {cp['end']}", sub_style))
+    elements.append(Spacer(1, 0.2*inch))
+
+    regs = _take_regs(company_settings)
+    parts = _reg_label_parts(regs)
+    if parts:
+        elements.append(Paragraph("Numéros d'enregistrement", bold))
+        elements.append(Paragraph(' &nbsp;·&nbsp; '.join(parts), small))
+        elements.append(Spacer(1, 0.2*inch))
+
+    def fmt(v):
+        return f"{(v or 0):,.2f} $".replace(",", " ")
+
+    elements.append(Paragraph("Sommaire", bold))
+    has_compare = data.get('compare_period') is not None
+    summary_rows = [
+        ["", "Période", "Comparaison" if has_compare else "", "Δ %" if has_compare else ""],
+        ["Revenus", fmt(data['revenue']['current']),
+         fmt(data['revenue'].get('previous')) if has_compare else "",
+         f"{data['revenue'].get('delta_pct', 0):+.1f} %" if has_compare else ""],
+        ["Total dépenses (brut)", fmt(data['total_expenses']['current']['gross']),
+         fmt(data['total_expenses'].get('previous', {}).get('gross')) if has_compare else "",
+         ""],
+        ["Bénéfice de gestion", fmt(data['net_income']['current']['management']),
+         fmt(data['net_income'].get('previous', {}).get('management')) if has_compare else "",
+         f"{data['net_income'].get('delta_pct', {}).get('management', 0):+.1f} %" if has_compare else ""],
+        ["Bénéfice imposable", fmt(data['net_income']['current']['taxable']),
+         fmt(data['net_income'].get('previous', {}).get('taxable')) if has_compare else "",
+         f"{data['net_income'].get('delta_pct', {}).get('taxable', 0):+.1f} %" if has_compare else ""],
+    ]
+    summary_t = Table(summary_rows, colWidths=[2.2*inch, 1.5*inch, 1.5*inch, 1*inch])
+    summary_t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f8fafb')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(summary_t)
+    elements.append(Spacer(1, 0.3*inch))
+
+    elements.append(Paragraph("Détail des dépenses", bold))
+    headers = ["Catégorie", "Brut", "Déductible"]
+    if has_compare:
+        headers += ["Brut (cmp)", "Déduct. (cmp)"]
+    detail_rows = [headers]
+    for g in data['expense_groups']:
+        group_subtotal = g['subtotal']
+        c_st = group_subtotal['current']
+        p_st = group_subtotal.get('previous', {"gross": 0, "deductible": 0})
+        row = [g['label'], fmt(c_st['gross']), fmt(c_st['deductible'])]
+        if has_compare:
+            row += [fmt(p_st['gross']), fmt(p_st['deductible'])]
+        detail_rows.append(row)
+        for cat in g['categories']:
+            cc = cat['current']
+            pc = cat.get('previous', {"gross": 0, "deductible": 0})
+            label = f"  · {cat['label']}" + (f" ({cat['arc_line']})" if cat['arc_line'] else "")
+            row = [label, fmt(cc['gross']), fmt(cc['deductible'])]
+            if has_compare:
+                row += [fmt(pc['gross']), fmt(pc['deductible'])]
+            detail_rows.append(row)
+
+    col_widths = [2.3*inch, 1*inch, 1*inch]
+    if has_compare:
+        col_widths += [1.1*inch, 1.1*inch]
+    detail_t = Table(detail_rows, colWidths=col_widths)
+    detail_t.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f8fafb')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    elements.append(detail_t)
+    elements.append(Spacer(1, 0.3*inch))
+
+    elements.append(Paragraph(
+        f"{data['invoice_count']} factures · {data['expense_count']} dépenses incluses",
+        small))
+    elements.append(Paragraph(
+        f"Généré le {datetime.now(timezone.utc).strftime('%Y-%m-%d')} — FacturePro",
+        small))
+
+    pdf.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+@app.get("/api/reports/pnl/pdf")
+def get_pnl_report_pdf(
+    start: str = Query(...),
+    end: str = Query(...),
+    basis: str = Query("accrual"),
+    compare: str = Query("none"),
+    current_user: User = Depends(get_current_user_with_access),
+):
+    data = get_pnl_report(start, end, basis, compare, current_user)
+    pdf_buffer = generate_pnl_report_pdf(current_user.id, data)
+    filename = f"etat-des-resultats-{start}-au-{end}.pdf"
+    return StreamingResponse(pdf_buffer, media_type="application/pdf",
+                              headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
