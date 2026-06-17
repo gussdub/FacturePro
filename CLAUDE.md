@@ -146,3 +146,17 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Limitation v1 : cash basis = filtre `status=paid` sur `issue_date` (approximation)
   - Spec : `docs/superpowers/specs/2026-06-16-pnl-report-design.md`
   - Plan : `docs/superpowers/plans/2026-06-16-pnl-report.md`
+
+- **2026-06-17 — Acomptes et paiements partiels (feature #6)**
+  - `payments[]` embarqué dans `invoices` (id, amount_cad, method, date, reference, created_at) — atomicité préférée à une collection séparée
+  - `POST /api/invoices/{id}/payments` et `DELETE /api/invoices/{id}/payments/{pid}` recalculent `status` automatiquement (paid si solde ≤ 0, partial si paiements > 0, sinon `sent`)
+  - Statut explicite `partial` ajouté (badge ambre dans InvoicesPage) — affichage instantané sans recalcul à la volée
+  - Champs enrichis `total_paid_cad` et `outstanding_cad` retournés par GET /api/invoices et GET /api/invoices/{id}
+  - `GET /api/dashboard/overdue` resserré à `status ∈ {sent, partial, overdue}` (exclut `draft`) + chaque ligne enrichie
+  - Nouveau `GET /api/dashboard/outstanding` → `{total_outstanding_cad, invoice_count}` pour les soldes restants globaux
+  - PDF facture : section "Paiements reçus" automatique quand non-vide (table date/méthode/référence/montant + Total payé + Solde restant)
+  - Frontend : `PaymentModal` (ajout/suppression paiements, formulaire avec 7 méthodes), colonne Solde dans InvoicesPage, bouton $ par ligne (caché si draft), carte "Total à recevoir" sur le Dashboard
+  - Tests : 29 unitaires + intégration (`test_partial_payments.py`, `test_partial_payments_integration.py`)
+  - Limitation v1 : CAD seulement (multi-devise hors scope), pas de soft-delete sur paiements supprimés
+  - Spec : `docs/superpowers/specs/2026-06-16-partial-payments-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-16-partial-payments.md`
