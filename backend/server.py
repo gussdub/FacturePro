@@ -2326,6 +2326,65 @@ def get_sales_tax_report_pdf(start: str = Query(...), end: str = Query(...),
                               headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+@app.get("/api/reports/pnl")
+def get_pnl_report(
+    start: str = Query(...),
+    end: str = Query(...),
+    basis: str = Query("accrual"),
+    compare: str = Query("none"),
+    current_user: User = Depends(get_current_user_with_access),
+):
+    """État des résultats simplifié (P&L)."""
+    if basis not in ("accrual", "cash"):
+        basis = "accrual"
+    if compare not in ("none", "previous", "prior_year"):
+        compare = "none"
+
+    current = _aggregate_pnl(current_user.id, start, end, basis)
+    out = {
+        "period": {"start": start, "end": end},
+        "basis": basis,
+        "compare": compare,
+        "revenue": {"current": current["revenue"]},
+        "expense_groups": [],
+        "total_expenses": {"current": current["total_expenses"]},
+        "net_income": {"current": current["net_income"]},
+        "invoice_count": current["invoice_count"],
+        "expense_count": current["expense_count"],
+    }
+
+    compare_period = _compute_compare_period(start, end, compare)
+    if compare_period:
+        cs, ce = compare_period
+        previous = _aggregate_pnl(current_user.id, cs, ce, basis)
+        out["compare_period"] = {"start": cs, "end": ce}
+        out["revenue"]["previous"] = previous["revenue"]
+        out["revenue"]["delta_pct"] = _pct_delta(previous["revenue"], current["revenue"])
+        out["total_expenses"]["previous"] = previous["total_expenses"]
+        out["net_income"]["previous"] = previous["net_income"]
+        out["net_income"]["delta_pct"] = {
+            "management": _pct_delta(previous["net_income"]["management"], current["net_income"]["management"]),
+            "taxable": _pct_delta(previous["net_income"]["taxable"], current["net_income"]["taxable"]),
+        }
+        out["expense_groups"] = _merge_expense_groups(current["expense_groups"], previous["expense_groups"])
+    else:
+        for g in current["expense_groups"]:
+            out["expense_groups"].append({
+                "group": g["group"],
+                "label": g["label"],
+                "categories": [
+                    {
+                        "code": cat["code"],
+                        "label": cat["label"],
+                        "arc_line": cat["arc_line"],
+                        "current": {"gross": cat["gross"], "deductible": cat["deductible"]},
+                    } for cat in g["categories"]
+                ],
+                "subtotal": {"current": g["subtotal"]},
+            })
+    return out
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
