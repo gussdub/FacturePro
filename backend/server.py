@@ -868,6 +868,28 @@ def add_invoice_payment(invoice_id: str, body: dict,
     fresh = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
     return _enrich_invoice(fresh)
 
+@app.delete("/api/invoices/{invoice_id}/payments/{payment_id}")
+def delete_invoice_payment(invoice_id: str, payment_id: str,
+                            current_user: User = Depends(get_current_user_with_access)):
+    """Supprime un paiement. Recalcule le statut."""
+    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    payments = [p for p in invoice.get("payments", []) if p.get("id") != payment_id]
+    invoice["payments"] = payments
+    # Normalise: payment-derived statuses (partial/paid) cannot be the base status
+    # for recomputation. Fall back to "sent" so _recompute_invoice_status can work
+    # correctly (overdue is preserved as-is since it is a legitimate base status).
+    if invoice.get("status") in ("partial", "paid"):
+        invoice["status"] = "sent"
+    new_status = _recompute_invoice_status(invoice)
+    db.invoices.update_one(
+        {"id": invoice_id, "user_id": current_user.id},
+        {"$set": {"payments": payments, "status": new_status}}
+    )
+    fresh = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    return _enrich_invoice(fresh)
+
 @app.delete("/api/invoices/{invoice_id}")
 def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
     result = db.invoices.delete_one({"id": invoice_id, "user_id": current_user.id})

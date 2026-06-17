@@ -136,3 +136,92 @@ class TestPostPayment:
             except Exception:
                 pass
         cls._cleanup = {"clients": set(), "invoices": set()}
+
+
+class TestDeletePayment:
+    _cleanup = {"clients": set(), "invoices": set()}
+    _auth_headers = None
+
+    def test_delete_payment_recomputes_status(self, auth):
+        TestDeletePayment._auth_headers = auth
+        inv_id, c_id, _total = _create_test_invoice(auth)
+        TestDeletePayment._cleanup["invoices"].add(inv_id)
+        TestDeletePayment._cleanup["clients"].add(c_id)
+        post = requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                              headers=auth, json={"amount_cad": 100, "method": "cash"})
+        payment_id = post.json()["payments"][0]["id"]
+        assert post.json()["status"] == "partial"
+        resp = requests.delete(
+            f"{BASE_URL}/api/invoices/{inv_id}/payments/{payment_id}", headers=auth)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "sent"
+        assert len(body["payments"]) == 0
+        assert body["total_paid_cad"] == 0
+        assert body["outstanding_cad"] == body["total"]
+
+    def test_delete_one_of_two_payments_keeps_partial(self, auth):
+        TestDeletePayment._auth_headers = auth
+        inv_id, c_id, _total = _create_test_invoice(auth)
+        TestDeletePayment._cleanup["invoices"].add(inv_id)
+        TestDeletePayment._cleanup["clients"].add(c_id)
+        p1 = requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                            headers=auth, json={"amount_cad": 100, "method": "cash"})
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": 200, "method": "transfer"})
+        pid = p1.json()["payments"][0]["id"]
+        resp = requests.delete(
+            f"{BASE_URL}/api/invoices/{inv_id}/payments/{pid}", headers=auth)
+        body = resp.json()
+        assert body["status"] == "partial"
+        assert len(body["payments"]) == 1
+        assert body["total_paid_cad"] == 200
+
+    def test_delete_payment_from_paid_invoice_reverts_to_partial(self, auth):
+        TestDeletePayment._auth_headers = auth
+        inv_id, c_id, _total = _create_test_invoice(auth)
+        TestDeletePayment._cleanup["invoices"].add(inv_id)
+        TestDeletePayment._cleanup["clients"].add(c_id)
+        get = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        total = get["total"]
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": round(total * 0.7, 2), "method": "cheque"})
+        p2 = requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                            headers=auth, json={"amount_cad": round(total * 0.3, 2), "method": "transfer"})
+        assert p2.json()["status"] == "paid"
+        pid = p2.json()["payments"][-1]["id"]
+        resp = requests.delete(
+            f"{BASE_URL}/api/invoices/{inv_id}/payments/{pid}", headers=auth)
+        body = resp.json()
+        assert body["status"] == "partial"
+
+    def test_delete_unknown_payment_returns_invoice_unchanged(self, auth):
+        TestDeletePayment._auth_headers = auth
+        inv_id, c_id, _total = _create_test_invoice(auth)
+        TestDeletePayment._cleanup["invoices"].add(inv_id)
+        TestDeletePayment._cleanup["clients"].add(c_id)
+        resp = requests.delete(
+            f"{BASE_URL}/api/invoices/{inv_id}/payments/does-not-exist", headers=auth)
+        assert resp.status_code == 200
+
+    def test_delete_on_unknown_invoice_404(self, auth):
+        TestDeletePayment._auth_headers = auth
+        resp = requests.delete(
+            f"{BASE_URL}/api/invoices/no-such/payments/p1", headers=auth)
+        assert resp.status_code == 404
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for iid in cls._cleanup["invoices"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/invoices/{iid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for cid in cls._cleanup["clients"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        cls._cleanup = {"clients": set(), "invoices": set()}
