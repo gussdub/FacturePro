@@ -143,7 +143,7 @@ class TestSalesTaxReport:
                 "client_id": c["id"],
                 "items": [{"description": "S", "quantity": 1, "unit_price": 1000}],
                 "province": "QC",
-                "issue_date": "2026-04-15",
+                "issue_date": "2099-04-15",
             }).json()
             TestSalesTaxReport._cleanup["invoices"].append(inv["id"])
             # Mark as paid
@@ -154,7 +154,7 @@ class TestSalesTaxReport:
             "client_id": c["id"],
             "items": [{"description": "Drafty", "quantity": 1, "unit_price": 500}],
             "province": "QC",
-            "issue_date": "2026-04-15",
+            "issue_date": "2099-04-15",
         }).json()
         TestSalesTaxReport._cleanup["invoices"].append(d["id"])
         # 2 expenses avec taxes payées
@@ -163,7 +163,7 @@ class TestSalesTaxReport:
                 "description": "Exp",
                 "amount": amount,
                 "currency": "CAD",
-                "expense_date": "2026-06-16",
+                "expense_date": "2099-04-20",
                 "gst_paid_cad": gst,
                 "qst_paid_cad": qst,
             }).json()
@@ -174,10 +174,10 @@ class TestSalesTaxReport:
         self._setup_data(auth)
         resp = requests.get(
             f"{BASE_URL}/api/reports/sales-tax",
-            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+            headers=auth, params={"start": "2099-04-01", "end": "2099-06-30"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["period"] == {"start": "2026-06-16", "end": "2026-06-18"}
+        assert body["period"] == {"start": "2099-04-01", "end": "2099-06-30"}
         # 2 paid invoices QC : 50 GST each = 100 total
         assert body["summary"]["gst"]["collected"] == 100.00
         # 99.75 QST each × 2 = 199.50
@@ -195,7 +195,7 @@ class TestSalesTaxReport:
         self._setup_data(auth)
         resp = requests.get(
             f"{BASE_URL}/api/reports/sales-tax",
-            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+            headers=auth, params={"start": "2099-04-01", "end": "2099-06-30"})
         body = resp.json()
         # 2 paid invoices, draft excluded
         assert body["invoice_count"] == 2
@@ -206,7 +206,7 @@ class TestSalesTaxReport:
         self._setup_data(auth)
         resp = requests.get(
             f"{BASE_URL}/api/reports/sales-tax",
-            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+            headers=auth, params={"start": "2099-04-01", "end": "2099-06-30"})
         body = resp.json()
         cra = body["cra_detail"]
         for key in ("line_101_sales", "line_103_gst_collected", "line_106_itc_gst",
@@ -218,7 +218,7 @@ class TestSalesTaxReport:
         self._setup_data(auth)
         resp = requests.get(
             f"{BASE_URL}/api/reports/sales-tax",
-            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+            headers=auth, params={"start": "2099-04-01", "end": "2099-06-30"})
         body = resp.json()
         rq = body["rq_detail"]
         for key in ("line_201_taxable_sales_qc", "line_203_qst_collected",
