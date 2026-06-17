@@ -393,6 +393,59 @@ def _aggregate_pnl(user_id, start, end, basis):
     }
 
 
+def _merge_expense_groups(current_groups, previous_groups):
+    """Aligne les groupes/catégories des deux périodes en un seul tableau,
+    avec valeurs 'current' et 'previous' par catégorie + sous-total."""
+    p_by_code = {}
+    p_subtotals = {}
+    for pg in previous_groups:
+        p_subtotals[pg["group"]] = pg["subtotal"]
+        for cat in pg["categories"]:
+            p_by_code[cat["code"]] = {"gross": cat["gross"], "deductible": cat["deductible"]}
+
+    c_by_group = {g["group"]: g for g in current_groups}
+
+    groups_order = ["office", "marketing", "premises", "travel", "personnel", "other"]
+    merged = []
+    for g_key in groups_order:
+        c_group = c_by_group.get(g_key)
+        p_subtotal = p_subtotals.get(g_key)
+        if not c_group and not p_subtotal:
+            continue
+        c_subtotal = c_group["subtotal"] if c_group else {"gross": 0, "deductible": 0}
+        p_subtotal = p_subtotal or {"gross": 0, "deductible": 0}
+
+        rows = []
+        for cat_def in [c for c in EXPENSE_CATEGORIES if c["group"] == g_key]:
+            code = cat_def["code"]
+            c_cat = None
+            if c_group:
+                c_cat = next((cc for cc in c_group["categories"] if cc["code"] == code), None)
+            p_cat = p_by_code.get(code)
+            if not c_cat and not p_cat:
+                continue
+            rows.append({
+                "code": code,
+                "label": cat_def["label_fr"],
+                "arc_line": cat_def["arc_line"],
+                "current": {
+                    "gross": c_cat["gross"] if c_cat else 0,
+                    "deductible": c_cat["deductible"] if c_cat else 0,
+                },
+                "previous": {
+                    "gross": p_cat["gross"] if p_cat else 0,
+                    "deductible": p_cat["deductible"] if p_cat else 0,
+                },
+            })
+        merged.append({
+            "group": g_key,
+            "label": EXPENSE_CATEGORY_GROUPS[g_key],
+            "categories": rows,
+            "subtotal": {"current": c_subtotal, "previous": p_subtotal},
+        })
+    return merged
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
