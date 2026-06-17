@@ -270,3 +270,48 @@ class TestGetEnriched:
             except Exception:
                 pass
         cls._cleanup = {"clients": set(), "invoices": set()}
+
+
+class TestDashboardOutstanding:
+    _cleanup = {"clients": set(), "invoices": set()}
+    _auth_headers = None
+
+    def test_outstanding_endpoint_returns_total(self, auth):
+        TestDashboardOutstanding._auth_headers = auth
+        inv_id, c_id, _total = _create_test_invoice(auth)
+        TestDashboardOutstanding._cleanup["invoices"].add(inv_id)
+        TestDashboardOutstanding._cleanup["clients"].add(c_id)
+        before = requests.get(f"{BASE_URL}/api/dashboard/outstanding", headers=auth).json()
+        before_total = before["total_outstanding_cad"]
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": 100, "method": "cash"})
+        after = requests.get(f"{BASE_URL}/api/dashboard/outstanding", headers=auth).json()
+        assert round(before_total - after["total_outstanding_cad"], 2) == 100.00
+
+    def test_outstanding_excludes_paid(self, auth):
+        TestDashboardOutstanding._auth_headers = auth
+        inv_id, c_id, _total = _create_test_invoice(auth)
+        TestDashboardOutstanding._cleanup["invoices"].add(inv_id)
+        TestDashboardOutstanding._cleanup["clients"].add(c_id)
+        get = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        before = requests.get(f"{BASE_URL}/api/dashboard/outstanding", headers=auth).json()
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments", headers=auth,
+                      json={"amount_cad": get["total"], "method": "transfer"})
+        after = requests.get(f"{BASE_URL}/api/dashboard/outstanding", headers=auth).json()
+        assert before["total_outstanding_cad"] - after["total_outstanding_cad"] >= get["total"] - 0.01
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for iid in cls._cleanup["invoices"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/invoices/{iid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for cid in cls._cleanup["clients"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        cls._cleanup = {"clients": set(), "invoices": set()}

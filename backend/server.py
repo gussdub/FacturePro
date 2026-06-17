@@ -1529,7 +1529,7 @@ def get_stats(current_user: User = Depends(get_current_user_with_access)):
 @app.get("/api/dashboard/overdue")
 def get_overdue_invoices(current_user: User = Depends(get_current_user_with_access)):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    invoices = list(db.invoices.find({"user_id": current_user.id, "status": {"$nin": ["paid"]}}, {"_id": 0}))
+    invoices = list(db.invoices.find({"user_id": current_user.id, "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}))
     overdue = []
     for inv in invoices:
         raw_due = inv.get("due_date", "")
@@ -1542,6 +1542,7 @@ def get_overdue_invoices(current_user: User = Depends(get_current_user_with_acce
             if inv.get("status") != "overdue":
                 db.invoices.update_one({"id": inv["id"]}, {"$set": {"status": "overdue"}})
                 inv["status"] = "overdue"
+            _enrich_invoice(inv)
             client = db.clients.find_one({"id": inv.get("client_id"), "user_id": current_user.id}, {"_id": 0})
             overdue.append({
                 "id": inv["id"],
@@ -1549,6 +1550,8 @@ def get_overdue_invoices(current_user: User = Depends(get_current_user_with_acce
                 "client_name": client.get("name", "Inconnu") if client else "Inconnu",
                 "client_email": client.get("email", "") if client else "",
                 "total": inv.get("total", 0),
+                "outstanding_cad": inv.get("outstanding_cad", 0),
+                "total_paid_cad": inv.get("total_paid_cad", 0),
                 "due_date": due,
                 "days_overdue": days,
                 "last_reminded": inv.get("last_reminded", ""),
@@ -1556,6 +1559,20 @@ def get_overdue_invoices(current_user: User = Depends(get_current_user_with_acce
     overdue.sort(key=lambda x: x["days_overdue"], reverse=True)
     total_overdue = sum(i["total"] for i in overdue)
     return {"overdue_invoices": overdue, "total_overdue": round(total_overdue, 2), "count": len(overdue)}
+
+@app.get("/api/dashboard/outstanding")
+def get_dashboard_outstanding(current_user: User = Depends(get_current_user_with_access)):
+    """Total des soldes restants pour les invoices non-finalisées."""
+    invoices = list(db.invoices.find({
+        "user_id": current_user.id,
+        "status": {"$in": ["sent", "partial", "overdue"]},
+    }, {"_id": 0}))
+    total = 0.0
+    for inv in invoices:
+        payments = inv.get("payments", []) or []
+        paid = sum(float(p.get("amount_cad", 0) or 0) for p in payments)
+        total += max(0, float(inv.get("total", 0) or 0) - paid)
+    return {"total_outstanding_cad": round(total, 2), "invoice_count": len(invoices)}
 
 @app.post("/api/invoices/{invoice_id}/remind")
 def send_invoice_reminder(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
