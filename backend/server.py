@@ -311,6 +311,88 @@ def _pct_delta(previous, current):
     return round((current - previous) / previous * 100, 1)
 
 
+def _aggregate_pnl(user_id, start, end, basis):
+    """Calcule la portion 'current' (sans comparaison) du P&L pour la période [start, end].
+
+    basis = 'accrual' : status ∈ {sent, paid, overdue}
+    basis = 'cash'    : status == paid
+    """
+    if basis == "cash":
+        status_filter = "paid"
+    else:
+        status_filter = {"$in": ["sent", "paid", "overdue"]}
+    invoice_filter = {
+        "user_id": user_id,
+        "issue_date": {"$gte": start, "$lte": end},
+        "status": status_filter,
+    }
+    invoices = list(db.invoices.find(invoice_filter, {"_id": 0}))
+    revenue = 0.0
+    for inv in invoices:
+        rate = inv.get("exchange_rate_to_cad", 1.0) or 1.0
+        cur = inv.get("currency", "CAD")
+        subtotal = float(inv.get("subtotal", 0) or 0)
+        if cur != "CAD" and float(rate) > 0:
+            subtotal = subtotal / float(rate)
+        revenue += subtotal
+
+    expenses = list(db.expenses.find({
+        "user_id": user_id,
+        "expense_date": {"$gte": start, "$lte": end},
+    }, {"_id": 0}))
+
+    by_code = {}
+    for e in expenses:
+        code = e.get("category_code") or "other"
+        if code not in by_code:
+            by_code[code] = {"gross": 0.0, "deductible": 0.0}
+        by_code[code]["gross"] += float(e.get("amount_cad", 0) or 0)
+        by_code[code]["deductible"] += float(e.get("deductible_amount", 0) or 0)
+
+    groups_order = ["office", "marketing", "premises", "travel", "personnel", "other"]
+    expense_groups = []
+    for g in groups_order:
+        cats = [c for c in EXPENSE_CATEGORIES if c["group"] == g]
+        rows = []
+        sub_gross = 0.0
+        sub_ded = 0.0
+        for cat in cats:
+            stats = by_code.get(cat["code"], {"gross": 0.0, "deductible": 0.0})
+            if stats["gross"] == 0 and stats["deductible"] == 0:
+                continue
+            rows.append({
+                "code": cat["code"],
+                "label": cat["label_fr"],
+                "arc_line": cat["arc_line"],
+                "gross": round(stats["gross"], 2),
+                "deductible": round(stats["deductible"], 2),
+            })
+            sub_gross += stats["gross"]
+            sub_ded += stats["deductible"]
+        if rows:
+            expense_groups.append({
+                "group": g,
+                "label": EXPENSE_CATEGORY_GROUPS[g],
+                "categories": rows,
+                "subtotal": {"gross": round(sub_gross, 2), "deductible": round(sub_ded, 2)},
+            })
+
+    total_gross = sum(g["subtotal"]["gross"] for g in expense_groups)
+    total_ded = sum(g["subtotal"]["deductible"] for g in expense_groups)
+
+    return {
+        "revenue": round(revenue, 2),
+        "expense_groups": expense_groups,
+        "total_expenses": {"gross": round(total_gross, 2), "deductible": round(total_ded, 2)},
+        "net_income": {
+            "management": round(revenue - total_gross, 2),
+            "taxable": round(revenue - total_ded, 2),
+        },
+        "invoice_count": len(invoices),
+        "expense_count": len(expenses),
+    }
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
