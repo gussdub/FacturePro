@@ -225,3 +225,48 @@ class TestDeletePayment:
             except Exception:
                 pass
         cls._cleanup = {"clients": set(), "invoices": set()}
+
+
+class TestGetEnriched:
+    _cleanup = {"clients": set(), "invoices": set()}
+    _auth_headers = None
+
+    def test_get_invoices_includes_enriched_fields(self, auth):
+        TestGetEnriched._auth_headers = auth
+        inv_id, c_id, total = _create_test_invoice(auth)
+        TestGetEnriched._cleanup["invoices"].add(inv_id)
+        TestGetEnriched._cleanup["clients"].add(c_id)
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": 100, "method": "cash"})
+        invoices = requests.get(f"{BASE_URL}/api/invoices", headers=auth).json()
+        target = next(i for i in invoices if i["id"] == inv_id)
+        assert "total_paid_cad" in target
+        assert "outstanding_cad" in target
+        assert target["total_paid_cad"] == 100
+
+    def test_get_single_invoice_includes_enriched_fields(self, auth):
+        TestGetEnriched._auth_headers = auth
+        inv_id, c_id, total = _create_test_invoice(auth)
+        TestGetEnriched._cleanup["invoices"].add(inv_id)
+        TestGetEnriched._cleanup["clients"].add(c_id)
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": 200, "method": "cheque"})
+        body = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        assert body["total_paid_cad"] == 200
+        assert "outstanding_cad" in body
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for iid in cls._cleanup["invoices"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/invoices/{iid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for cid in cls._cleanup["clients"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        cls._cleanup = {"clients": set(), "invoices": set()}
