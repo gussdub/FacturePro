@@ -3,6 +3,22 @@ import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
 
+function computeTaxesPaid(amountGross, province) {
+  const a = parseFloat(amountGross) || 0;
+  if (a <= 0) return { gst: 0, qst: 0, hst: 0 };
+  const r2 = v => Math.round(v * 100) / 100;
+  if (province === 'QC') {
+    return { gst: r2(a * 5 / 114.975), qst: r2(a * 9.975 / 114.975), hst: 0 };
+  }
+  if (province === 'ON') {
+    return { gst: 0, qst: 0, hst: r2(a * 13 / 113) };
+  }
+  if (['NB', 'NS', 'PE', 'NL'].includes(province)) {
+    return { gst: 0, qst: 0, hst: r2(a * 15 / 115) };
+  }
+  return { gst: r2(a * 5 / 105), qst: 0, hst: 0 };
+}
+
 const ExpensesPage = () => {
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -22,9 +38,11 @@ const ExpensesPage = () => {
   const [formData, setFormData] = useState({
     employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '',
     currency: 'CAD', exchange_rate_to_cad: 1.0,
-    category_code: '', category_custom_label: ''
+    category_code: '', category_custom_label: '',
+    gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false,
   });
   const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
+  const [companyProvince, setCompanyProvince] = useState('QC');
 
   useEffect(() => { fetchData(); }, []);
 
@@ -32,6 +50,16 @@ const ExpensesPage = () => {
     axios.get(`${BACKEND_URL}/api/expense-categories`)
       .then(resp => setCategoryCatalog(resp.data))
       .catch(err => console.error('Failed to fetch expense categories:', err));
+  }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+    axios.get(`${BACKEND_URL}/api/settings/company`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(resp => setCompanyProvince(resp.data.province || 'QC'))
+      .catch(() => {});
   }, []);
 
   const fetchData = async () => {
@@ -46,7 +74,7 @@ const ExpensesPage = () => {
   };
 
   const resetForm = () => {
-    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0, category_code: '', category_custom_label: '' });
+    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0, category_code: '', category_custom_label: '', gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false });
     setPreviewReceipt(null);
   };
 
@@ -390,6 +418,84 @@ const ExpensesPage = () => {
                   </div>
                 )}
               </div>
+              <div style={{ marginTop: 18, marginBottom: 16, padding: 16, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb' }}>
+                <h4 style={{ margin: '0 0 6px', fontSize: 14, color: '#1f2937' }}>Taxes payées (CTI/RTI)</h4>
+                <p style={{ marginTop: 0, marginBottom: 12, fontSize: 12, color: '#6b7280' }}>
+                  Saisis ces montants pour les inclure dans ton rapport TPS/TVQ trimestriel.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                  <div>
+                    <label htmlFor="gst-paid-input" style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151' }}>TPS payée</label>
+                    <input
+                      id="gst-paid-input"
+                      type="number" step="0.01" min="0"
+                      value={formData.gst_paid_cad}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        gst_paid_cad: parseFloat(e.target.value) || 0,
+                        taxes_auto_computed: false,
+                      }))}
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="qst-paid-input" style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151' }}>TVQ payée</label>
+                    <input
+                      id="qst-paid-input"
+                      type="number" step="0.01" min="0"
+                      value={formData.qst_paid_cad}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        qst_paid_cad: parseFloat(e.target.value) || 0,
+                        taxes_auto_computed: false,
+                      }))}
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="hst-paid-input" style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151' }}>TVH payée</label>
+                    <input
+                      id="hst-paid-input"
+                      type="number" step="0.01" min="0"
+                      value={formData.hst_paid_cad}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        hst_paid_cad: parseFloat(e.target.value) || 0,
+                        taxes_auto_computed: false,
+                      }))}
+                      style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, boxSizing: 'border-box' }}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const t = computeTaxesPaid(formData.amount, companyProvince);
+                    setFormData(prev => ({
+                      ...prev,
+                      gst_paid_cad: t.gst,
+                      qst_paid_cad: t.qst,
+                      hst_paid_cad: t.hst,
+                      taxes_auto_computed: true,
+                    }));
+                  }}
+                  disabled={formData.currency !== 'CAD'}
+                  style={{
+                    marginTop: 10, padding: '8px 14px',
+                    background: formData.currency === 'CAD' ? '#00A08C' : '#d1d5db',
+                    color: 'white', border: 0, borderRadius: 6,
+                    fontSize: 13, cursor: formData.currency === 'CAD' ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  🧮 Calculer auto (province {companyProvince})
+                </button>
+                {formData.currency !== 'CAD' && (
+                  <p role="status" aria-live="polite" style={{ marginTop: 6, fontSize: 11.5, color: '#92400e' }}>
+                    ⚠ Calcul auto disponible seulement pour les dépenses en CAD.
+                  </p>
+                )}
+              </div>
+
               <div style={{ marginBottom: '16px' }}>
                 <label style={labelStyle}>Date</label>
                 <input type="date" value={formData.expense_date}
