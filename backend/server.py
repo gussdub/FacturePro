@@ -1929,6 +1929,90 @@ async def check_trial_expiry(request: Request):
     return {"notified": sent, "total_eligible": len(users_to_notify)}
 
 
+# ─── Sales Tax Report ───
+def _aggregate_sales_tax(user_id, start, end):
+    """Calcule sommaire + détails CRA + Revenu Québec pour la période [start, end] inclusive."""
+    invoices = list(db.invoices.find({
+        "user_id": user_id,
+        "status": {"$in": ["sent", "paid", "overdue"]},
+        "issue_date": {"$gte": start, "$lte": end},
+    }, {"_id": 0}))
+    expenses = list(db.expenses.find({
+        "user_id": user_id,
+        "expense_date": {"$gte": start, "$lte": end},
+    }, {"_id": 0}))
+
+    def to_cad(amount, rate, currency):
+        if amount is None:
+            return 0
+        if currency == "CAD" or not rate:
+            return float(amount)
+        rate_f = float(rate)
+        return float(amount) / rate_f if rate_f > 0 else float(amount)
+
+    gst_collected = 0.0
+    qst_collected = 0.0
+    hst_collected = 0.0
+    sales_total = 0.0
+    sales_qc_total = 0.0
+    for inv in invoices:
+        rate = inv.get("exchange_rate_to_cad", 1.0) or 1.0
+        cur = inv.get("currency", "CAD")
+        subtotal_cad = to_cad(inv.get("subtotal", 0), rate, cur)
+        gst_cad = to_cad(inv.get("gst_amount", 0), rate, cur)
+        qst_cad = to_cad(inv.get("pst_amount", 0), rate, cur)  # pst_amount = TVQ legacy
+        hst_cad = to_cad(inv.get("hst_amount", 0), rate, cur)
+        sales_total += subtotal_cad
+        if inv.get("province") == "QC":
+            sales_qc_total += subtotal_cad
+        gst_collected += gst_cad
+        qst_collected += qst_cad
+        hst_collected += hst_cad
+
+    gst_paid = sum(float(e.get("gst_paid_cad", 0) or 0) for e in expenses)
+    qst_paid = sum(float(e.get("qst_paid_cad", 0) or 0) for e in expenses)
+    hst_paid = sum(float(e.get("hst_paid_cad", 0) or 0) for e in expenses)
+
+    def r(v):
+        return round(v, 2)
+
+    summary = {
+        "gst": {"collected": r(gst_collected), "paid": r(gst_paid), "net": r(gst_collected - gst_paid)},
+        "qst": {"collected": r(qst_collected), "paid": r(qst_paid), "net": r(qst_collected - qst_paid)},
+        "hst": {"collected": r(hst_collected), "paid": r(hst_paid), "net": r(hst_collected - hst_paid)},
+    }
+    cra_detail = {
+        "line_101_sales": r(sales_total),
+        "line_103_gst_collected": r(gst_collected),
+        "line_103_hst_collected": r(hst_collected),
+        "line_106_itc_gst": r(gst_paid),
+        "line_106_itc_hst": r(hst_paid),
+        "line_109_net_gst": r(gst_collected - gst_paid),
+        "line_109_net_hst": r(hst_collected - hst_paid),
+    }
+    rq_detail = {
+        "line_201_taxable_sales_qc": r(sales_qc_total),
+        "line_203_qst_collected": r(qst_collected),
+        "line_205_itr_qst": r(qst_paid),
+        "line_209_net_qst": r(qst_collected - qst_paid),
+    }
+    return {
+        "period": {"start": start, "end": end},
+        "summary": summary,
+        "cra_detail": cra_detail,
+        "rq_detail": rq_detail,
+        "invoice_count": len(invoices),
+        "expense_count": len(expenses),
+    }
+
+
+@app.get("/api/reports/sales-tax")
+def get_sales_tax_report(start: str = Query(...), end: str = Query(...),
+                         current_user: User = Depends(get_current_user_with_access)):
+    """Rapport TPS/TVQ pour une période donnée."""
+    return _aggregate_sales_tax(current_user.id, start, end)
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():

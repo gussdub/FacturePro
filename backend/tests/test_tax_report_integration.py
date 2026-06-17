@@ -120,3 +120,138 @@ class TestExpenseTaxesPaid:
             except Exception:
                 pass
         cls._cleanup_ids = []
+
+
+class TestSalesTaxReport:
+    _cleanup = {"clients": [], "invoices": [], "expenses": []}
+    _auth_headers = None
+    _setup_done = False
+
+    def _setup_data(self, auth):
+        """Crée un client, 2 invoices QC payées, 1 invoice draft, 2 expenses avec taxes."""
+        if TestSalesTaxReport._setup_done:
+            return
+        TestSalesTaxReport._setup_done = True
+        TestSalesTaxReport._auth_headers = auth
+        # Client
+        c = requests.post(f"{BASE_URL}/api/clients", headers=auth,
+                          json={"name": "Tax Report Test"}).json()
+        TestSalesTaxReport._cleanup["clients"].append(c["id"])
+        # 2 invoices QC paid (subtotal 1000 each, gst=50, qst=99.75)
+        for i in range(2):
+            inv = requests.post(f"{BASE_URL}/api/invoices", headers=auth, json={
+                "client_id": c["id"],
+                "items": [{"description": "S", "quantity": 1, "unit_price": 1000}],
+                "province": "QC",
+                "issue_date": "2026-04-15",
+            }).json()
+            TestSalesTaxReport._cleanup["invoices"].append(inv["id"])
+            # Mark as paid
+            requests.put(f"{BASE_URL}/api/invoices/{inv['id']}/status",
+                         headers=auth, json={"status": "paid"})
+        # 1 invoice draft (must be excluded)
+        d = requests.post(f"{BASE_URL}/api/invoices", headers=auth, json={
+            "client_id": c["id"],
+            "items": [{"description": "Drafty", "quantity": 1, "unit_price": 500}],
+            "province": "QC",
+            "issue_date": "2026-04-15",
+        }).json()
+        TestSalesTaxReport._cleanup["invoices"].append(d["id"])
+        # 2 expenses avec taxes payées
+        for amount, gst, qst in [(114.975, 5.00, 9.98), (229.95, 10.00, 19.96)]:
+            e = requests.post(f"{BASE_URL}/api/expenses", headers=auth, json={
+                "description": "Exp",
+                "amount": amount,
+                "currency": "CAD",
+                "expense_date": "2026-06-16",
+                "gst_paid_cad": gst,
+                "qst_paid_cad": qst,
+            }).json()
+            TestSalesTaxReport._cleanup["expenses"].append(e["id"])
+        return c["id"]
+
+    def test_report_summary(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(
+            f"{BASE_URL}/api/reports/sales-tax",
+            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["period"] == {"start": "2026-06-16", "end": "2026-06-18"}
+        # 2 paid invoices QC : 50 GST each = 100 total
+        assert body["summary"]["gst"]["collected"] == 100.00
+        # 99.75 QST each × 2 = 199.50
+        assert body["summary"]["qst"]["collected"] == 199.50
+        # Expenses: 5 + 10 = 15 GST paid, 9.98 + 19.96 = 29.94 QST paid
+        assert body["summary"]["gst"]["paid"] == 15.00
+        assert body["summary"]["qst"]["paid"] == 29.94
+        # Net = collected - paid
+        assert body["summary"]["gst"]["net"] == 85.00
+        assert body["summary"]["qst"]["net"] == round(199.50 - 29.94, 2)
+        # No HST (no ON invoices)
+        assert body["summary"]["hst"] == {"collected": 0, "paid": 0, "net": 0}
+
+    def test_counts(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(
+            f"{BASE_URL}/api/reports/sales-tax",
+            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+        body = resp.json()
+        # 2 paid invoices, draft excluded
+        assert body["invoice_count"] == 2
+        # 2 expenses
+        assert body["expense_count"] == 2
+
+    def test_cra_detail_lines_present(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(
+            f"{BASE_URL}/api/reports/sales-tax",
+            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+        body = resp.json()
+        cra = body["cra_detail"]
+        for key in ("line_101_sales", "line_103_gst_collected", "line_106_itc_gst",
+                    "line_109_net_gst", "line_103_hst_collected", "line_106_itc_hst",
+                    "line_109_net_hst"):
+            assert key in cra
+
+    def test_rq_detail_lines_present(self, auth):
+        self._setup_data(auth)
+        resp = requests.get(
+            f"{BASE_URL}/api/reports/sales-tax",
+            headers=auth, params={"start": "2026-06-16", "end": "2026-06-18"})
+        body = resp.json()
+        rq = body["rq_detail"]
+        for key in ("line_201_taxable_sales_qc", "line_203_qst_collected",
+                    "line_205_itr_qst", "line_209_net_qst"):
+            assert key in rq
+
+    def test_empty_period(self, auth):
+        resp = requests.get(
+            f"{BASE_URL}/api/reports/sales-tax",
+            headers=auth, params={"start": "2020-01-01", "end": "2020-01-31"})
+        body = resp.json()
+        assert body["summary"]["gst"] == {"collected": 0, "paid": 0, "net": 0}
+        assert body["invoice_count"] == 0
+        assert body["expense_count"] == 0
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth_headers:
+            return
+        for iid in cls._cleanup["invoices"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/invoices/{iid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for eid in cls._cleanup["expenses"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/expenses/{eid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        for cid in cls._cleanup["clients"]:
+            try:
+                requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth_headers)
+            except Exception:
+                pass
+        cls._cleanup = {"clients": [], "invoices": [], "expenses": []}
+        cls._setup_done = False
