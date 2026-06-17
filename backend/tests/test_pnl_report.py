@@ -55,4 +55,7 @@ class TestPctDelta:
         assert _pct_delta(0, 0) == 0.0
 
     def test_negative_previous(self):
-        assert isinstance(_pct_delta(-50, 100), float)
+        # Convention : la formule (current - previous) / previous * 100
+        # avec previous négatif inverse le signe du résultat.
+        # (100 - (-50)) / -50 * 100 = -300.0
+        assert _pct_delta(-50, 100) == -300.0

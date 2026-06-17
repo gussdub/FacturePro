@@ -287,6 +287,7 @@ def _compute_compare_period(start, end, mode):
     if mode == "previous":
         delta = (e - s).days
         new_e = s - timedelta(days=1)
+        # max(1, delta) handles single-day range (delta=0): compare 1 day back.
         new_s = s - timedelta(days=max(1, delta))
         return (new_s.isoformat(), new_e.isoformat())
     if mode == "prior_year":
@@ -302,7 +303,9 @@ def _compute_compare_period(start, end, mode):
 
 def _pct_delta(previous, current):
     """Pourcentage de variation. Convention : si previous == 0 et current != 0 → 100 %.
-    Si les deux sont 0, retourne 0. Arrondi à 1 décimale."""
+    Si les deux sont 0, retourne 0. Arrondi à 1 décimale.
+    Note : si previous est négatif, le signe du résultat s'inverse (convention mathématique
+    standard, peut surprendre en finance)."""
     if previous == 0:
         return 0.0 if current == 0 else 100.0
     return round((current - previous) / previous * 100, 1)
