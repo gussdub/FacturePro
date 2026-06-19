@@ -1482,6 +1482,128 @@ def get_bank_import(import_id: str, page: int = 1, per_page: int = 100,
     }
 
 
+# ─── Bank Transaction Action Endpoints (T8) ───
+
+def _get_tx_or_404(tx_id, user_id):
+    tx = db.bank_transactions.find_one({"id": tx_id, "user_id": user_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(404, "Transaction not found")
+    return tx
+
+
+@app.post("/api/bank/transactions/{tx_id}/match")
+def match_bank_transaction(tx_id: str, body: dict,
+                            current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    kind = body.get("kind")
+    target_id = body.get("target_id")
+    if not target_id:
+        raise HTTPException(422, "target_id required")
+    return clean_doc(_apply_match(tx, kind, target_id, current_user.id))
+
+
+@app.post("/api/bank/transactions/{tx_id}/unmatch")
+def unmatch_bank_transaction(tx_id: str,
+                              current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    if tx.get("status") != "matched":
+        raise HTTPException(409, "Transaction is not matched")
+    if tx.get("match_kind") == "invoice_payment":
+        invoice = db.invoices.find_one(
+            {"id": tx.get("invoice_id"), "user_id": current_user.id}, {"_id": 0})
+        if invoice:
+            new_payments = [p for p in invoice.get("payments", [])
+                            if p.get("id") != tx.get("match_id")]
+            db.invoices.update_one(
+                {"id": invoice["id"], "user_id": current_user.id},
+                {"$set": {"payments": new_payments, "status": "sent"}})
+            updated = db.invoices.find_one(
+                {"id": invoice["id"], "user_id": current_user.id}, {"_id": 0})
+            new_status = _recompute_invoice_status(updated)
+            db.invoices.update_one({"id": invoice["id"], "user_id": current_user.id},
+                                   {"$set": {"status": new_status}})
+    elif tx.get("match_kind") == "expense":
+        db.expenses.update_one(
+            {"id": tx.get("match_id"), "user_id": current_user.id},
+            {"$set": {"bank_transaction_id": None}})
+    _release_bank_transaction(tx_id, current_user.id)
+    return clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))
+
+
+@app.post("/api/bank/transactions/{tx_id}/ignore")
+def ignore_bank_transaction(tx_id: str,
+                             current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    if tx.get("status") == "matched":
+        raise HTTPException(409, "Cannot ignore a matched transaction; unmatch first")
+    db.bank_transactions.update_one(
+        {"id": tx_id, "user_id": current_user.id},
+        {"$set": {"status": "ignored"}})
+    return clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))
+
+
+@app.post("/api/bank/transactions/{tx_id}/unignore")
+def unignore_bank_transaction(tx_id: str,
+                               current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    if tx.get("status") != "ignored":
+        raise HTTPException(409, "Transaction is not ignored")
+    db.bank_transactions.update_one(
+        {"id": tx_id, "user_id": current_user.id},
+        {"$set": {"status": "unmatched"}})
+    return clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))
+
+
+@app.get("/api/bank/transactions/{tx_id}/suggestions")
+def get_bank_suggestions(tx_id: str,
+                          current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    if tx.get("date") is None or tx.get("amount_cad") is None:
+        return {"invoices": [], "expenses": []}
+    tx_date = _parse_iso_date(tx["date"])
+    target = abs(float(tx["amount_cad"]))
+    desc_lower = (tx.get("description") or "").lower()
+    invoices_out = []
+    expenses_out = []
+    if tx["amount_cad"] > 0:
+        cands = []
+        for inv in db.invoices.find(
+                {"user_id": current_user.id,
+                 "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}):
+            outstanding = _get_invoice_outstanding(inv)
+            if abs(outstanding - target) > 0.01:
+                continue
+            issue = _parse_iso_date(inv.get("issue_date"))
+            if not issue or not (tx_date - timedelta(days=90) <= issue <= tx_date + timedelta(days=3)):
+                continue
+            client = db.clients.find_one(
+                {"id": inv.get("client_id"), "user_id": current_user.id},
+                {"_id": 0, "name": 1}) or {}
+            client_name = (client.get("name") or "").lower()
+            score, ddiff, adiff = _score_invoice_candidate(
+                tx_date, target, inv, client_name, desc_lower)
+            cands.append((score, ddiff, adiff, inv, client.get("name") or ""))
+        cands.sort(key=lambda c: (-c[0], c[1], c[2]))
+        for score, ddiff, adiff, inv, cname in cands[:3]:
+            invoices_out.append({"invoice": clean_doc(inv), "client_name": cname, "score": score})
+    elif tx["amount_cad"] < 0:
+        cands = []
+        for exp in db.expenses.find(
+                {"user_id": current_user.id, "bank_transaction_id": None}, {"_id": 0}):
+            if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
+                continue
+            exp_date = _parse_iso_date(exp.get("date"))
+            if not exp_date or abs((tx_date - exp_date).days) > 3:
+                continue
+            score, ddiff, adiff = _score_expense_candidate(
+                tx_date, target, exp, desc_lower)
+            cands.append((score, ddiff, adiff, exp))
+        cands.sort(key=lambda c: (-c[0], c[1], c[2]))
+        for score, ddiff, adiff, exp in cands[:3]:
+            expenses_out.append({"expense": clean_doc(exp), "score": score})
+    return {"invoices": invoices_out, "expenses": expenses_out}
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):

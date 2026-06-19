@@ -287,3 +287,105 @@ class TestImportsList:
         for iid in cls._cleanup:
             try: requests.delete(f"{BASE_URL}/api/bank/imports/{iid}?force=true", headers=cls._auth)
             except: pass
+
+
+class TestMatchEndpoints:
+    _cleanup = {"imports": set(), "invoices": set(), "clients": set()}
+    _auth = None
+
+    def _make_import_with_one_tx(self, auth, amount_cad, date="2099-10-15", desc=None):
+        if desc is None:
+            desc = f"NOMATCH-{uuid.uuid4().hex[:6]}"
+        csv = _csv_bytes([[date, desc, f"{amount_cad:.2f}"]])
+        files = {"file": ("m.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        body = requests.post(f"{BASE_URL}/api/bank/imports",
+                             files=files, data=data, headers=auth).json()
+        TestMatchEndpoints._cleanup["imports"].add(body["import"]["id"])
+        return body["transactions"][0]
+
+    def test_match_invoice_creates_payment(self, auth):
+        TestMatchEndpoints._auth = auth
+        # subtotal 200 → total 210 (province AB), pas de nom client dans desc → pas d'auto-match
+        inv_id, c_id, total = _create_invoice_for_match(auth, 200, "2099-10-15")
+        TestMatchEndpoints._cleanup["invoices"].add(inv_id)
+        TestMatchEndpoints._cleanup["clients"].add(c_id)
+        tx = self._make_import_with_one_tx(auth, total, "2099-10-15")
+        # tx_status should still be unmatched (desc didn't contain client name)
+        assert tx["status"] == "unmatched", f"Expected unmatched (avoiding auto-match), got {tx['status']}"
+        r = requests.post(
+            f"{BASE_URL}/api/bank/transactions/{tx['id']}/match",
+            headers=auth, json={"kind": "invoice_payment", "target_id": inv_id})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "matched"
+        inv = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        assert len(inv["payments"]) == 1
+        assert inv["status"] == "paid"
+
+    def test_match_paid_invoice_returns_409(self, auth):
+        inv_id, c_id, total = _create_invoice_for_match(auth, 100, "2099-10-20")
+        TestMatchEndpoints._cleanup["invoices"].add(inv_id)
+        TestMatchEndpoints._cleanup["clients"].add(c_id)
+        # passe la facture en paid
+        requests.post(f"{BASE_URL}/api/invoices/{inv_id}/payments",
+                      headers=auth, json={"amount_cad": total, "method": "cash"})
+        tx = self._make_import_with_one_tx(auth, total, "2099-10-21")
+        r = requests.post(
+            f"{BASE_URL}/api/bank/transactions/{tx['id']}/match",
+            headers=auth, json={"kind": "invoice_payment", "target_id": inv_id})
+        assert r.status_code == 409
+
+    def test_match_non_owned_target_returns_404(self, auth):
+        tx = self._make_import_with_one_tx(auth, 50, "2099-10-22")
+        r = requests.post(
+            f"{BASE_URL}/api/bank/transactions/{tx['id']}/match",
+            headers=auth, json={"kind": "invoice_payment", "target_id": "bogus-uuid-no-exist"})
+        assert r.status_code == 404
+
+    def test_unmatch_removes_payment(self, auth):
+        inv_id, c_id, total = _create_invoice_for_match(auth, 50, "2099-10-25")
+        TestMatchEndpoints._cleanup["invoices"].add(inv_id)
+        TestMatchEndpoints._cleanup["clients"].add(c_id)
+        tx = self._make_import_with_one_tx(auth, total, "2099-10-25")
+        requests.post(f"{BASE_URL}/api/bank/transactions/{tx['id']}/match",
+                      headers=auth, json={"kind": "invoice_payment", "target_id": inv_id})
+        r = requests.post(f"{BASE_URL}/api/bank/transactions/{tx['id']}/unmatch", headers=auth)
+        assert r.status_code == 200
+        assert r.json()["status"] == "unmatched"
+        inv = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        assert len(inv["payments"]) == 0
+        assert inv["status"] in ("sent", "overdue")
+
+    def test_ignore_then_unignore(self, auth):
+        tx = self._make_import_with_one_tx(auth, 5, "2099-10-28", f"Bank fee XYZ {uuid.uuid4().hex[:6]}")
+        r = requests.post(f"{BASE_URL}/api/bank/transactions/{tx['id']}/ignore", headers=auth)
+        assert r.json()["status"] == "ignored"
+        r = requests.post(f"{BASE_URL}/api/bank/transactions/{tx['id']}/unignore", headers=auth)
+        assert r.json()["status"] == "unmatched"
+
+    def test_suggestions_returns_candidates(self, auth):
+        # crée facture ~50 $ et tx de 50 $ → 1+ suggestion invoice
+        # subtotal 47.62 * 1.05 = 50.001 → on vise précis
+        i1, c1, total1 = _create_invoice_for_match(auth, 47.62, "2099-11-01")
+        TestMatchEndpoints._cleanup["invoices"].add(i1)
+        TestMatchEndpoints._cleanup["clients"].add(c1)
+        tx = self._make_import_with_one_tx(auth, total1, "2099-11-03")
+        r = requests.get(f"{BASE_URL}/api/bank/transactions/{tx['id']}/suggestions", headers=auth)
+        assert r.status_code == 200
+        body = r.json()
+        assert isinstance(body.get("invoices"), list)
+        assert isinstance(body.get("expenses"), list)
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth:
+            return
+        for iid in cls._cleanup["imports"]:
+            try: requests.delete(f"{BASE_URL}/api/bank/imports/{iid}?force=true", headers=cls._auth)
+            except: pass
+        for invid in cls._cleanup["invoices"]:
+            try: requests.delete(f"{BASE_URL}/api/invoices/{invid}", headers=cls._auth)
+            except: pass
+        for cid in cls._cleanup["clients"]:
+            try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
+            except: pass
