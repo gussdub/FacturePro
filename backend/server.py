@@ -1669,11 +1669,23 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
     right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=10, textColor=dark, alignment=TA_RIGHT)
     terms_style = ParagraphStyle('Terms', parent=styles['Normal'], fontSize=8, textColor=gray, leading=11)
 
-    # Source: snapshot if present (immutable), fallback to current company_settings/client_info for old docs
-    tax_regs = document.get('tax_registrations') or {
-        "company": _take_regs(company_settings),
-        "client":  _take_regs(client_info or {}),
-    }
+    # Tax registrations source:
+    # - Quotes: always use current company settings (quote is not a final fiscal doc).
+    # - Invoices: snapshot is immutable once status leaves "draft" (audit trail).
+    # Client snapshot is preserved if present (client numbers were theirs at doc creation).
+    doc_status = document.get('status', 'draft')
+    is_mutable = (doc_type == 'quote') or (doc_type == 'invoice' and doc_status == 'draft')
+    snapshot = document.get('tax_registrations') or {}
+    if is_mutable:
+        tax_regs = {
+            "company": _take_regs(company_settings),
+            "client":  snapshot.get("client") or _take_regs(client_info or {}),
+        }
+    else:
+        tax_regs = snapshot or {
+            "company": _take_regs(company_settings),
+            "client":  _take_regs(client_info or {}),
+        }
 
     elements = []
 
