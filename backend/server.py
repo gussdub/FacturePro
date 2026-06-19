@@ -544,6 +544,72 @@ def _compute_file_hash(data):
     return hashlib.sha256(normalized).hexdigest()
 
 
+ROW_LIMIT = 5000
+
+
+def _parse_csv_rows(csv_bytes, mapping):
+    """Parse les lignes CSV selon le mapping. Retourne liste de dicts.
+    Lève ValueError("row limit") si > ROW_LIMIT lignes de données.
+    Chaque dict : {row_index, date, description, amount_cad, parse_error, raw_line(opt)}.
+    """
+    text = csv_bytes.decode("utf-8", errors="replace")
+    reader = csv_module.reader(io.StringIO(text), delimiter=mapping["delimiter"])
+    out = []
+    data_index = 0
+    skip_header = mapping.get("has_header", True)
+    for raw_row in reader:
+        # skip lignes vides
+        if not raw_row or all((c or "").strip() == "" for c in raw_row):
+            continue
+        if skip_header:
+            skip_header = False
+            continue
+        if data_index >= ROW_LIMIT:
+            raise ValueError(f"CSV exceeds row limit ({ROW_LIMIT})")
+        # Sanitize only text fields (description); amount/date cells must keep their raw value
+        date_col = mapping["date_column"]
+        desc_col = mapping["description_column"]
+        date_str = (raw_row[date_col].strip() if date_col < len(raw_row) else "")
+        desc = (_sanitize_cell(raw_row[desc_col]) if desc_col < len(raw_row) else "")
+        date_parsed = _parse_csv_date(date_str, mapping["date_format"])
+        # amount
+        amount = None
+        if mapping["amount_mode"] == "single":
+            col = mapping.get("amount_column")
+            if col is not None and col < len(raw_row):
+                amt = _normalize_amount(raw_row[col])
+                if amt is not None:
+                    if mapping.get("sign_convention") == "positive_is_debit":
+                        amt = -amt
+                amount = amt
+        else:  # debit_credit
+            dcol = mapping.get("debit_column")
+            ccol = mapping.get("credit_column")
+            d = _normalize_amount(raw_row[dcol]) if (dcol is not None and dcol < len(raw_row)) else None
+            c = _normalize_amount(raw_row[ccol]) if (ccol is not None and ccol < len(raw_row)) else None
+            d = abs(d) if d is not None else 0
+            c = abs(c) if c is not None else 0
+            if d == 0 and c == 0:
+                amount = 0.0
+            else:
+                amount = c - d
+        parse_error = (date_parsed is None) or (amount is None)
+        row_dict = {
+            "row_index": data_index,
+            "date": date_parsed,
+            "description": desc[:500],
+            "amount_cad": round(amount, 2) if amount is not None else None,
+            "parse_error": parse_error,
+        }
+        if parse_error:
+            row_dict["raw_line"] = (mapping["delimiter"].join(raw_row))[:500]
+        else:
+            row_dict["raw_line"] = None
+        out.append(row_dict)
+        data_index += 1
+    return out
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
