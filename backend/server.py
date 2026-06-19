@@ -610,6 +610,84 @@ def _parse_csv_rows(csv_bytes, mapping):
     return out
 
 
+def _get_invoice_outstanding(invoice):
+    """Calcule le solde restant d'une invoice (jamais négatif). Helper pour l'auto-match."""
+    payments = invoice.get("payments") or []
+    paid = sum(float(p.get("amount_cad", 0) or 0) for p in payments)
+    return max(0.0, round(float(invoice.get("total", 0) or 0) - paid, 2))
+
+
+def _release_bank_transaction(tx_id, user_id):
+    """Repasse une bank_transaction en unmatched. Utilisé par les cascades DELETE."""
+    db.bank_transactions.update_one(
+        {"id": tx_id, "user_id": user_id},
+        {"$set": {
+            "status": "unmatched", "match_kind": None,
+            "match_id": None, "invoice_id": None, "matched_at": None,
+        }},
+    )
+
+
+def _apply_match(tx, kind, target_id, user_id):
+    """Effectue le match entre une bank_transaction et une cible (invoice ou expense).
+    Retourne la bank_transaction mise à jour ou lève HTTPException.
+    - kind="invoice_payment" : crée un payment dans invoice.payments[]
+    - kind="expense" : set expense.bank_transaction_id
+    """
+    if tx.get("status") != "unmatched":
+        raise HTTPException(409, "Transaction already matched or ignored")
+    now = datetime.now(timezone.utc).isoformat()
+    tx_amount = abs(float(tx.get("amount_cad", 0) or 0))
+
+    if kind == "invoice_payment":
+        invoice = db.invoices.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+        if not invoice:
+            raise HTTPException(404, "Invoice not found")
+        if invoice.get("status") == "paid":
+            raise HTTPException(409, "Invoice already fully paid")
+        payment = {
+            "id": str(uuid.uuid4()),
+            "amount_cad": round(tx_amount, 2),
+            "method": "transfer",
+            "date": tx.get("date") or now[:10],
+            "reference": (tx.get("description") or "")[:200],
+            "bank_transaction_id": tx["id"],
+            "created_at": now,
+        }
+        db.invoices.update_one(
+            {"id": target_id, "user_id": user_id},
+            {"$push": {"payments": payment}})
+        updated = db.invoices.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+        new_status = _recompute_invoice_status(updated)
+        db.invoices.update_one({"id": target_id, "user_id": user_id},
+                               {"$set": {"status": new_status}})
+        match_kind = "invoice_payment"
+        match_id = payment["id"]
+        invoice_id = target_id
+
+    elif kind == "expense":
+        expense = db.expenses.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+        if not expense:
+            raise HTTPException(404, "Expense not found")
+        db.expenses.update_one(
+            {"id": target_id, "user_id": user_id},
+            {"$set": {"bank_transaction_id": tx["id"]}})
+        match_kind = "expense"
+        match_id = target_id
+        invoice_id = None
+
+    else:
+        raise HTTPException(422, "Invalid kind")
+
+    db.bank_transactions.update_one(
+        {"id": tx["id"], "user_id": user_id},
+        {"$set": {"status": "matched", "match_kind": match_kind,
+                  "match_id": match_id, "invoice_id": invoice_id,
+                  "matched_at": now}},
+    )
+    return db.bank_transactions.find_one({"id": tx["id"], "user_id": user_id}, {"_id": 0})
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 

@@ -197,3 +197,21 @@ class TestParseCsvRows:
         assert rows[0].get("raw_line") is None
         assert rows[1]["raw_line"] is not None
         assert "bad" in rows[1]["raw_line"]
+
+
+from server import _get_invoice_outstanding
+
+
+class TestGetInvoiceOutstanding:
+    def test_no_payments(self):
+        inv = {"total": 100.0}
+        assert _get_invoice_outstanding(inv) == 100.0
+
+    def test_with_payments(self):
+        inv = {"total": 100.0, "payments": [{"amount_cad": 30}, {"amount_cad": 20}]}
+        assert _get_invoice_outstanding(inv) == 50.0
+
+    def test_overpaid_returns_zero(self):
+        inv = {"total": 100.0, "payments": [{"amount_cad": 150}]}
+        # spec : on retourne max(0, ...) pour l'algo de match
+        assert _get_invoice_outstanding(inv) == 0.0
