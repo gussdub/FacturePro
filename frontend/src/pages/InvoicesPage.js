@@ -107,6 +107,14 @@ const InvoicesPage = () => {
   const addBlankItem = () => setFormData(prev => ({ ...prev, items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }] }));
 
   const formSubtotal = formData.items.reduce((s, it) => s + (it.quantity * it.unit_price), 0);
+  const computeFormTaxes = (subtotal, province) => {
+    if (province === 'QC') return { gst: subtotal * 0.05, pst: subtotal * 0.09975, hst: 0 };
+    if (province === 'ON') return { gst: 0, pst: 0, hst: subtotal * 0.13 };
+    return { gst: subtotal * 0.05, pst: 0, hst: 0 };
+  };
+  const formTaxes = computeFormTaxes(formSubtotal, formData.province);
+  const formTotalTax = formTaxes.gst + formTaxes.pst + formTaxes.hst;
+  const formTotal = formSubtotal + formTotalTax;
 
   const openNewForm = () => {
     setEditingInvoice(null);
@@ -494,14 +502,39 @@ const InvoicesPage = () => {
                 </button>
               </div>
 
-              <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px', textAlign: 'right' }}>
-                <span style={{ color: '#6b7280', fontSize: '14px' }}>Sous-total: </span>
-                <span style={{ fontWeight: '700', fontSize: '18px', color: '#008F7A' }}>{formatCurrency(formSubtotal, formData.currency)}</span>
-                {formData.currency !== 'CAD' && formData.exchange_rate_to_cad > 0 && (
-                  <span style={{ color: '#a1a1aa', fontSize: '13px', marginLeft: '8px' }}>
-                    = {formatCurrency(formSubtotal / formData.exchange_rate_to_cad, 'CAD')}
-                  </span>
+              <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', color: '#6b7280', marginBottom: '4px' }}>
+                  <span>Sous-total</span>
+                  <span>{formatCurrency(formSubtotal, formData.currency)}</span>
+                </div>
+                {formTaxes.gst > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                    <span>TPS (5 %)</span>
+                    <span>{formatCurrency(formTaxes.gst, formData.currency)}</span>
+                  </div>
                 )}
+                {formTaxes.pst > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                    <span>TVQ (9,975 %)</span>
+                    <span>{formatCurrency(formTaxes.pst, formData.currency)}</span>
+                  </div>
+                )}
+                {formTaxes.hst > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', color: '#6b7280', marginBottom: '4px' }}>
+                    <span>TVH (13 %)</span>
+                    <span>{formatCurrency(formTaxes.hst, formData.currency)}</span>
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: '700', color: '#008F7A', borderTop: '1px solid #e5e7eb', paddingTop: '8px', marginTop: '6px' }}>
+                  <span>Total</span>
+                  <span>{formatCurrency(formTotal, formData.currency)}
+                    {formData.currency !== 'CAD' && formData.exchange_rate_to_cad > 0 && (
+                      <span style={{ color: '#a1a1aa', fontSize: '13px', marginLeft: '8px', fontWeight: '400' }}>
+                        = {formatCurrency(formTotal / formData.exchange_rate_to_cad, 'CAD')}
+                      </span>
+                    )}
+                  </span>
+                </div>
               </div>
 
               {/* Recurrence */}
