@@ -1107,6 +1107,43 @@ def process_recurring_invoices(current_user: User = Depends(get_current_user_wit
             errors.append(f"{inv.get('invoice_number')}: {str(e)}")
     return {"sent": sent_count, "errors": errors}
 
+# ─── Bank reconciliation endpoints (feature #7) ───
+BANK_MAPPING_LIMIT = 20
+
+
+@app.get("/api/bank/mappings")
+def list_bank_mappings(current_user: User = Depends(get_current_user_with_access)):
+    cursor = db.bank_mappings.find({"user_id": current_user.id}, {"_id": 0}).sort("last_used_at", -1)
+    return list(cursor)
+
+
+@app.post("/api/bank/mappings", status_code=201)
+def create_bank_mapping(body: dict, current_user: User = Depends(get_current_user_with_access)):
+    count = db.bank_mappings.count_documents({"user_id": current_user.id})
+    if count >= BANK_MAPPING_LIMIT:
+        raise HTTPException(409, f"Limite de {BANK_MAPPING_LIMIT} mappings atteinte")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "bank_label": (body.get("bank_label") or "").strip()[:60] or "Sans nom",
+        "delimiter": body.get("delimiter", ","),
+        "has_header": bool(body.get("has_header", True)),
+        "date_column": int(body.get("date_column", 0)),
+        "date_format": body.get("date_format", "YYYY-MM-DD"),
+        "description_column": int(body.get("description_column", 1)),
+        "amount_mode": body.get("amount_mode", "single"),
+        "amount_column": body.get("amount_column"),
+        "debit_column": body.get("debit_column"),
+        "credit_column": body.get("credit_column"),
+        "sign_convention": body.get("sign_convention", "positive_is_credit"),
+        "created_at": now,
+        "last_used_at": now,
+    }
+    db.bank_mappings.insert_one(doc)
+    return clean_doc(doc)
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):
