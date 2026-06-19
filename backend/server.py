@@ -1982,7 +1982,11 @@ def get_quote_pdf(quote_id: str, current_user: User = Depends(get_current_user_w
     pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
     filename = f"soumission_{quote.get('quote_number', 'N-A')}.pdf"
     return StreamingResponse(pdf_buffer, media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"})
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        })
 
 @app.get("/api/invoices/{invoice_id}/pdf")
 def get_invoice_pdf(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
@@ -1996,7 +2000,11 @@ def get_invoice_pdf(invoice_id: str, current_user: User = Depends(get_current_us
     pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
     filename = f"facture_{invoice.get('invoice_number', 'N-A')}.pdf"
     return StreamingResponse(pdf_buffer, media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"})
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        })
 
 # ─── Email Sending ───
 @app.post("/api/quotes/{quote_id}/send")
