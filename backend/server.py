@@ -477,6 +477,73 @@ def _enrich_invoice(invoice):
     return invoice
 
 
+# ─── Bank reconciliation helpers (feature #7) ───
+import csv as csv_module
+import io
+import hashlib
+
+_CSV_INJECTION_PREFIXES = ("=", "+", "-", "@", "\t")
+
+def _sanitize_cell(value):
+    """Strip leading CSV-injection characters (=, +, -, @, tab). Tolerates None."""
+    if value is None:
+        return ""
+    # Strip only regular spaces so that a leading tab is still detectable
+    stripped = value.lstrip(" ")
+    if stripped and stripped[0] in _CSV_INJECTION_PREFIXES:
+        return stripped[1:]
+    return value
+
+
+_DATE_FORMAT_MAP = {
+    "YYYY-MM-DD": "%Y-%m-%d",
+    "DD/MM/YYYY": "%d/%m/%Y",
+    "MM/DD/YYYY": "%m/%d/%Y",
+}
+
+
+def _parse_csv_date(value, fmt):
+    """Parse une cellule date selon fmt. Retourne 'YYYY-MM-DD' ou None."""
+    if not value:
+        return None
+    py_fmt = _DATE_FORMAT_MAP.get(fmt)
+    if not py_fmt:
+        return None
+    try:
+        dt = datetime.strptime(value.strip(), py_fmt)
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, AttributeError):
+        return None
+
+
+def _normalize_amount(value):
+    """Parse un montant US (1,234.56) ou EU (1 234,56). Retourne float ou None."""
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    # supprime espaces normaux et non-cassants
+    s = s.replace(" ", "").replace(" ", "")
+    # heuristique: virgule seule → décimal EU; les deux → point=décimal US
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    elif "," in s and "." in s:
+        s = s.replace(",", "")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _compute_file_hash(data):
+    """sha256 hex du contenu — normalise CRLF/CR → LF pour robustesse inter-export."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    normalized = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(normalized).hexdigest()
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
