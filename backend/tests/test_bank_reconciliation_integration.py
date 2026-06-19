@@ -151,3 +151,81 @@ class TestImportCreate:
                                 headers=cls._auth)
             except Exception:
                 pass
+
+
+def _create_invoice_for_match(auth, subtotal, issue_date, client_name=None):
+    """Crée client + invoice statut sent (province AB → +5% taxes seulement).
+    Retourne (invoice_id, client_id, total)."""
+    cname = client_name or f"Auto-{uuid.uuid4().hex[:6]}"
+    c = requests.post(f"{BASE_URL}/api/clients", headers=auth, json={
+        "name": cname, "email": f"{cname.lower().replace(' ', '')}@x.test"}).json()
+    inv = requests.post(f"{BASE_URL}/api/invoices", headers=auth, json={
+        "client_id": c["id"],
+        "issue_date": issue_date,
+        "due_date": issue_date,
+        "items": [{"description": "X", "quantity": 1, "unit_price": subtotal}],
+        "province": "AB",
+        "currency": "CAD",
+        "status": "sent",
+    }).json()
+    return inv["id"], c["id"], inv["total"]
+
+
+class TestAutoMatch:
+    _cleanup = {"imports": set(), "invoices": set(), "clients": set()}
+    _auth = None
+
+    def test_credit_matches_existing_invoice(self, auth):
+        TestAutoMatch._auth = auth
+        # facture subtotal 100 → total 105 (province AB), nom client distinctif
+        client_name = f"BANKMATCH{uuid.uuid4().hex[:6].upper()}"
+        inv_id, c_id, total = _create_invoice_for_match(auth, 100, "2099-07-10", client_name)
+        TestAutoMatch._cleanup["invoices"].add(inv_id)
+        TestAutoMatch._cleanup["clients"].add(c_id)
+        # CSV avec crédit de 105.00 $ le 2099-07-12 (dans la fenêtre ±3j),
+        # description contenant le nom du client → score parfait → auto-match
+        csv = _csv_bytes([
+            ["2099-07-12", f"VIREMENT {client_name} REF12345", f"{total:.2f}"],
+        ])
+        files = {"file": ("am.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        r = requests.post(f"{BASE_URL}/api/bank/imports",
+                          files=files, data=data, headers=auth)
+        assert r.status_code == 201, r.text
+        body = r.json()
+        TestAutoMatch._cleanup["imports"].add(body["import"]["id"])
+        tx = body["transactions"][0]
+        assert tx["status"] == "matched", f"Expected matched, got {tx['status']}"
+        assert tx["match_kind"] == "invoice_payment"
+        # vérifier que la facture a maintenant un payment
+        inv_after = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        assert len(inv_after["payments"]) == 1
+        assert inv_after["status"] == "paid"
+
+    def test_credit_no_match_when_amount_off(self, auth):
+        uid = uuid.uuid4().hex[:8]
+        csv = _csv_bytes([
+            ["2099-08-10", f"Quelque chose unique {uid}", "999999.00"],  # montant improbable
+        ])
+        files = {"file": ("nm.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        r = requests.post(f"{BASE_URL}/api/bank/imports",
+                          files=files, data=data, headers=auth)
+        assert r.status_code == 201
+        body = r.json()
+        TestAutoMatch._cleanup["imports"].add(body["import"]["id"])
+        assert body["transactions"][0]["status"] == "unmatched"
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth:
+            return
+        for iid in cls._cleanup["imports"]:
+            try: requests.delete(f"{BASE_URL}/api/bank/imports/{iid}?force=true", headers=cls._auth)
+            except: pass
+        for invid in cls._cleanup["invoices"]:
+            try: requests.delete(f"{BASE_URL}/api/invoices/{invid}", headers=cls._auth)
+            except: pass
+        for cid in cls._cleanup["clients"]:
+            try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
+            except: pass

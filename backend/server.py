@@ -688,6 +688,120 @@ def _apply_match(tx, kind, target_id, user_id):
     return db.bank_transactions.find_one({"id": tx["id"], "user_id": user_id}, {"_id": 0})
 
 
+def _parse_iso_date(s):
+    """Tolère 'YYYY-MM-DD', 'YYYY-MM-DDT...' ISO. Retourne datetime.date ou None."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+    except (ValueError, AttributeError):
+        try:
+            return datetime.strptime(s[:10], "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+
+def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower):
+    """Score 1-3 pour un candidat invoice. Retourne (score, date_diff_days, amount_diff)."""
+    outstanding = _get_invoice_outstanding(inv)
+    amount_diff = abs(outstanding - target)
+    issue = _parse_iso_date(inv.get("issue_date"))
+    due = _parse_iso_date(inv.get("due_date")) or issue
+    score = 1  # filtre amount = +1
+    date_diff = 999
+    if issue:
+        d_issue = abs((tx_date - issue).days)
+        d_due = abs((tx_date - due).days) if due else d_issue
+        date_diff = min(d_issue, d_due)
+        if d_issue <= 3 or d_due <= 3:
+            score += 1
+    if client_name_lower and len(client_name_lower) >= 3 and client_name_lower in desc_lower:
+        score += 1
+    return score, date_diff, amount_diff
+
+
+def _score_expense_candidate(tx_date, target, exp, desc_lower):
+    amount_diff = abs(float(exp.get("amount_cad", 0)) - target)
+    exp_date = _parse_iso_date(exp.get("date"))
+    date_diff = abs((tx_date - exp_date).days) if exp_date else 999
+    vendor = (exp.get("vendor") or "").lower()
+    score = 1
+    if date_diff <= 1:
+        score += 1
+    if vendor and len(vendor) >= 3 and vendor in desc_lower:
+        score += 1
+    return score, date_diff, amount_diff
+
+
+def _auto_match_transactions(import_id, user_id):
+    """Pour chaque transaction unmatched de l'import, tente un match auto.
+    Retourne nombre de matches appliqués."""
+    open_invoices = list(db.invoices.find(
+        {"user_id": user_id, "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}))
+    open_expenses = list(db.expenses.find(
+        {"user_id": user_id, "bank_transaction_id": None}, {"_id": 0}))
+    clients_by_id = {c["id"]: (c.get("name") or "")
+                     for c in db.clients.find({"user_id": user_id},
+                                              {"_id": 0, "id": 1, "name": 1})}
+
+    txs = list(db.bank_transactions.find(
+        {"import_id": import_id, "user_id": user_id, "status": "unmatched",
+         "parse_error": False}, {"_id": 0}))
+    applied = 0
+    for tx in txs:
+        if tx.get("date") is None or tx.get("amount_cad") is None:
+            continue
+        tx_date = _parse_iso_date(tx["date"])
+        if tx_date is None:
+            continue
+        target = abs(float(tx["amount_cad"]))
+        desc_lower = (tx.get("description") or "").lower()
+        candidates = []
+
+        if tx["amount_cad"] > 0:  # crédit → factures
+            for inv in open_invoices:
+                outstanding = _get_invoice_outstanding(inv)
+                if abs(outstanding - target) > 0.01:
+                    continue
+                issue = _parse_iso_date(inv.get("issue_date"))
+                if not issue:
+                    continue
+                if not (tx_date - timedelta(days=90) <= issue <= tx_date + timedelta(days=3)):
+                    continue
+                client_name = clients_by_id.get(inv.get("client_id"), "").lower()
+                score, date_diff, amt_diff = _score_invoice_candidate(
+                    tx_date, target, inv, client_name, desc_lower)
+                candidates.append((score, date_diff, amt_diff,
+                                   {"kind": "invoice_payment", "id": inv["id"]}))
+
+        elif tx["amount_cad"] < 0:  # débit → dépenses
+            for exp in open_expenses:
+                if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
+                    continue
+                exp_date = _parse_iso_date(exp.get("date"))
+                if not exp_date or abs((tx_date - exp_date).days) > 3:
+                    continue
+                score, date_diff, amt_diff = _score_expense_candidate(
+                    tx_date, target, exp, desc_lower)
+                candidates.append((score, date_diff, amt_diff,
+                                   {"kind": "expense", "id": exp["id"]}))
+
+        if not candidates:
+            continue
+        candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
+        top = candidates[0]
+        # auto-match seulement si UNIQUE candidat score 3 (ou si second a score < 3)
+        if top[0] == 3 and (len(candidates) == 1 or candidates[1][0] < 3):
+            try:
+                _apply_match(tx, top[3]["kind"], top[3]["id"], user_id)
+                applied += 1
+                if top[3]["kind"] == "expense":
+                    open_expenses = [e for e in open_expenses if e["id"] != top[3]["id"]]
+            except HTTPException:
+                pass
+    return applied
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
@@ -1317,8 +1431,11 @@ async def create_bank_import(
     if mapping_id:
         db.bank_mappings.update_one({"id": mapping_id, "user_id": current_user.id},
                                     {"$set": {"last_used_at": now}})
+    matched_n = _auto_match_transactions(import_id, current_user.id)
+    final_txs = list(db.bank_transactions.find({"import_id": import_id, "user_id": current_user.id}, {"_id": 0}))
     return {"import": clean_doc(import_doc),
-            "transactions": [clean_doc(t) for t in tx_docs]}
+            "transactions": [clean_doc(t) for t in final_txs],
+            "auto_matched": matched_n}
 
 
 # ─── Quotes CRUD ───
