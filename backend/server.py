@@ -831,9 +831,13 @@ def update_invoice(invoice_id: str, invoice_data: dict, current_user: User = Dep
             "total_tax": total_tax, "total": total, "currency": currency,
             "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
         })
-    result = db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": invoice_data})
-    if result.matched_count == 0:
+    existing = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if not existing:
         raise HTTPException(404, "Invoice not found")
+    if existing.get("status", "draft") == "draft":
+        client_id_for_snapshot = invoice_data.get("client_id", existing.get("client_id"))
+        invoice_data["tax_registrations"] = _build_tax_registrations(current_user.id, client_id_for_snapshot)
+    db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": invoice_data})
     return clean_doc(db.invoices.find_one({"id": invoice_id}, {"_id": 0}))
 
 @app.put("/api/invoices/{invoice_id}/status")
@@ -1021,9 +1025,12 @@ def update_quote(quote_id: str, quote_data: dict, current_user: User = Depends(g
             "total_tax": total_tax, "total": total, "currency": currency,
             "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
         })
-    result = db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": quote_data})
-    if result.matched_count == 0:
+    existing = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+    if not existing:
         raise HTTPException(404, "Quote not found")
+    client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
+    quote_data["tax_registrations"] = _build_tax_registrations(current_user.id, client_id_for_snapshot)
+    db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
 @app.post("/api/quotes/{quote_id}/convert")
