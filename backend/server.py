@@ -1438,6 +1438,50 @@ async def create_bank_import(
             "auto_matched": matched_n}
 
 
+def _import_with_live_counts(imp):
+    """Enrichit un bank_import avec les counts live des transactions."""
+    counts = {"matched": 0, "ignored": 0, "unmatched": 0}
+    for s in ("matched", "ignored", "unmatched"):
+        counts[s] = db.bank_transactions.count_documents(
+            {"import_id": imp["id"], "status": s})
+    out = clean_doc(imp)
+    out["matched_count"] = counts["matched"]
+    out["ignored_count"] = counts["ignored"]
+    out["unmatched_count"] = counts["unmatched"]
+    return out
+
+
+@app.get("/api/bank/imports")
+def list_bank_imports(limit: int = 50,
+                      current_user: User = Depends(get_current_user_with_access)):
+    limit = min(max(limit, 1), 50)
+    cursor = db.bank_imports.find(
+        {"user_id": current_user.id}, {"_id": 0}).sort("imported_at", -1).limit(limit)
+    return [_import_with_live_counts(imp) for imp in cursor]
+
+
+@app.get("/api/bank/imports/{import_id}")
+def get_bank_import(import_id: str, page: int = 1, per_page: int = 100,
+                    current_user: User = Depends(get_current_user_with_access)):
+    per_page = min(max(per_page, 1), 500)
+    page = max(page, 1)
+    imp = db.bank_imports.find_one({"id": import_id, "user_id": current_user.id}, {"_id": 0})
+    if not imp:
+        raise HTTPException(404, "Import not found")
+    total = db.bank_transactions.count_documents(
+        {"import_id": import_id, "user_id": current_user.id})
+    cursor = db.bank_transactions.find(
+        {"import_id": import_id, "user_id": current_user.id}, {"_id": 0})\
+        .sort("row_index", 1).skip((page - 1) * per_page).limit(per_page)
+    return {
+        "import": _import_with_live_counts(imp),
+        "transactions": [clean_doc(t) for t in cursor],
+        "total_count": total,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):

@@ -229,3 +229,61 @@ class TestAutoMatch:
         for cid in cls._cleanup["clients"]:
             try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
             except: pass
+
+
+class TestImportsList:
+    _cleanup = set()
+    _auth = None
+
+    def test_list_returns_recent_imports_with_counts(self, auth):
+        TestImportsList._auth = auth
+        # crée un import unique
+        suffix = uuid.uuid4().hex[:6]
+        csv = _csv_bytes([[f"2099-09-{suffix[0:2]}", f"X-{suffix}", "1.00"]])
+        files = {"file": ("a.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        body = requests.post(f"{BASE_URL}/api/bank/imports",
+                             files=files, data=data, headers=auth).json()
+        TestImportsList._cleanup.add(body["import"]["id"])
+
+        r = requests.get(f"{BASE_URL}/api/bank/imports", headers=auth)
+        assert r.status_code == 200
+        items = r.json()
+        assert len(items) > 0
+        first = items[0]
+        assert "matched_count" in first
+        assert "ignored_count" in first
+        assert "unmatched_count" in first
+
+    def test_get_detail_returns_transactions(self, auth):
+        suffix = uuid.uuid4().hex[:6]
+        csv = _csv_bytes([
+            ["2099-09-11", f"A-{suffix}", "1.00"],
+            ["2099-09-12", f"B-{suffix}", "2.00"],
+        ])
+        files = {"file": ("b.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        body = requests.post(f"{BASE_URL}/api/bank/imports",
+                             files=files, data=data, headers=auth).json()
+        TestImportsList._cleanup.add(body["import"]["id"])
+
+        r = requests.get(f"{BASE_URL}/api/bank/imports/{body['import']['id']}",
+                          headers=auth)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["import"]["id"] == body["import"]["id"]
+        assert len(d["transactions"]) == 2
+        assert d["total_count"] == 2
+
+    def test_get_detail_unknown_returns_404(self, auth):
+        r = requests.get(f"{BASE_URL}/api/bank/imports/non-existent-id",
+                          headers=auth)
+        assert r.status_code == 404
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth:
+            return
+        for iid in cls._cleanup:
+            try: requests.delete(f"{BASE_URL}/api/bank/imports/{iid}?force=true", headers=cls._auth)
+            except: pass
