@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Query, Request
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import stripe
 import httpx
@@ -1142,6 +1142,105 @@ def create_bank_mapping(body: dict, current_user: User = Depends(get_current_use
     }
     db.bank_mappings.insert_one(doc)
     return clean_doc(doc)
+
+
+import json as _json
+MAX_BANK_CSV_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+@app.post("/api/bank/imports", status_code=201)
+async def create_bank_import(
+    file: UploadFile = File(...),
+    mapping_id: str = Form(None),
+    mapping: str = Form(None),
+    bank_label: str = Form(None),
+    dry_run: bool = False,
+    response: Response = None,
+    current_user: User = Depends(get_current_user_with_access),
+):
+    # ── 1. size validation BEFORE hash/parse ──
+    raw = await file.read()
+    if len(raw) > MAX_BANK_CSV_BYTES:
+        raise HTTPException(413, f"File exceeds size limit ({MAX_BANK_CSV_BYTES // (1024*1024)} MB)")
+
+    # ── 2. résoudre mapping ──
+    if mapping_id:
+        mapping_doc = db.bank_mappings.find_one(
+            {"id": mapping_id, "user_id": current_user.id}, {"_id": 0})
+        if not mapping_doc:
+            raise HTTPException(404, "Mapping not found")
+    elif mapping:
+        try:
+            mapping_doc = _json.loads(mapping)
+        except _json.JSONDecodeError:
+            raise HTTPException(422, "Invalid mapping JSON")
+    else:
+        raise HTTPException(422, "mapping_id or mapping required")
+
+    # ── 3. parser ──
+    try:
+        parsed = _parse_csv_rows(raw, mapping_doc)
+    except ValueError as e:
+        if "row limit" in str(e):
+            raise HTTPException(413, str(e))
+        raise HTTPException(422, str(e))
+
+    # ── 4. dry_run : retourne 10 premières ──
+    if dry_run:
+        if response is not None:
+            response.status_code = 200
+        return {"parsed_rows": parsed[:10], "total_rows": len(parsed)}
+
+    # ── 5. file_hash + check duplicate ──
+    file_hash = _compute_file_hash(raw)
+    existing = db.bank_imports.find_one(
+        {"user_id": current_user.id, "file_hash": file_hash}, {"_id": 0})
+    if existing:
+        raise HTTPException(409, f"Duplicate import (existing import_id: {existing['id']})")
+
+    # ── 6. créer bank_import + bank_transactions ──
+    now = datetime.now(timezone.utc).isoformat()
+    import_id = str(uuid.uuid4())
+    label = (bank_label or mapping_doc.get("bank_label") or "Banque").strip()[:60]
+    import_doc = {
+        "id": import_id,
+        "user_id": current_user.id,
+        "mapping_id": mapping_id,
+        "bank_label": label,
+        "filename": file.filename or "import.csv",
+        "file_hash": file_hash,
+        "row_count": len(parsed),
+        "skipped_rows": 0,
+        "imported_at": now,
+        "closed_at": None,
+    }
+    db.bank_imports.insert_one(import_doc)
+    tx_docs = []
+    for row in parsed:
+        tx = {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user.id,
+            "import_id": import_id,
+            "row_index": row["row_index"],
+            "date": row["date"],
+            "description": row["description"],
+            "amount_cad": row["amount_cad"],
+            "parse_error": row["parse_error"],
+            "raw_line": row.get("raw_line"),
+            "status": "unmatched",
+            "match_kind": None,
+            "match_id": None,
+            "invoice_id": None,
+            "matched_at": None,
+        }
+        tx_docs.append(tx)
+    if tx_docs:
+        db.bank_transactions.insert_many(tx_docs)
+    if mapping_id:
+        db.bank_mappings.update_one({"id": mapping_id, "user_id": current_user.id},
+                                    {"$set": {"last_used_at": now}})
+    return {"import": clean_doc(import_doc),
+            "transactions": [clean_doc(t) for t in tx_docs]}
 
 
 # ─── Quotes CRUD ───
