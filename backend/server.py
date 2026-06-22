@@ -2169,6 +2169,36 @@ def _t2125_flatten_pnl_expenses(expense_groups):
     return flat
 
 
+def _t2125_group_by_arc_line(flat_expenses, exclude_codes=None):
+    """Regroupe les catégories partageant la même ligne T2125.
+    Ignore les codes dans exclude_codes (utilisé pour le mode exclusif home_office)."""
+    exclude_codes = exclude_codes or set()
+    by_line = {}
+    for code, data in flat_expenses.items():
+        if code in exclude_codes:
+            continue
+        arc_line = data.get("arc_line") or "9270"
+        entry = by_line.setdefault(arc_line, {
+            "arc_line": arc_line,
+            "label": T2125_LINE_LABELS.get(arc_line, "Autres dépenses"),
+            "gross": 0.0,
+            "deductible": 0.0,
+            "categories": [],
+        })
+        entry["gross"] += data["gross"]
+        entry["deductible"] += data["deductible"]
+        entry["categories"].append(code)
+    out = []
+    for arc_line in sorted(by_line.keys()):
+        entry = by_line[arc_line]
+        entry["gross"] = round(entry["gross"], 2)
+        entry["deductible"] = round(entry["deductible"], 2)
+        if arc_line == "8523":
+            entry["note"] = "50 % déductible"
+        out.append(entry)
+    return out
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):

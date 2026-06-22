@@ -82,3 +82,62 @@ class TestFlattenPnlExpenses:
         flat = _t2125_flatten_pnl_expenses(groups)
         assert flat["x"]["gross"] == 0.0
         assert flat["x"]["deductible"] == 0.0
+
+
+from server import _t2125_group_by_arc_line
+
+
+class TestGroupByArcLine:
+    def test_empty_flat(self):
+        assert _t2125_group_by_arc_line({}) == []
+
+    def test_basic_grouping(self):
+        flat = {
+            "advertising": {"gross": 1500.0, "deductible": 1500.0, "arc_line": "8520"},
+            "meals_entertainment": {"gross": 2400.0, "deductible": 1200.0, "arc_line": "8523"},
+            "office_expenses": {"gross": 1200.0, "deductible": 1200.0, "arc_line": "8810"},
+        }
+        out = _t2125_group_by_arc_line(flat)
+        assert len(out) == 3
+        # Trié par arc_line croissant
+        assert [line["arc_line"] for line in out] == ["8520", "8523", "8810"]
+        line_8523 = next(l for l in out if l["arc_line"] == "8523")
+        assert line_8523["gross"] == 2400.0
+        assert line_8523["deductible"] == 1200.0
+        assert line_8523["note"] == "50 % déductible"
+
+    def test_label_from_table(self):
+        flat = {"advertising": {"gross": 100.0, "deductible": 100.0, "arc_line": "8520"}}
+        out = _t2125_group_by_arc_line(flat)
+        assert out[0]["label"] == "Publicité et promotion"
+
+    def test_unknown_arc_line_label_fallback(self):
+        flat = {"x": {"gross": 10.0, "deductible": 10.0, "arc_line": "9999"}}
+        out = _t2125_group_by_arc_line(flat)
+        assert out[0]["label"] == "Autres dépenses"
+
+    def test_exclude_codes(self):
+        flat = {
+            "rent": {"gross": 12000.0, "deductible": 12000.0, "arc_line": "8910"},
+            "advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"},
+        }
+        out = _t2125_group_by_arc_line(flat, exclude_codes={"rent"})
+        assert len(out) == 1
+        assert out[0]["arc_line"] == "8520"
+
+    def test_multiple_categories_same_arc_line_summed(self):
+        # Fixture custom (n'existe pas dans EXPENSE_CATEGORIES actuel mais teste la logique)
+        flat = {
+            "cat_a": {"gross": 100.0, "deductible": 100.0, "arc_line": "9999"},
+            "cat_b": {"gross": 50.0, "deductible": 50.0, "arc_line": "9999"},
+        }
+        out = _t2125_group_by_arc_line(flat)
+        assert len(out) == 1
+        assert out[0]["gross"] == 150.0
+        assert set(out[0]["categories"]) == {"cat_a", "cat_b"}
+
+    def test_exclude_codes_none(self):
+        flat = {"advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"}}
+        # exclude_codes None ne doit pas crasher
+        out = _t2125_group_by_arc_line(flat, exclude_codes=None)
+        assert len(out) == 1
