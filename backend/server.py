@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Query, Request
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Query, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import stripe
 import httpx
@@ -1201,6 +1201,13 @@ def add_invoice_payment(invoice_id: str, body: dict,
 def delete_invoice_payment(invoice_id: str, payment_id: str,
                             current_user: User = Depends(get_current_user_with_access)):
     """Supprime un paiement. Recalcule le statut."""
+    # Feature #7 — libérer la bank_transaction liée si applicable
+    existing_inv = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if existing_inv:
+        payment_to_remove = next((p for p in existing_inv.get("payments", [])
+                                  if p.get("id") == payment_id), None)
+        if payment_to_remove and payment_to_remove.get("bank_transaction_id"):
+            _release_bank_transaction(payment_to_remove["bank_transaction_id"], current_user.id)
     invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
@@ -1221,10 +1228,16 @@ def delete_invoice_payment(invoice_id: str, payment_id: str,
 
 @app.delete("/api/invoices/{invoice_id}")
 def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
+    inv = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    if inv:
+        for payment in inv.get("payments", []) or []:
+            btx_id = payment.get("bank_transaction_id")
+            if btx_id:
+                _release_bank_transaction(btx_id, current_user.id)
     result = db.invoices.delete_one({"id": invoice_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(404, "Invoice not found")
-    return {"message": "Invoice deleted"}
+    return {"message": "deleted"}
 
 @app.put("/api/invoices/{invoice_id}/recurrence")
 def toggle_recurrence(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -1706,6 +1719,53 @@ def create_invoice_from_tx(tx_id: str, body: dict,
             "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))}
 
 
+@app.post("/api/bank/imports/{import_id}/close")
+def close_bank_import(import_id: str,
+                       current_user: User = Depends(get_current_user_with_access)):
+    res = db.bank_imports.update_one(
+        {"id": import_id, "user_id": current_user.id},
+        {"$set": {"closed_at": datetime.now(timezone.utc).isoformat()}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Import not found")
+    return Response(status_code=204)
+
+
+@app.delete("/api/bank/imports/{import_id}")
+def delete_bank_import(import_id: str, force: bool = False,
+                       current_user: User = Depends(get_current_user_with_access)):
+    imp = db.bank_imports.find_one({"id": import_id, "user_id": current_user.id}, {"_id": 0})
+    if not imp:
+        raise HTTPException(404, "Import not found")
+    if imp.get("closed_at") and not force:
+        raise HTTPException(409, "Import is closed; use force=true to confirm")
+    # cascade : libérer chaque transaction matchée
+    for tx in db.bank_transactions.find(
+            {"import_id": import_id, "user_id": current_user.id, "status": "matched"},
+            {"_id": 0}):
+        if tx.get("match_kind") == "invoice_payment":
+            inv = db.invoices.find_one(
+                {"id": tx.get("invoice_id"), "user_id": current_user.id}, {"_id": 0})
+            if inv:
+                new_payments = [p for p in inv.get("payments", [])
+                                if p.get("id") != tx.get("match_id")]
+                db.invoices.update_one(
+                    {"id": inv["id"], "user_id": current_user.id},
+                    {"$set": {"payments": new_payments, "status": "sent"}})
+                updated = db.invoices.find_one(
+                    {"id": inv["id"], "user_id": current_user.id}, {"_id": 0})
+                new_status = _recompute_invoice_status(updated)
+                db.invoices.update_one({"id": inv["id"], "user_id": current_user.id},
+                                       {"$set": {"status": new_status}})
+        elif tx.get("match_kind") == "expense":
+            db.expenses.update_one(
+                {"id": tx.get("match_id"), "user_id": current_user.id},
+                {"$set": {"bank_transaction_id": None}})
+    db.bank_transactions.delete_many(
+        {"import_id": import_id, "user_id": current_user.id})
+    db.bank_imports.delete_one({"id": import_id, "user_id": current_user.id})
+    return Response(status_code=204)
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):
@@ -1918,10 +1978,13 @@ def update_expense_status(expense_id: str, status_data: dict, current_user: User
 
 @app.delete("/api/expenses/{expense_id}")
 def delete_expense(expense_id: str, current_user: User = Depends(get_current_user_with_access)):
+    exp = db.expenses.find_one({"id": expense_id, "user_id": current_user.id}, {"_id": 0})
+    if exp and exp.get("bank_transaction_id"):
+        _release_bank_transaction(exp["bank_transaction_id"], current_user.id)
     result = db.expenses.delete_one({"id": expense_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(404, "Expense not found")
-    return {"message": "Expense deleted"}
+    return {"message": "deleted"}
 
 # ─── CSV Import for Expenses ───
 import csv

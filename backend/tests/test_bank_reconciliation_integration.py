@@ -454,3 +454,95 @@ class TestCreateFromTransaction:
         for cid in cls._cleanup["clients"]:
             try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
             except: pass
+
+
+class TestCloseAndDelete:
+    _cleanup = {"imports": set(), "invoices": set(), "clients": set()}
+    _auth = None
+
+    def test_close_import(self, auth):
+        TestCloseAndDelete._auth = auth
+        uid = uuid.uuid4().hex[:6]
+        csv = _csv_bytes([["2099-11-15", f"X-{uid}", "1.00"]])
+        files = {"file": ("cl.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        imp = requests.post(f"{BASE_URL}/api/bank/imports",
+                            files=files, data=data, headers=auth).json()
+        TestCloseAndDelete._cleanup["imports"].add(imp["import"]["id"])
+        r = requests.post(f"{BASE_URL}/api/bank/imports/{imp['import']['id']}/close",
+                          headers=auth)
+        assert r.status_code == 204
+        d = requests.get(f"{BASE_URL}/api/bank/imports/{imp['import']['id']}",
+                          headers=auth).json()
+        assert d["import"]["closed_at"] is not None
+
+    def test_delete_open_import_cascade(self, auth):
+        # match une facture via une tx
+        inv_id, c_id, total = _create_invoice_for_match(auth, 100, "2099-11-20")
+        TestCloseAndDelete._cleanup["invoices"].add(inv_id)
+        TestCloseAndDelete._cleanup["clients"].add(c_id)
+        uid = uuid.uuid4().hex[:6]
+        csv = _csv_bytes([["2099-11-20", f"NOMATCH-{uid}", f"{total:.2f}"]])
+        files = {"file": ("dc.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        imp = requests.post(f"{BASE_URL}/api/bank/imports",
+                            files=files, data=data, headers=auth).json()
+        tx_id = imp["transactions"][0]["id"]
+        # match manuel
+        requests.post(f"{BASE_URL}/api/bank/transactions/{tx_id}/match",
+                      headers=auth, json={"kind": "invoice_payment", "target_id": inv_id})
+        # delete sans force (non fermé) → OK
+        r = requests.delete(f"{BASE_URL}/api/bank/imports/{imp['import']['id']}",
+                            headers=auth)
+        assert r.status_code == 204
+        inv = requests.get(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth).json()
+        assert len(inv["payments"]) == 0
+
+    def test_delete_closed_import_needs_force(self, auth):
+        uid = uuid.uuid4().hex[:6]
+        csv = _csv_bytes([["2099-11-22", f"Y-{uid}", "2.00"]])
+        files = {"file": ("cf.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        imp = requests.post(f"{BASE_URL}/api/bank/imports",
+                            files=files, data=data, headers=auth).json()
+        requests.post(f"{BASE_URL}/api/bank/imports/{imp['import']['id']}/close",
+                      headers=auth)
+        r = requests.delete(f"{BASE_URL}/api/bank/imports/{imp['import']['id']}",
+                            headers=auth)
+        assert r.status_code == 409
+        r = requests.delete(
+            f"{BASE_URL}/api/bank/imports/{imp['import']['id']}?force=true", headers=auth)
+        assert r.status_code == 204
+
+    def test_delete_invoice_releases_bank_tx(self, auth):
+        inv_id, c_id, total = _create_invoice_for_match(auth, 50, "2099-11-25")
+        TestCloseAndDelete._cleanup["clients"].add(c_id)
+        uid = uuid.uuid4().hex[:6]
+        csv = _csv_bytes([["2099-11-25", f"Z-{uid}", f"{total:.2f}"]])
+        files = {"file": ("dr.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        imp = requests.post(f"{BASE_URL}/api/bank/imports",
+                            files=files, data=data, headers=auth).json()
+        TestCloseAndDelete._cleanup["imports"].add(imp["import"]["id"])
+        tx_id = imp["transactions"][0]["id"]
+        requests.post(f"{BASE_URL}/api/bank/transactions/{tx_id}/match",
+                      headers=auth, json={"kind": "invoice_payment", "target_id": inv_id})
+        # delete facture → cascade libère la tx
+        requests.delete(f"{BASE_URL}/api/invoices/{inv_id}", headers=auth)
+        d = requests.get(f"{BASE_URL}/api/bank/imports/{imp['import']['id']}",
+                          headers=auth).json()
+        assert d["transactions"][0]["status"] == "unmatched"
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth:
+            return
+        for iid in cls._cleanup["imports"]:
+            try: requests.delete(f"{BASE_URL}/api/bank/imports/{iid}?force=true", headers=cls._auth)
+            except: pass
+        for invid in cls._cleanup["invoices"]:
+            try: requests.delete(f"{BASE_URL}/api/invoices/{invid}", headers=cls._auth)
+            except: pass
+        for cid in cls._cleanup["clients"]:
+            try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
+            except: pass
