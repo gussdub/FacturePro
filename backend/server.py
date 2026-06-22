@@ -2151,6 +2151,24 @@ T2125_LINE_LABELS = {
 }
 
 
+def _t2125_flatten_pnl_expenses(expense_groups):
+    """Convertit la liste expense_groups de _aggregate_pnl en dict plat
+    {code: {gross, deductible, arc_line}}.
+    arc_line vide ou absent → '9270' (Autres dépenses)."""
+    flat = {}
+    for group in expense_groups or []:
+        for cat in group.get("categories", []):
+            code = cat.get("code")
+            if not code:
+                continue
+            flat[code] = {
+                "gross": float(cat.get("gross", 0) or 0),
+                "deductible": float(cat.get("deductible", 0) or 0),
+                "arc_line": cat.get("arc_line") or "9270",
+            }
+    return flat
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):
