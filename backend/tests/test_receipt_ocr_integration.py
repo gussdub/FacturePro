@@ -115,3 +115,49 @@ class TestScanReceiptEndpoint:
                     pass
         except Exception:
             pass
+
+
+class TestGetReceipt:
+    _cleanup_files = set()
+
+    def test_get_existing_receipt(self, client, auth_headers, mock_extraction):
+        mock_extraction({"vendor": "Test", "category_code": "other"})
+        jpeg = _make_minimal_jpeg()
+        scan = client.post("/api/expenses/scan-receipt",
+                           files={"file": ("a.jpg", jpeg, "image/jpeg")},
+                           headers=auth_headers).json()
+        fid = scan["file_id"]
+        TestGetReceipt._cleanup_files.add(fid)
+
+        r = client.get(f"/api/receipts/{fid}", headers=auth_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/")
+        assert len(r.content) > 0
+
+    def test_get_unknown_returns_404(self, client, auth_headers):
+        r = client.get("/api/receipts/non-existent-id-12345", headers=auth_headers)
+        assert r.status_code == 404
+
+    def test_get_without_auth_returns_401_or_403(self, client):
+        r = client.get("/api/receipts/anything")
+        assert r.status_code in (401, 403)
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._cleanup_files:
+            return
+        try:
+            resp = requests.post(
+                f"{BASE_URL}/api/auth/login",
+                json={"email": "gussdub@gmail.com", "password": "testpass123"},
+            )
+            if resp.status_code != 200:
+                return
+            auth = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+            for fid in cls._cleanup_files:
+                try:
+                    requests.delete(f"{BASE_URL}/api/files/{fid}", headers=auth)
+                except Exception:
+                    pass
+        except Exception:
+            pass

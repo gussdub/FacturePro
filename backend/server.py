@@ -2060,6 +2060,26 @@ async def scan_receipt(
     }
 
 
+@app.get("/api/receipts/{file_id}")
+def get_receipt_file(file_id: str,
+                     current_user: User = Depends(get_current_user_with_access)):
+    """Endpoint authentifié pour servir les images de reçus.
+    Filtre par user_id ET purpose=receipt pour ne pas exposer les logos."""
+    record = db.files.find_one({
+        "id": file_id,
+        "user_id": current_user.id,
+        "purpose": "receipt",
+        "is_deleted": False,
+    })
+    if not record:
+        raise HTTPException(404, "Receipt not found")
+    return StreamingResponse(
+        io.BytesIO(bytes(record["data"])),
+        media_type=record.get("mime_type", "image/jpeg"),
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):
