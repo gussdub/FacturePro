@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { BACKEND_URL } from '../config';
+import T2125ReportSection from '../components/T2125ReportSection';
 
 const QUARTERS = [
   { value: 'Q1', label: 'T1 (jan-mar)', start: '01-01', end: '03-31' },
@@ -444,9 +445,14 @@ function ReportsPage() {
           onClick={() => setActiveTab('pnl')}>
           État des résultats (P&L)
         </button>
+        <button style={tabStyle(activeTab === 't2125')}
+          onClick={() => setActiveTab('t2125')}>
+          Déclaration T2125
+        </button>
       </div>
       {activeTab === 'sales_tax' && <SalesTaxReportSection />}
       {activeTab === 'pnl' && <PnlReportSection />}
+      {activeTab === 't2125' && <T2125ReportSection />}
     </div>
   );
 }
