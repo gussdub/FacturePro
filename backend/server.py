@@ -4080,6 +4080,63 @@ def get_t2125_report(
     return _build_t2125_report(current_user.id, year, basis)
 
 
+def _render_t2125_csv(report):
+    """Génère le CSV UTF-8 avec BOM pour Excel FR.
+    Sanitize les champs string user-supplied pour éviter CSV injection."""
+    import csv as csv_mod
+    buf = io.StringIO()
+    writer = csv_mod.writer(buf)
+    writer.writerow(["section", "arc_line", "label", "gross_cad", "deductible_cad", "note"])
+    # Revenu
+    writer.writerow([
+        "revenu", "8000", "Recettes brutes",
+        f"{report['gross_income']:.2f}",
+        f"{report['gross_income']:.2f}",
+        "",
+    ])
+    # Dépenses (toutes les lignes y compris 9945/9281)
+    for line in report["expenses_by_arc_line"]:
+        writer.writerow([
+            "depense",
+            line["arc_line"],
+            _sanitize_cell(line["label"]),
+            f"{line['gross']:.2f}",
+            f"{line['deductible']:.2f}",
+            _sanitize_cell(line.get("note", "")),
+        ])
+    # Totaux
+    writer.writerow([
+        "total", "", "Total dépenses déductibles", "",
+        f"{report['total_expenses_deductible']:.2f}", "",
+    ])
+    writer.writerow([
+        "total", "9369", "Bénéfice net", "",
+        f"{report['net_income']:.2f}", "",
+    ])
+    text = buf.getvalue()
+    return ("﻿" + text).encode("utf-8")  # BOM UTF-8 pour Excel FR
+
+
+@app.get("/api/reports/t2125/csv")
+def get_t2125_csv(
+    year: int,
+    basis: str = "accrual",
+    current_user: User = Depends(get_current_user_with_access),
+):
+    """Export T2125 au format CSV (UTF-8 BOM)."""
+    report = _build_t2125_report(current_user.id, year, basis)
+    csv_bytes = _render_t2125_csv(report)
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename=t2125-{year}-{basis}.csv",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():

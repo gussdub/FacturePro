@@ -130,3 +130,32 @@ class TestT2125JsonEndpoint:
         year = _t10_valid_year()
         r = client.get(f"/api/reports/t2125?year={year}&basis=accrual")
         assert r.status_code in (401, 403)
+
+
+class TestT2125CsvEndpoint:
+    def test_happy_path(self, client, auth_headers):
+        year = _t10_valid_year()
+        r = client.get(f"/api/reports/t2125/csv?year={year}&basis=accrual",
+                       headers=auth_headers)
+        # 200 ou 422 (settings) — pas 404
+        assert r.status_code in (200, 422), r.text
+        if r.status_code == 200:
+            assert r.headers["content-type"].startswith("text/csv")
+            # BOM UTF-8
+            assert r.content[:3] == b"\xef\xbb\xbf"
+            body_text = r.content[3:].decode("utf-8")
+            assert "section,arc_line,label,gross_cad,deductible_cad,note" in body_text
+            assert "revenu,8000,Recettes brutes" in body_text
+            assert "total,9369,Bénéfice net" in body_text
+
+    def test_invalid_year_returns_422(self, client, auth_headers):
+        r = client.get("/api/reports/t2125/csv?year=1999&basis=accrual",
+                       headers=auth_headers)
+        assert r.status_code == 422
+
+    def test_content_disposition_filename(self, client, auth_headers):
+        year = _t10_valid_year()
+        r = client.get(f"/api/reports/t2125/csv?year={year}&basis=cash",
+                       headers=auth_headers)
+        if r.status_code == 200:
+            assert f"t2125-{year}-cash.csv" in r.headers.get("content-disposition", "")
