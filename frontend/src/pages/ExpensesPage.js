@@ -47,6 +47,7 @@ const ExpensesPage = () => {
   const scanInputRef = useRef(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
+  const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
 
   useEffect(() => { fetchData(); }, []);
 
@@ -86,6 +87,11 @@ const ExpensesPage = () => {
     e.preventDefault(); setError(''); setSuccess('');
     try {
       await axios.post(`${BACKEND_URL}/api/expenses`, { ...formData, amount: parseFloat(formData.amount) });
+      // Clear scan state after successful save (file is now linked to the expense — do NOT delete it)
+      if (receiptScan) {
+        if (receiptScan.blobUrl) URL.revokeObjectURL(receiptScan.blobUrl);
+        setReceiptScan(null);
+      }
       setSuccess('Depense creee avec succes'); setShowForm(false);
       resetForm();
       fetchData();
@@ -171,6 +177,16 @@ const ExpensesPage = () => {
   const removeReceipt = () => {
     setFormData(prev => ({ ...prev, receipt_url: '' }));
     setPreviewReceipt(null);
+  };
+
+  const removeReceiptFromForm = async () => {
+    if (!receiptScan?.fileId) return;
+    try {
+      await axios.delete(`${BACKEND_URL}/api/files/${receiptScan.fileId}`);
+    } catch { /* best-effort */ }
+    if (receiptScan.blobUrl) URL.revokeObjectURL(receiptScan.blobUrl);
+    setReceiptScan(null);
+    setFormData((prev) => ({ ...prev, receipt_file_id: null }));
   };
 
   // ─── CSV Import Logic ───
@@ -274,8 +290,24 @@ const ExpensesPage = () => {
       fd.append("file", compressed, file.name);
       const r = await axios.post(`${BACKEND_URL}/api/expenses/scan-receipt`,
         fd, { headers: { "Content-Type": "multipart/form-data" } });
-      console.log("Scan result (T12 will integrate)", r.data);
-      // T12 va ouvrir le modal pré-rempli ici
+      const ex = r.data.extraction;
+      const blobUrl = URL.createObjectURL(compressed);
+      setReceiptScan({ fileId: r.data.file_id, extraction: ex, blobUrl });
+      // Pré-remplir formData et ouvrir le modal
+      setFormData({
+        employee_id: '', description: '', category: '', notes: '', receipt_url: '',
+        currency: ex.currency_detected || 'CAD', exchange_rate_to_cad: 1.0,
+        category_custom_label: '', taxes_auto_computed: false,
+        vendor: ex.vendor || '',
+        expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
+        amount: ex.total_cad ?? '',
+        gst_paid_cad: ex.gst_paid_cad ?? 0,
+        qst_paid_cad: ex.qst_paid_cad ?? 0,
+        hst_paid_cad: ex.hst_paid_cad ?? 0,
+        category_code: ex.category_code || 'other',
+        receipt_file_id: r.data.file_id,
+      });
+      setShowForm(true);
     } catch (err) {
       if (err.response?.status === 413) {
         setScanError("Photo trop volumineuse (max 5 MB).");
@@ -406,6 +438,32 @@ const ExpensesPage = () => {
               <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700' }}>Nouvelle Depense</h3>
             </div>
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
+              {receiptScan && (
+                <div style={{ background: '#dbeafe', color: '#1e40af', padding: 10,
+                               borderRadius: 6, marginBottom: 12, display: 'flex',
+                               alignItems: 'center', gap: 12 }}>
+                  <img src={receiptScan.blobUrl} alt="recu"
+                       style={{ maxHeight: 80, maxWidth: 80, borderRadius: 4,
+                                border: '1px solid #93c5fd', cursor: 'pointer',
+                                objectFit: 'cover' }}
+                       onClick={() => window.open(receiptScan.blobUrl, '_blank')} />
+                  <div style={{ flex: 1, fontSize: 13 }}>
+                    ✨ Données extraites automatiquement — vérifie avant d'enregistrer.
+                  </div>
+                  <button type="button" onClick={removeReceiptFromForm}
+                          style={{ background: 'transparent', color: '#dc2626',
+                                   border: '1px solid #fca5a5', padding: '4px 10px',
+                                   borderRadius: 4, cursor: 'pointer', fontSize: 12 }}>
+                    Retirer la photo
+                  </button>
+                </div>
+              )}
+              {receiptScan && (!receiptScan.extraction.vendor || !receiptScan.extraction.total_cad) && (
+                <div style={{ background: '#fef3c7', color: '#92400e', padding: 8,
+                               borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+                  ⚠ Extraction partielle — remplis les champs manquants.
+                </div>
+              )}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                 <div>
                   <label style={labelStyle}>Employe <span style={{ color: '#9ca3af', fontWeight: '400' }}>(optionnel)</span></label>
@@ -646,7 +704,7 @@ const ExpensesPage = () => {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #e5e7eb', paddingTop: '20px' }}>
-                <button type="button" onClick={() => { setShowForm(false); resetForm(); }} style={btnSecondary}>Annuler</button>
+                <button type="button" onClick={async () => { if (receiptScan) { await removeReceiptFromForm(); } setShowForm(false); resetForm(); }} style={btnSecondary}>Annuler</button>
                 <button type="submit" data-testid="save-expense-btn" disabled={uploading}
                   style={{ ...btnPrimary, opacity: uploading ? 0.6 : 1 }}>Creer la depense</button>
               </div>
