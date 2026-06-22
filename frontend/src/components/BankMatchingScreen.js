@@ -2,6 +2,10 @@ import React, { useState, useEffect, useMemo } from "react";
 import axios from "axios";
 import { X, RotateCcw, Check, ArrowLeft, Lock } from "lucide-react";
 import { BACKEND_URL } from "../config";
+import BankSuggestionsActions from "./BankSuggestionsActions";
+import BankCreateExpenseModal from "./BankCreateExpenseModal";
+import BankCreateInvoiceModal from "./BankCreateInvoiceModal";
+import BankManualSearchModal from "./BankManualSearchModal";
 
 const fmt = (n) => Number(n || 0).toFixed(2);
 
@@ -11,6 +15,8 @@ export default function BankMatchingScreen({ importId, onBack }) {
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [openManual, setOpenManual] = useState(null);
+  const [openCreate, setOpenCreate] = useState(null);
 
   const fetchData = async () => {
     try {
@@ -120,15 +126,29 @@ export default function BankMatchingScreen({ importId, onBack }) {
           <TxRow key={tx.id} tx={tx} busy={busy} readOnly={isClosed}
                  onIgnore={() => onIgnore(tx)}
                  onUnignore={() => onUnignore(tx)}
-                 onUnmatch={() => onUnmatch(tx)} />
+                 onUnmatch={() => onUnmatch(tx)}
+                 onOpenManual={() => setOpenManual(tx)}
+                 onOpenCreate={() => setOpenCreate(tx)}
+                 onRefresh={fetchData} />
         ))}
         {filteredTxs.length === 0 && <p style={{ color: "#6b7280" }}>Aucune transaction.</p>}
       </div>
+      {openManual && (
+        <BankManualSearchModal tx={openManual} onClose={() => setOpenManual(null)}
+          onMatched={() => { setOpenManual(null); fetchData(); }} />
+      )}
+      {openCreate && ((openCreate.amount_cad || 0) < 0 ? (
+        <BankCreateExpenseModal tx={openCreate} onClose={() => setOpenCreate(null)}
+          onCreated={() => { setOpenCreate(null); fetchData(); }} />
+      ) : (
+        <BankCreateInvoiceModal tx={openCreate} onClose={() => setOpenCreate(null)}
+          onCreated={() => { setOpenCreate(null); fetchData(); }} />
+      ))}
     </div>
   );
 }
 
-function TxRow({ tx, busy, readOnly, onIgnore, onUnignore, onUnmatch }) {
+function TxRow({ tx, busy, readOnly, onIgnore, onUnignore, onUnmatch, onOpenManual, onOpenCreate, onRefresh }) {
   const isDebit = tx.amount_cad != null && tx.amount_cad < 0;
   const stateColor = tx.parse_error ? "#dc2626"
     : tx.status === "matched" ? "#059669"
@@ -177,6 +197,12 @@ function TxRow({ tx, busy, readOnly, onIgnore, onUnignore, onUnmatch }) {
           </div>
         )}
       </div>
+      {!readOnly && tx.status === "unmatched" && !tx.parse_error && (
+        <BankSuggestionsActions tx={tx}
+          onMatched={onRefresh} onIgnore={onIgnore}
+          onOpenManual={onOpenManual}
+          onOpenCreate={onOpenCreate} />
+      )}
     </div>
   );
 }
