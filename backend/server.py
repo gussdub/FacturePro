@@ -2111,6 +2111,46 @@ def delete_file_endpoint(file_id: str,
     return Response(status_code=204)
 
 
+# ─── T2125 export helpers (feature #10) ───
+
+T2125_LABEL_TABLE_TAX_YEAR = 2024
+T2125_MIN_YEAR = 2020
+T2125_VALID_BASES = {"accrual", "cash"}
+
+# Catégories EXPENSE_CATEGORIES (feature #3) reclassées sur la ligne 9945 (résidence)
+# quand home_office_percentage > 0 (mode exclusif).
+HOME_OFFICE_CATEGORIES = {"rent", "utilities", "insurance"}
+
+# Catégories EXPENSE_CATEGORIES reclassées sur la ligne 9281 (véhicule)
+# quand vehicle_business_percentage > 0.
+VEHICLE_CATEGORIES = {"vehicle_expenses"}
+
+T2125_LINE_LABELS = {
+    # Revenu
+    "8000": "Recettes brutes",
+    # Dépenses — couvre toutes les arc_line de EXPENSE_CATEGORIES + ajustements
+    "8520": "Publicité et promotion",
+    "8523": "Repas et représentation",
+    "8620": "Frais bancaires",
+    "8690": "Assurances",
+    "8740": "Abonnements et licences",
+    "8810": "Frais de bureau",
+    "8811": "Fournitures de bureau",
+    "8860": "Honoraires professionnels",
+    "8871": "Frais de gestion",
+    "8910": "Loyer",
+    "8960": "Entretien et réparations",
+    "9060": "Salaires et avantages",
+    "9200": "Frais de déplacement",
+    "9220": "Services publics",
+    "9270": "Autres dépenses",
+    "9275": "Livraison et fret",
+    "9281": "Frais relatifs aux véhicules à moteur",
+    "9367": "Sous-traitance",
+    "9945": "Frais d'utilisation de la résidence aux fins de l'entreprise",
+}
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):
