@@ -10,3 +10,4 @@ python-multipart
 python-dateutil
 httpx
 stripe
+anthropic>=0.40.0
