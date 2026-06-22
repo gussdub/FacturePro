@@ -845,6 +845,43 @@ def _check_image_decompression(data):
         raise ValueError(f"Image too large: {w}x{h} = {w*h/1e6:.1f} MP > {MAX_IMAGE_MEGAPIXELS} MP")
 
 
+def _normalize_extraction(payload):
+    """Sécurise et nettoie l'output du LLM."""
+    if not isinstance(payload, dict):
+        payload = {}
+    valid_codes = {c["code"] for c in EXPENSE_CATEGORIES}
+
+    vendor = payload.get("vendor")
+    if vendor:
+        vendor = re.sub(r"<[^>]+>", "", str(vendor))[:120]
+    else:
+        vendor = None
+
+    out = {
+        "vendor": vendor,
+        "expense_date": payload.get("expense_date") or None,
+        "subtotal": payload.get("subtotal"),
+        "gst_paid_cad": payload.get("gst_paid_cad"),
+        "qst_paid_cad": payload.get("qst_paid_cad"),
+        "hst_paid_cad": payload.get("hst_paid_cad"),
+        "total_cad": payload.get("total_cad"),
+        "category_code": payload.get("category_code") or "other",
+        "currency_detected": (payload.get("currency_detected") or "CAD").upper(),
+    }
+    if out["category_code"] not in valid_codes:
+        out["category_code"] = "other"
+
+    for field in ("subtotal", "gst_paid_cad", "qst_paid_cad", "hst_paid_cad", "total_cad"):
+        v = out.get(field)
+        if v is None:
+            continue
+        try:
+            out[field] = max(0.0, round(float(v), 2))
+        except (ValueError, TypeError):
+            out[field] = None
+    return out
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 

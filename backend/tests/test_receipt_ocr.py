@@ -43,3 +43,59 @@ class TestCheckImageDecompression:
     def test_corrupted_data_raises(self):
         with pytest.raises(ValueError):
             _check_image_decompression(b"not an image")
+
+
+from server import _normalize_extraction, EXPENSE_CATEGORIES
+
+
+class TestNormalizeExtraction:
+    def test_minimal_payload(self):
+        out = _normalize_extraction({"category_code": "office_supplies"})
+        assert out["category_code"] == "office_supplies"
+        assert out["vendor"] is None
+        assert out["currency_detected"] == "CAD"
+
+    def test_invalid_category_becomes_other(self):
+        out = _normalize_extraction({"category_code": "nonexistent"})
+        assert out["category_code"] == "other"
+
+    def test_missing_category_becomes_other(self):
+        out = _normalize_extraction({})
+        assert out["category_code"] == "other"
+
+    def test_negative_amount_clamped_to_zero(self):
+        out = _normalize_extraction({"category_code": "other", "total_cad": -50.0})
+        assert out["total_cad"] == 0.0
+
+    def test_amounts_rounded_2_decimals(self):
+        out = _normalize_extraction({"category_code": "other", "total_cad": 12.34567})
+        assert out["total_cad"] == 12.35
+
+    def test_vendor_html_stripped(self):
+        out = _normalize_extraction({"category_code": "other",
+                                      "vendor": "<script>evil</script>Costco"})
+        assert out["vendor"] == "evilCostco"
+
+    def test_vendor_truncated_120(self):
+        out = _normalize_extraction({"category_code": "other",
+                                      "vendor": "X" * 200})
+        assert len(out["vendor"]) == 120
+
+    def test_currency_uppercased(self):
+        out = _normalize_extraction({"category_code": "other",
+                                      "currency_detected": "usd"})
+        assert out["currency_detected"] == "USD"
+
+    def test_invalid_amount_becomes_none(self):
+        out = _normalize_extraction({"category_code": "other",
+                                      "total_cad": "not a number"})
+        assert out["total_cad"] is None
+
+    def test_empty_vendor_string_becomes_none(self):
+        out = _normalize_extraction({"category_code": "other", "vendor": ""})
+        assert out["vendor"] is None
+
+    def test_first_valid_category_passes(self):
+        first_code = EXPENSE_CATEGORIES[0]["code"]
+        out = _normalize_extraction({"category_code": first_code})
+        assert out["category_code"] == first_code
