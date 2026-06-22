@@ -3,6 +3,7 @@ import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
 import { ScanLine } from 'lucide-react';
+import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 
 function computeTaxesPaid(amountGross, province) {
   const a = parseFloat(amountGross) || 0;
@@ -48,6 +49,8 @@ const ExpensesPage = () => {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
+  const [needsConsent, setNeedsConsent] = useState(false);
+  const [consentAt, setConsentAt] = useState(null);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -65,6 +68,12 @@ const ExpensesPage = () => {
     })
       .then(resp => setCompanyProvince(resp.data.province || 'QC'))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/auth/me`).then(r => {
+      setConsentAt(r.data?.receipt_ocr_consent_at || null);
+    }).catch(() => {});
   }, []);
 
   const fetchData = async () => {
@@ -271,7 +280,24 @@ const ExpensesPage = () => {
 
   const handleScanClick = () => {
     setScanError(null);
-    scanInputRef.current?.click();
+    if (consentAt) {
+      scanInputRef.current?.click();
+    } else {
+      setNeedsConsent(true);
+    }
+  };
+
+  const acceptConsent = async () => {
+    try {
+      const r = await axios.post(`${BACKEND_URL}/api/auth/me/receipt-ocr-consent`);
+      setConsentAt(r.data?.receipt_ocr_consent_at);
+      setNeedsConsent(false);
+      // ouvrir directement le file picker
+      setTimeout(() => scanInputRef.current?.click(), 0);
+    } catch {
+      setScanError("Erreur d'enregistrement du consentement.");
+      setNeedsConsent(false);
+    }
   };
 
   const handleReceiptScan = async (e) => {
@@ -835,6 +861,12 @@ const ExpensesPage = () => {
                            border: "none", cursor: "pointer", color: "#991b1b",
                            fontWeight: 700 }}>×</button>
         </div>
+      )}
+
+      {needsConsent && (
+        <ReceiptScanConsentModal
+          onAccept={acceptConsent}
+          onCancel={() => setNeedsConsent(false)} />
       )}
 
       <style>{`
