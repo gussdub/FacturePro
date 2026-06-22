@@ -46,12 +46,12 @@ function SalesTaxReportSection() {
     if (!start || !end) return;
     setLoading(true);
     try {
-      const token = localStorage.getItem('access_token');
       const resp = await axios.get(`${BACKEND_URL}/api/reports/sales-tax`, {
-        headers: { Authorization: `Bearer ${token}` },
         params: { start, end },
       });
       setReport(resp.data);
+    } catch (e) {
+      alert(e.response?.data?.detail || "Erreur lors de la génération du rapport");
     } finally {
       setLoading(false);
     }
@@ -60,7 +60,7 @@ function SalesTaxReportSection() {
   const downloadPdf = async () => {
     const { start, end } = getDates();
     if (!start || !end) return;
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem('token');
     const resp = await fetch(
       `${BACKEND_URL}/api/reports/sales-tax/pdf?start=${start}&end=${end}`,
       { headers: { Authorization: `Bearer ${token}` } }
@@ -218,12 +218,12 @@ function PnlReportSection() {
     if (!start || !end) return;
     setLoading(true);
     try {
-      const token = localStorage.getItem('access_token');
       const resp = await axios.get(`${BACKEND_URL}/api/reports/pnl`, {
-        headers: { Authorization: `Bearer ${token}` },
         params: { start, end, basis, compare },
       });
       setReport(resp.data);
+    } catch (e) {
+      alert(e.response?.data?.detail || "Erreur lors de la génération du rapport");
     } finally {
       setLoading(false);
     }
@@ -232,7 +232,7 @@ function PnlReportSection() {
   const downloadPdf = async () => {
     const { start, end } = getDates();
     if (!start || !end) return;
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem('token');
     const resp = await fetch(
       `${BACKEND_URL}/api/reports/pnl/pdf?start=${start}&end=${end}&basis=${basis}&compare=${compare}`,
       { headers: { Authorization: `Bearer ${token}` } }

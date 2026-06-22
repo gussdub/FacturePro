@@ -33,6 +33,23 @@ export const AuthProvider = ({ children }) => {
     initAuth();
   }, [token, fetchUser]);
 
+  useEffect(() => {
+    // Auto-logout on 401 from any axios call (token expired or invalidated server-side)
+    const id = axios.interceptors.response.use(
+      (res) => res,
+      (err) => {
+        if (err.response?.status === 401 && localStorage.getItem('token')) {
+          localStorage.removeItem('token');
+          setToken(null);
+          setUser(null);
+          delete axios.defaults.headers.common['Authorization'];
+        }
+        return Promise.reject(err);
+      }
+    );
+    return () => axios.interceptors.response.eject(id);
+  }, []);
+
   const refreshUser = useCallback(async () => {
     if (token) {
       await fetchUser(token);

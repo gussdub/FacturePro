@@ -61,11 +61,7 @@ const ExpensesPage = () => {
   }, []);
 
   useEffect(() => {
-    const token = localStorage.getItem('access_token');
-    if (!token) return;
-    axios.get(`${BACKEND_URL}/api/settings/company`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
+    axios.get(`${BACKEND_URL}/api/settings/company`)
       .then(resp => setCompanyProvince(resp.data.province || 'QC'))
       .catch(() => {});
   }, []);
