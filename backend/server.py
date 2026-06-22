@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pymongo import MongoClient, ReturnDocument
 import os
+import math
 import jwt
 import bcrypt
 import resend
@@ -2810,6 +2811,18 @@ def update_settings(settings_data: dict, current_user: User = Depends(get_curren
     # Validation province : seules les 13 valeurs canadiennes acceptées
     if "province" in settings_data and settings_data["province"] not in PROVINCES_VALID:
         settings_data.pop("province")
+    # Feature #10 — validation home_office_percentage et vehicle_business_percentage
+    for field in ("home_office_percentage", "vehicle_business_percentage"):
+        if field in settings_data:
+            try:
+                v = float(settings_data[field])
+            except (ValueError, TypeError):
+                raise HTTPException(422, f"{field} doit être un nombre")
+            if not math.isfinite(v):
+                raise HTTPException(422, f"{field} doit être un nombre fini")
+            if not (0 <= v <= 100):
+                raise HTTPException(422, f"{field} doit être entre 0 et 100")
+            settings_data[field] = v
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": settings_data}, upsert=True)
     # Re-fetch + decorate so the frontend can update warnings without a separate GET
     settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
