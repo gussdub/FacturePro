@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
-import { ScanLine } from 'lucide-react';
+import { ScanLine, Paperclip } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 
 function computeTaxesPaid(amountGross, province) {
@@ -119,6 +119,18 @@ const ExpensesPage = () => {
     if (window.confirm('Supprimer cette depense ?')) {
       try { await axios.delete(`${BACKEND_URL}/api/expenses/${id}`); setSuccess('Depense supprimee'); fetchData(); }
       catch { setError('Erreur suppression'); }
+    }
+  };
+
+  const viewReceipt = async (fileId) => {
+    try {
+      const r = await axios.get(`${BACKEND_URL}/api/receipts/${fileId}`,
+                                  { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data);
+      window.open(url, "_blank");
+      // Pas de revokeObjectURL — la nouvelle fenêtre utilise l'URL
+    } catch (err) {
+      setScanError("Reçu introuvable.");
     }
   };
 
@@ -445,6 +457,17 @@ const ExpensesPage = () => {
                           <button data-testid={`approve-${exp.id}`} onClick={() => updateStatus(exp.id, 'approved')} style={{ background: '#dcfce7', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Approuver</button>
                           <button data-testid={`reject-${exp.id}`} onClick={() => updateStatus(exp.id, 'rejected')} style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Rejeter</button>
                         </>
+                      )}
+                      {exp.receipt_file_id && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); viewReceipt(exp.receipt_file_id); }}
+                          title="Voir le reçu"
+                          style={{ background: "none", border: "none", cursor: "pointer",
+                                   color: "#6b7280", padding: 4,
+                                   display: "inline-flex", alignItems: "center" }}>
+                          <Paperclip size={14} />
+                        </button>
                       )}
                       <button data-testid={`delete-expense-${exp.id}`} onClick={() => handleDelete(exp.id)} style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Suppr.</button>
                     </div>
