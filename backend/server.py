@@ -4067,6 +4067,19 @@ def get_pnl_report_pdf(
                               headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+# ─── T2125 export endpoints (feature #10) ───
+
+
+@app.get("/api/reports/t2125")
+def get_t2125_report(
+    year: int,
+    basis: str = "accrual",
+    current_user: User = Depends(get_current_user_with_access),
+):
+    """Retourne le rapport T2125 au format JSON pour preview UI."""
+    return _build_t2125_report(current_user.id, year, basis)
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
