@@ -1604,6 +1604,108 @@ def get_bank_suggestions(tx_id: str,
     return {"invoices": invoices_out, "expenses": expenses_out}
 
 
+@app.post("/api/bank/transactions/{tx_id}/create-expense", status_code=201)
+def create_expense_from_tx(tx_id: str, body: dict,
+                            current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    if tx.get("status") != "unmatched":
+        raise HTTPException(409, "Transaction already matched or ignored")
+    if tx.get("amount_cad") is None or tx.get("date") is None:
+        raise HTTPException(422, "Transaction has parse error; cannot create expense")
+    category_code = body.get("category_code")
+    if not category_code:
+        raise HTTPException(422, "category_code required")
+    amount = abs(float(tx["amount_cad"]))
+    vendor = (body.get("vendor") or tx.get("description") or "")[:60]
+    expense_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "date": tx["date"],
+        "amount_cad": round(amount, 2),
+        "currency": "CAD",
+        "exchange_rate_to_cad": 1.0,
+        "vendor": vendor,
+        "description": (tx.get("description") or "")[:200],
+        "bank_transaction_id": tx["id"],
+        "tps_paid": 0.0,
+        "tvq_paid": 0.0,
+        "tvh_paid": 0.0,
+        "tps_paid_cad": 0.0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # snapshot catégorie ARC (feature #3) — fallback safe si helper absent
+    try:
+        snapshot = _build_expense_category_snapshot({"category_code": category_code}, amount)
+        expense_doc["category"] = snapshot
+    except Exception:
+        expense_doc["category"] = {"code": category_code}
+    db.expenses.insert_one(expense_doc)
+    now = datetime.now(timezone.utc).isoformat()
+    db.bank_transactions.update_one(
+        {"id": tx_id, "user_id": current_user.id},
+        {"$set": {"status": "matched", "match_kind": "expense",
+                  "match_id": expense_doc["id"], "matched_at": now}})
+    return {"expense": clean_doc(expense_doc),
+            "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))}
+
+
+@app.post("/api/bank/transactions/{tx_id}/create-invoice", status_code=201)
+def create_invoice_from_tx(tx_id: str, body: dict,
+                            current_user: User = Depends(get_current_user_with_access)):
+    tx = _get_tx_or_404(tx_id, current_user.id)
+    if tx.get("status") != "unmatched":
+        raise HTTPException(409, "Transaction already matched or ignored")
+    if tx.get("amount_cad") is None or tx.get("date") is None:
+        raise HTTPException(422, "Transaction has parse error")
+    if float(tx["amount_cad"]) <= 0:
+        raise HTTPException(422, "create-invoice only for positive (credit) transactions")
+    client_id = body.get("client_id")
+    if not client_id:
+        raise HTTPException(422, "client_id required")
+    client = db.clients.find_one({"id": client_id, "user_id": current_user.id}, {"_id": 0})
+    if not client:
+        raise HTTPException(404, "Client not found")
+    total = round(abs(float(tx["amount_cad"])), 2)
+    item_desc = (body.get("item_description") or
+                 f"Encaissement bancaire — {(tx.get('description') or '')[:60]}")
+    now = datetime.now(timezone.utc).isoformat()
+    count = db.invoices.count_documents({"user_id": current_user.id})
+    invoice_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user.id,
+        "client_id": client_id,
+        "invoice_number": f"INV-{count + 1:04d}",
+        "issue_date": tx["date"],
+        "due_date": tx["date"],
+        "items": [{"description": item_desc, "quantity": 1, "unit_price": total}],
+        "subtotal": total,
+        "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0,
+        "total_tax": 0.0, "total": total,
+        "province": "AB",  # neutre — pas de taxes ajoutées
+        "currency": "CAD", "exchange_rate_to_cad": 1.0, "total_cad": total,
+        "status": "paid",
+        "notes": "Facture créée depuis rapprochement bancaire — pas de taxes auto. Édite-la si nécessaire.",
+        "payments": [{
+            "id": str(uuid.uuid4()),
+            "amount_cad": total, "method": "transfer",
+            "date": tx["date"],
+            "reference": (tx.get("description") or "")[:200],
+            "bank_transaction_id": tx["id"],
+            "created_at": now,
+        }],
+        "created_at": now,
+    }
+    invoice_doc["tax_registrations"] = _build_tax_registrations(current_user.id, client_id)
+    db.invoices.insert_one(invoice_doc)
+    db.bank_transactions.update_one(
+        {"id": tx_id, "user_id": current_user.id},
+        {"$set": {"status": "matched", "match_kind": "invoice_payment",
+                  "match_id": invoice_doc["payments"][0]["id"],
+                  "invoice_id": invoice_doc["id"], "matched_at": now}})
+    return {"invoice": clean_doc(invoice_doc),
+            "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))}
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):

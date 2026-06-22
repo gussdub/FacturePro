@@ -389,3 +389,68 @@ class TestMatchEndpoints:
         for cid in cls._cleanup["clients"]:
             try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
             except: pass
+
+
+class TestCreateFromTransaction:
+    _cleanup = {"imports": set(), "invoices": set(), "clients": set(), "expenses": set()}
+    _auth = None
+
+    def _make_tx(self, auth, amount, date="2099-12-15", desc=None):
+        if desc is None:
+            desc = f"UNIQUE-{uuid.uuid4().hex[:8]}"
+        csv = _csv_bytes([[date, desc, f"{amount:.2f}"]])
+        files = {"file": ("c.csv", csv, "text/csv")}
+        data = {"mapping": _json.dumps(_basic_mapping())}
+        body = requests.post(f"{BASE_URL}/api/bank/imports",
+                             files=files, data=data, headers=auth).json()
+        TestCreateFromTransaction._cleanup["imports"].add(body["import"]["id"])
+        return body["transactions"][0]
+
+    def test_create_expense_from_debit(self, auth):
+        TestCreateFromTransaction._auth = auth
+        tx = self._make_tx(auth, -100.00, "2099-12-10")
+        r = requests.post(
+            f"{BASE_URL}/api/bank/transactions/{tx['id']}/create-expense",
+            headers=auth, json={"category_code": "office_supplies",
+                                "vendor": "Costco"})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["expense"]["amount_cad"] == 100.00
+        assert body["expense"]["bank_transaction_id"] == tx["id"]
+        assert body["transaction"]["status"] == "matched"
+        TestCreateFromTransaction._cleanup["expenses"].add(body["expense"]["id"])
+
+    def test_create_invoice_from_credit(self, auth):
+        c = requests.post(f"{BASE_URL}/api/clients", headers=auth, json={
+            "name": f"ClientCreate-{uuid.uuid4().hex[:6]}",
+            "email": "x@y.test"}).json()
+        TestCreateFromTransaction._cleanup["clients"].add(c["id"])
+        tx = self._make_tx(auth, 300.00, "2099-12-11")
+        r = requests.post(
+            f"{BASE_URL}/api/bank/transactions/{tx['id']}/create-invoice",
+            headers=auth, json={"client_id": c["id"],
+                                "item_description": "Service ad hoc"})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["invoice"]["total"] == 300.00
+        assert body["invoice"]["status"] == "paid"
+        assert len(body["invoice"]["payments"]) == 1
+        assert body["transaction"]["status"] == "matched"
+        TestCreateFromTransaction._cleanup["invoices"].add(body["invoice"]["id"])
+
+    @classmethod
+    def teardown_class(cls):
+        if not cls._auth:
+            return
+        for iid in cls._cleanup["imports"]:
+            try: requests.delete(f"{BASE_URL}/api/bank/imports/{iid}?force=true", headers=cls._auth)
+            except: pass
+        for eid in cls._cleanup["expenses"]:
+            try: requests.delete(f"{BASE_URL}/api/expenses/{eid}", headers=cls._auth)
+            except: pass
+        for invid in cls._cleanup["invoices"]:
+            try: requests.delete(f"{BASE_URL}/api/invoices/{invid}", headers=cls._auth)
+            except: pass
+        for cid in cls._cleanup["clients"]:
+            try: requests.delete(f"{BASE_URL}/api/clients/{cid}", headers=cls._auth)
+            except: pass
