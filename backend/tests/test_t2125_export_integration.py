@@ -159,3 +159,28 @@ class TestT2125CsvEndpoint:
                        headers=auth_headers)
         if r.status_code == 200:
             assert f"t2125-{year}-cash.csv" in r.headers.get("content-disposition", "")
+
+
+class TestT2125PdfEndpoint:
+    def test_happy_path(self, client, auth_headers):
+        year = _t10_valid_year()
+        r = client.get(f"/api/reports/t2125/pdf?year={year}&basis=accrual",
+                       headers=auth_headers)
+        # 200 ou 422 (settings) — pas 404
+        assert r.status_code in (200, 422), r.text
+        if r.status_code == 200:
+            assert r.headers["content-type"] == "application/pdf"
+            assert r.content[:4] == b"%PDF"
+            assert len(r.content) > 1000
+
+    def test_invalid_year_returns_422(self, client, auth_headers):
+        r = client.get("/api/reports/t2125/pdf?year=1999&basis=accrual",
+                       headers=auth_headers)
+        assert r.status_code == 422
+
+    def test_content_disposition_filename(self, client, auth_headers):
+        year = _t10_valid_year()
+        r = client.get(f"/api/reports/t2125/pdf?year={year}&basis=accrual",
+                       headers=auth_headers)
+        if r.status_code == 200:
+            assert f"t2125-{year}-accrual.pdf" in r.headers.get("content-disposition", "")

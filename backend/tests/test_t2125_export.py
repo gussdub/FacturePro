@@ -330,3 +330,26 @@ class TestBuildT2125Report:
             assert report["period"] == {"start": f"{valid_year}-01-01", "end": f"{valid_year}-12-31"}
         finally:
             self._cleanup_settings(uid)
+
+
+from server import _t2125_format_money
+
+
+class TestT2125FormatMoney:
+    def test_thousands_separator(self):
+        # FR-CA: espace milliers, virgule décimale, $ après
+        result = _t2125_format_money(85000.00)
+        assert "$" in result
+        assert "85" in result and "000" in result
+        assert "," in result
+
+    def test_zero(self):
+        assert _t2125_format_money(0) == "0,00 $"
+
+    def test_negative(self):
+        result = _t2125_format_money(-1500.50)
+        assert "1" in result and "500" in result and "50" in result
+        assert result.startswith("-")
+
+    def test_decimal_rounding(self):
+        assert "12,35" in _t2125_format_money(12.347)

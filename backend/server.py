@@ -4137,6 +4137,208 @@ def get_t2125_csv(
     )
 
 
+def _t2125_format_money(value):
+    """Formatte un float en FR-CA : '85 000,00 $' (espace milliers, virgule décimale)."""
+    if value is None:
+        value = 0
+    formatted = f"{abs(value):,.2f}"  # "85,000.00"
+    formatted = formatted.replace(",", " ").replace(".", ",")  # "85 000,00"
+    sign = "-" if value < 0 else ""
+    return f"{sign}{formatted} $"
+
+
+def _render_t2125_pdf(report):
+    """Génère le PDF T2125 via ReportLab. Pattern miroir du PDF P&L (feature #5).
+    Échappe les strings user-supplied (company_name, bn_number) avec html.escape."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
+    from html import escape as html_escape
+
+    teal = HexColor("#008F7A")
+    dark = HexColor("#1f2937")
+    gray = HexColor("#6b7280")
+    light_bg = HexColor("#f8fafb")
+    blue_bg = HexColor("#eff6ff")
+    warning_bg = HexColor("#fef3c7")
+    warning_border = HexColor("#d1d5db")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                             topMargin=0.6*inch, bottomMargin=0.6*inch,
+                             leftMargin=0.6*inch, rightMargin=0.6*inch)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("T", parent=styles["Heading1"], fontSize=18,
+                                  textColor=teal, spaceAfter=4)
+    h2_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12,
+                               textColor=dark, spaceAfter=4)
+    body_style = ParagraphStyle("B", parent=styles["Normal"], fontSize=10,
+                                 textColor=dark, leading=14)
+    small_style = ParagraphStyle("S", parent=styles["Normal"], fontSize=9,
+                                  textColor=gray, leading=11)
+
+    elements = []
+
+    # En-tête
+    company_name = html_escape(report.get("company_name") or "(sans nom)")
+    bn = html_escape(report.get("bn_number") or "—")
+    province = html_escape(report.get("province") or "QC")
+    basis_label = "Exercice" if report["basis"] == "accrual" else "Caisse"
+    elements.append(Paragraph(f"État T2125 — Année fiscale {report['year']}", title_style))
+    elements.append(Paragraph(
+        f"<b>{company_name}</b> &nbsp;·&nbsp; BN : {bn} &nbsp;·&nbsp; "
+        f"Province : {province} &nbsp;·&nbsp; Base : {basis_label}", small_style))
+    period = report["period"]
+    elements.append(Paragraph(
+        f"Période : {period['start']} au {period['end']} &nbsp;·&nbsp; "
+        f"Généré le {datetime.now(timezone.utc).strftime('%Y-%m-%d à %H:%M UTC')}",
+        small_style))
+    elements.append(Spacer(1, 0.2*inch))
+
+    # Avertissement année partielle
+    if report.get("is_partial_year"):
+        elements.append(Table([[Paragraph(
+            "⚠ <b>Rapport partiel</b> — l'année n'est pas terminée. "
+            "Données du 1er janvier à aujourd'hui uniquement.",
+            ParagraphStyle("warn", parent=body_style, textColor=HexColor("#92400e")))]],
+            colWidths=[7.0*inch],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), warning_bg),
+                ("BOX", (0, 0), (-1, -1), 0.5, warning_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ])))
+        elements.append(Spacer(1, 0.15*inch))
+
+    # Revenus
+    elements.append(Paragraph("Revenus bruts (ligne 8000)", h2_style))
+    elements.append(Table(
+        [["8000", "Recettes brutes", _t2125_format_money(report["gross_income"])]],
+        colWidths=[0.8*inch, 4.5*inch, 1.7*inch],
+        style=TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+            ("BACKGROUND", (0, 0), (-1, -1), light_bg),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ])))
+    elements.append(Spacer(1, 0.2*inch))
+
+    # Dépenses
+    elements.append(Paragraph("Dépenses", h2_style))
+    data = [["Ligne", "Libellé", "Brut", "Déductible"]]
+    adjustment_lines = {"9945", "9281"}
+    row_styles = []
+    for i, line in enumerate(report["expenses_by_arc_line"], start=1):
+        label = html_escape(line["label"])
+        if line.get("note"):
+            label += f" <font color='#6b7280' size='8'>({html_escape(line['note'])})</font>"
+        data.append([
+            line["arc_line"],
+            Paragraph(label, body_style),
+            _t2125_format_money(line["gross"]),
+            _t2125_format_money(line["deductible"]),
+        ])
+        if line["arc_line"] in adjustment_lines:
+            row_styles.append(("BACKGROUND", (0, i), (-1, i), blue_bg))
+
+    style_cmds = [
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BACKGROUND", (0, 0), (-1, 0), teal),
+        ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#ffffff")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("GRID", (0, 0), (-1, -1), 0.25, HexColor("#e5e7eb")),
+    ] + row_styles
+    elements.append(Table(data, colWidths=[0.8*inch, 4.0*inch, 1.1*inch, 1.1*inch],
+                          style=TableStyle(style_cmds)))
+    elements.append(Spacer(1, 0.15*inch))
+
+    # Total + Bénéfice net
+    elements.append(Table([
+        ["", "Total dépenses déductibles", "",
+         _t2125_format_money(report["total_expenses_deductible"])],
+        ["", "Bénéfice net (ligne 9369)", "",
+         _t2125_format_money(report["net_income"])],
+    ], colWidths=[0.8*inch, 4.0*inch, 1.1*inch, 1.1*inch],
+        style=TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 1), (-1, 1), teal),
+            ("TEXTCOLOR", (0, 1), (-1, 1), HexColor("#ffffff")),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ])))
+    elements.append(Spacer(1, 0.25*inch))
+
+    # Encadré "À compléter manuellement"
+    manual_text = (
+        "<b>À compléter manuellement sur le T2125 officiel</b><br/><br/>"
+        "• <b>Déduction pour amortissement (DPA)</b> — Annexe T2125-DPA "
+        "(ligne 9936)<br/>"
+        "• <b>Bureau à domicile</b>, si applicable : taxes municipales, intérêts "
+        "hypothécaires, assurance habitation (non capturés par FacturePro) — ligne 9945<br/>"
+        "• <b>Véhicule</b> : amortissement et intérêts du véhicule (DPA véhicule) "
+        "— sous-ligne 9281"
+    )
+    elements.append(Table([[Paragraph(manual_text, body_style)]],
+        colWidths=[7.0*inch],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), warning_bg),
+            ("BOX", (0, 0), (-1, -1), 0.5, warning_border),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ])))
+    elements.append(Spacer(1, 0.15*inch))
+
+    elements.append(Paragraph(
+        "Pour le rapport TPS/TVQ détaillé, consulte l'onglet TPS/TVQ.",
+        small_style))
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.get("/api/reports/t2125/pdf")
+def get_t2125_pdf(
+    year: int,
+    basis: str = "accrual",
+    current_user: User = Depends(get_current_user_with_access),
+):
+    """Export T2125 au format PDF."""
+    report = _build_t2125_report(current_user.id, year, basis)
+    pdf_bytes = _render_t2125_pdf(report)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=t2125-{year}-{basis}.pdf",
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
