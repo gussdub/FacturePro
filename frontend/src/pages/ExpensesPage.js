@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
+import { ScanLine } from 'lucide-react';
 
 function computeTaxesPaid(amountGross, province) {
   const a = parseFloat(amountGross) || 0;
@@ -43,6 +44,9 @@ const ExpensesPage = () => {
   });
   const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
   const [companyProvince, setCompanyProvince] = useState('QC');
+  const scanInputRef = useRef(null);
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState(null);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -232,6 +236,63 @@ const ExpensesPage = () => {
 
   if (loading) return <div style={{ textAlign: 'center', padding: '64px' }}><p style={{ color: '#6b7280' }}>Chargement des depenses...</p></div>;
 
+  const compressImage = async (file) => {
+    if (file.size <= 1024 * 1024) return file;
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error("Image illisible"));
+      i.src = URL.createObjectURL(file);
+    });
+    const maxDim = 1600;
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+    return await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+  };
+
+  const handleScanClick = () => {
+    setScanError(null);
+    scanInputRef.current?.click();
+  };
+
+  const handleReceiptScan = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setScanError(null);
+    setScanLoading(true);
+    try {
+      const compressed = await compressImage(file);
+      if (compressed.size > 5 * 1024 * 1024) {
+        setScanError("Photo trop volumineuse même après compression.");
+        return;
+      }
+      const fd = new FormData();
+      fd.append("file", compressed, file.name);
+      const r = await axios.post(`${BACKEND_URL}/api/expenses/scan-receipt`,
+        fd, { headers: { "Content-Type": "multipart/form-data" } });
+      console.log("Scan result (T12 will integrate)", r.data);
+      // T12 va ouvrir le modal pré-rempli ici
+    } catch (err) {
+      if (err.response?.status === 413) {
+        setScanError("Photo trop volumineuse (max 5 MB).");
+      } else if (err.response?.status === 422) {
+        setScanError(err.response.data?.detail || "Format non supporté.");
+      } else if (err.response?.status === 429) {
+        setScanError("Limite mensuelle atteinte (200 scans).");
+      } else if (err.response?.status === 502) {
+        setScanError("Service temporairement indisponible.");
+      } else {
+        setScanError("Erreur d'extraction. Réessaye.");
+      }
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
   return (
     <div data-testid="expenses-page">
       {/* Header */}
@@ -245,6 +306,26 @@ const ExpensesPage = () => {
           <button data-testid="import-csv-btn" onClick={() => fileInputRef.current?.click()} style={btnSecondary}>
             Importer CSV
           </button>
+          <button
+            type="button"
+            onClick={handleScanClick}
+            disabled={scanLoading}
+            style={{
+              background: "#fff", color: "#00A08C", border: "1.5px solid #00A08C",
+              padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 14,
+              fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6,
+              marginRight: 8,
+            }}
+            title="Scanner un reçu avec extraction automatique">
+            <ScanLine size={16} /> Scanner reçu
+          </button>
+          <input
+            ref={scanInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            style={{ display: "none" }}
+            onChange={handleReceiptScan}
+          />
           <button onClick={() => { resetForm(); setShowForm(true); }} data-testid="add-expense-btn" style={btnPrimary}>
             + Nouvelle Depense
           </button>
@@ -673,6 +754,28 @@ const ExpensesPage = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {scanLoading && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+                       display: "flex", flexDirection: "column",
+                       alignItems: "center", justifyContent: "center", zIndex: 1200,
+                       color: "#fff" }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
+          <p>Analyse du reçu en cours…</p>
+        </div>
+      )}
+      {scanError && (
+        <div style={{ position: "fixed", bottom: 24, left: "50%",
+                       transform: "translateX(-50%)", background: "#fee2e2",
+                       color: "#991b1b", padding: 12, borderRadius: 6, zIndex: 1300,
+                       boxShadow: "0 4px 12px rgba(0,0,0,0.1)" }}>
+          {scanError}
+          <button onClick={() => setScanError(null)}
+                  style={{ marginLeft: 8, background: "transparent",
+                           border: "none", cursor: "pointer", color: "#991b1b",
+                           fontWeight: 700 }}>×</button>
         </div>
       )}
 
