@@ -3,6 +3,7 @@ import axios from "axios";
 import { GitMerge, Plus, FileText } from "lucide-react";
 import { BACKEND_URL } from "../config";
 import BankImportWizard from "../components/BankImportWizard";
+import BankMatchingScreen from "../components/BankMatchingScreen";
 
 export default function BankReconciliationPage() {
   const [imports, setImports] = useState([]);
@@ -30,12 +31,9 @@ export default function BankReconciliationPage() {
     />;
   }
   if (view.kind === "matching") {
-    return (
-      <div style={{ padding: 24 }}>
-        <p>Matching screen for {view.importId} (T13).</p>
-        <button onClick={() => setView({ kind: "list" })}>Retour</button>
-      </div>
-    );
+    return <BankMatchingScreen
+      importId={view.importId}
+      onBack={() => { fetchImports(); setView({ kind: "list" }); }} />;
   }
 
   return (
