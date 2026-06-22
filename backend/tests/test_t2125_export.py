@@ -211,3 +211,122 @@ class TestVehicleAdjustment:
         adj = _t2125_compute_vehicle_adjustment(flat, 40)
         assert adj["original_total"] == 0
         assert adj["deductible_amount"] == 0
+
+
+import uuid
+from server import _build_t2125_report, db as server_db
+from fastapi import HTTPException
+from datetime import datetime, timezone
+
+
+class TestBuildT2125Report:
+    def _setup_settings(self, user_id, entity_type="sole_proprietor",
+                       home_pct=0, vehicle_pct=0):
+        server_db.company_settings.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "user_id": user_id, "entity_type": entity_type,
+                "company_name": "Test Co",
+                "bn_number": "123456789",
+                "province": "QC",
+                "home_office_percentage": home_pct,
+                "vehicle_business_percentage": vehicle_pct,
+            }},
+            upsert=True,
+        )
+
+    def _cleanup_settings(self, user_id):
+        server_db.company_settings.delete_one({"user_id": user_id})
+
+    def test_year_too_low_raises_422(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        self._setup_settings(uid)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _build_t2125_report(uid, 1999, "accrual")
+            assert exc.value.status_code == 422
+        finally:
+            self._cleanup_settings(uid)
+
+    def test_year_too_high_raises_422(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        self._setup_settings(uid)
+        try:
+            future = datetime.now(timezone.utc).year + 5
+            with pytest.raises(HTTPException) as exc:
+                _build_t2125_report(uid, future, "accrual")
+            assert exc.value.status_code == 422
+        finally:
+            self._cleanup_settings(uid)
+
+    def test_current_year_plus_one_allowed_for_timezone_buffer(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        self._setup_settings(uid)
+        try:
+            yr = datetime.now(timezone.utc).year + 1
+            report = _build_t2125_report(uid, yr, "accrual")
+            assert report["year"] == yr
+            assert report["is_partial_year"] is True
+        finally:
+            self._cleanup_settings(uid)
+
+    def test_invalid_basis(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        self._setup_settings(uid)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _build_t2125_report(uid, 2099, "xxx")
+            assert exc.value.status_code == 422
+        finally:
+            self._cleanup_settings(uid)
+
+    def test_corporation_raises_422(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        self._setup_settings(uid, entity_type="corporation")
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _build_t2125_report(uid, 2099, "accrual")
+            assert exc.value.status_code == 422
+        finally:
+            self._cleanup_settings(uid)
+
+    def test_no_settings_raises_422(self):
+        uid = f"test-t2125-noset-{uuid.uuid4().hex[:8]}"
+        valid_year = datetime.now(timezone.utc).year + 1
+        # Pas de _setup_settings → settings absent
+        with pytest.raises(HTTPException) as exc:
+            _build_t2125_report(uid, valid_year, "accrual")
+        assert exc.value.status_code == 422
+        assert "Réglages" in exc.value.detail
+
+    def test_empty_year_no_data(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        valid_year = datetime.now(timezone.utc).year + 1
+        self._setup_settings(uid)
+        try:
+            report = _build_t2125_report(uid, valid_year, "accrual")
+            assert report["gross_income"] == 0
+            assert report["expenses_by_arc_line"] == []
+            assert report["total_expenses_deductible"] == 0
+            assert report["net_income"] == 0
+            assert report["business_use_adjustments"] == {}
+        finally:
+            self._cleanup_settings(uid)
+
+    def test_report_structure(self):
+        uid = f"test-t2125-{uuid.uuid4().hex[:8]}"
+        valid_year = datetime.now(timezone.utc).year + 1
+        self._setup_settings(uid)
+        try:
+            report = _build_t2125_report(uid, valid_year, "accrual")
+            for key in ["year", "basis", "period", "entity_type", "province",
+                        "company_name", "bn_number", "gross_income", "income_line",
+                        "expenses_by_arc_line", "total_expenses_deductible",
+                        "business_use_adjustments", "net_income", "net_income_line",
+                        "is_partial_year"]:
+                assert key in report, f"Missing key: {key}"
+            assert report["income_line"] == "8000"
+            assert report["net_income_line"] == "9369"
+            assert report["period"] == {"start": f"{valid_year}-01-01", "end": f"{valid_year}-12-31"}
+        finally:
+            self._cleanup_settings(uid)

@@ -2238,6 +2238,100 @@ def _t2125_compute_vehicle_adjustment(flat_expenses, vehicle_pct):
     }
 
 
+def _build_t2125_report(user_id, year, basis):
+    """Construit le rapport T2125 pour une année et base données.
+    Mode EXCLUSIF : si home_office_percentage > 0, les catégories rent/utilities/insurance
+    sont retirées de leurs lignes ARC et placées sur la ligne 9945 ; idem véhicule sur 9281."""
+    # Validation année (avec +1 pour absorber la dérive timezone Quebec)
+    upper_year = datetime.now(timezone.utc).year + 1
+    if not (T2125_MIN_YEAR <= year <= upper_year):
+        raise HTTPException(422, f"Année hors plage admissible ({T2125_MIN_YEAR}–{upper_year})")
+    if basis not in T2125_VALID_BASES:
+        raise HTTPException(422, "basis must be 'accrual' or 'cash'")
+
+    settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0})
+    if not settings:
+        raise HTTPException(422, "Complète tes informations dans Réglages avant de générer ton T2125")
+    if settings.get("entity_type", "sole_proprietor") != "sole_proprietor":
+        raise HTTPException(422, "T2125 export only available for sole proprietors")
+
+    period = {"start": f"{year}-01-01", "end": f"{year}-12-31"}
+
+    # Aggregate via _aggregate_pnl (feature #5)
+    pnl = _aggregate_pnl(user_id, period["start"], period["end"], basis=basis)
+
+    # Flatten expense_groups → dict plat
+    flat_expenses = _t2125_flatten_pnl_expenses(pnl.get("expense_groups", []))
+
+    # Pourcentages depuis Settings
+    home_pct = float(settings.get("home_office_percentage", 0) or 0)
+    vehicle_pct = float(settings.get("vehicle_business_percentage", 0) or 0)
+
+    # Calculer les ajustements + déterminer les exclusions
+    home_adj = _t2125_compute_home_office_adjustment(flat_expenses, home_pct)
+    vehicle_adj = _t2125_compute_vehicle_adjustment(flat_expenses, vehicle_pct)
+
+    excluded = set()
+    if home_adj is not None:
+        excluded.update(HOME_OFFICE_CATEGORIES)
+    if vehicle_adj is not None:
+        excluded.update(VEHICLE_CATEGORIES)
+
+    # Grouper par ligne ARC en excluant les catégories déplacées
+    grouped = _t2125_group_by_arc_line(flat_expenses, exclude_codes=excluded)
+
+    # Ajouter les lignes d'ajustement (9945, 9281)
+    if home_adj is not None:
+        grouped.append({
+            "arc_line": "9945",
+            "label": home_adj["label"],
+            "gross": home_adj["original_total"],
+            "deductible": home_adj["deductible_amount"],
+            "categories": list(HOME_OFFICE_CATEGORIES),
+            "note": f"{home_pct:g} % de l'utilisation totale",
+        })
+    if vehicle_adj is not None:
+        grouped.append({
+            "arc_line": "9281",
+            "label": vehicle_adj["label"],
+            "gross": vehicle_adj["original_total"],
+            "deductible": vehicle_adj["deductible_amount"],
+            "categories": list(VEHICLE_CATEGORIES),
+            "note": f"{vehicle_pct:g} % d'utilisation commerciale",
+        })
+
+    # Re-trier par arc_line
+    grouped.sort(key=lambda x: x["arc_line"])
+
+    # Total déductible (somme simple — mode exclusif évite double-count)
+    total_deductible = round(sum(line["deductible"] for line in grouped), 2)
+    net_income = round(pnl["revenue"] - total_deductible, 2)
+
+    adjustments = {}
+    if home_adj is not None:
+        adjustments["home_office"] = home_adj
+    if vehicle_adj is not None:
+        adjustments["vehicle"] = vehicle_adj
+
+    return {
+        "year": year,
+        "basis": basis,
+        "period": period,
+        "entity_type": "sole_proprietor",
+        "province": settings.get("province", "QC"),
+        "company_name": settings.get("company_name", ""),
+        "bn_number": settings.get("bn_number", ""),
+        "gross_income": round(pnl["revenue"], 2),
+        "income_line": "8000",
+        "expenses_by_arc_line": grouped,
+        "total_expenses_deductible": total_deductible,
+        "business_use_adjustments": adjustments,
+        "net_income": net_income,
+        "net_income_line": "9369",
+        "is_partial_year": year >= datetime.now(timezone.utc).year,
+    }
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):
