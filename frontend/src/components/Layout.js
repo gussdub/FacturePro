@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
-import { BACKEND_URL, FACTUREPRO_LOGO_FILE_ID } from '../config';
+import { BACKEND_URL } from '../config';
 import NotificationsDropdown from './NotificationsDropdown';
+import FactureProLogo from './FactureProLogo';
 import {
   LayoutDashboard, Users, Package, FileText, FilePen,
   UserCheck, Receipt, Download, Settings, Gem,
@@ -15,8 +16,6 @@ const getImageUrl = (url) => {
   if (url.startsWith('http')) return url;
   return null;
 };
-
-const factureProLogoUrl = `${BACKEND_URL}/api/files/${FACTUREPRO_LOGO_FILE_ID}`;
 
 const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   const { user, logout } = useAuth();
@@ -63,8 +62,8 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
         {/* Logo Section */}
         <div style={{ padding: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '48px', height: '48px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              <img src={factureProLogoUrl} alt="FacturePro" style={{ width: '48px', height: '48px', objectFit: 'contain', borderRadius: '12px' }} />
+            <div style={{ width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <FactureProLogo size={48} />
             </div>
             <div>
               <div style={{ color: 'white', fontSize: '20px', fontWeight: '800' }}>FacturePro</div>
