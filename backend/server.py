@@ -994,6 +994,10 @@ def _call_anthropic_extract(image_bytes, mime_type):
     """Appelle Claude Haiku 4.5 et retourne le dict extraction brut.
     Lève HTTPException 502 en cas d'erreur API ou réponse invalide.
     NE LOG JAMAIS str(e) (peut leaker la clé API)."""
+    # Test mock injection (jamais set en prod ; pas exposé via API)
+    mock = globals().get("_TEST_MOCK_EXTRACTION")
+    if mock is not None:
+        return mock
     client = _get_anthropic_client()
     try:
         message = client.messages.create(
@@ -1990,6 +1994,70 @@ def delete_bank_import(import_id: str, force: bool = False,
         {"import_id": import_id, "user_id": current_user.id})
     db.bank_imports.delete_one({"id": import_id, "user_id": current_user.id})
     return Response(status_code=204)
+
+
+# ─── Receipt OCR endpoints (feature #8) ───
+MAX_RECEIPT_BYTES = 5 * 1024 * 1024
+
+
+@app.post("/api/expenses/scan-receipt")
+async def scan_receipt(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_with_access),
+):
+    # 1. Lecture + size cap
+    raw = await file.read()
+    if len(raw) > MAX_RECEIPT_BYTES:
+        raise HTTPException(413, f"File exceeds {MAX_RECEIPT_BYTES // 1024 // 1024} MB limit")
+
+    # 2. Magic-bytes validation
+    mime = _detect_image_mime(raw)
+    if mime is None:
+        raise HTTPException(422, "Format non supporté. Utilise JPG, PNG, WEBP ou GIF.")
+
+    # 3. Décompression bomb check
+    try:
+        _check_image_decompression(raw)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    # 4. Quota check + bill (atomique)
+    scan_count = _check_and_bill_scan(current_user.id)
+
+    # 5. Appel Anthropic
+    try:
+        raw_extraction = _call_anthropic_extract(raw, mime)
+    except HTTPException:
+        # rollback quota
+        db.users.update_one({"id": current_user.id}, {"$inc": {"scan_count_this_month": -1}})
+        raise
+
+    # 6. Normalize
+    extraction = _normalize_extraction(raw_extraction)
+
+    # 7. Persiste le fichier (APRÈS succès Anthropic — zéro orphelin sur erreur)
+    file_id = str(uuid.uuid4())
+    db.files.insert_one({
+        "id": file_id,
+        "user_id": current_user.id,
+        "data": raw,
+        "mime_type": mime,
+        "original_filename": file.filename or "receipt.jpg",
+        "size_bytes": len(raw),
+        "purpose": "receipt",
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    # 8. Log INFO
+    print(f"INFO scan_receipt user={current_user.id} file_size={len(raw)} "
+          f"category={extraction['category_code']} quota_used={scan_count}/{SCAN_QUOTA_LIMIT}")
+
+    return {
+        "file_id": file_id,
+        "scan_count_this_month": scan_count,
+        "extraction": extraction,
+    }
 
 
 # ─── Quotes CRUD ───
