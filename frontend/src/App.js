@@ -13,6 +13,7 @@ import ExportPage from './pages/ExportPage';
 import SettingsPage from './pages/SettingsPage';
 import SubscriptionPage from './pages/SubscriptionPage';
 import ReportsPage from './pages/ReportsPage';
+import BankReconciliationPage from './pages/BankReconciliationPage';
 
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
@@ -63,6 +64,7 @@ function App() {
       case '/expenses': return <ExpensesPage />;
       case '/export': return <ExportPage />;
       case '/reports': return <ReportsPage />;
+      case '/bank': return <BankReconciliationPage />;
       case '/settings': return <SettingsPage />;
       case '/subscription': return <SubscriptionPage />;
       default: return <Dashboard navigate={navigate} />;
