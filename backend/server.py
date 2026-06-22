@@ -802,6 +802,49 @@ def _auto_match_transactions(import_id, user_id):
     return applied
 
 
+# ─── Receipt OCR helpers (feature #8) ───
+from PIL import Image as PILImage
+
+
+_IMAGE_MAGIC_BYTES = [
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+]
+
+
+def _detect_image_mime(data):
+    """Détecte le mime réel d'une image depuis ses premiers bytes.
+    Retourne 'image/jpeg', 'image/png', 'image/webp', 'image/gif' ou None.
+    Ne fait JAMAIS confiance au Content-Type client."""
+    if not data or len(data) < 12:
+        return None
+    for sig, mime in _IMAGE_MAGIC_BYTES:
+        if data.startswith(sig):
+            return mime
+    # WEBP : RIFF...WEBP
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+MAX_IMAGE_MEGAPIXELS = 50
+
+
+def _check_image_decompression(data):
+    """Ouvre l'image et vérifie que les dimensions ne sont pas excessives.
+    Lève ValueError si > 50 MP ou si l'image est corrompue."""
+    try:
+        img = PILImage.open(io.BytesIO(data))
+        img.load()
+    except Exception as e:
+        raise ValueError(f"Image illisible: {type(e).__name__}")
+    w, h = img.size
+    if w * h > MAX_IMAGE_MEGAPIXELS * 1_000_000:
+        raise ValueError(f"Image too large: {w}x{h} = {w*h/1e6:.1f} MP > {MAX_IMAGE_MEGAPIXELS} MP")
+
+
 app = FastAPI(title="FacturePro API", version="2.0.0")
 security = HTTPBearer()
 
