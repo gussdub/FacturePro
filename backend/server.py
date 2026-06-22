@@ -3725,6 +3725,14 @@ def seed_data():
         # Migration tax_registrations (Section 2 du spec) — idempotente
         migrate_pst_to_qst()
 
+        # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
+        res = db.files.update_many(
+            {"purpose": {"$exists": False}},
+            {"$set": {"purpose": "logo"}}
+        )
+        if res.modified_count:
+            print(f"Migrated {res.modified_count} db.files: purpose=logo (legacy)")
+
         existing = db.users.find_one({"email": "gussdub@gmail.com"})
         if existing:
             uid = existing["id"]
