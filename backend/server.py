@@ -2199,6 +2199,45 @@ def _t2125_group_by_arc_line(flat_expenses, exclude_codes=None):
     return out
 
 
+def _t2125_compute_home_office_adjustment(flat_expenses, home_pct):
+    """Mode exclusif : si home_pct > 0, retourne le dict ajustement pour la ligne 9945.
+    Les catégories rent/utilities/insurance doivent être retirées de leurs lignes ARC
+    par l'appelant (via exclude_codes de _t2125_group_by_arc_line)."""
+    if home_pct is None or home_pct <= 0:
+        return None
+    original_total = sum(
+        float(flat_expenses.get(cat, {}).get("gross", 0) or 0)
+        for cat in HOME_OFFICE_CATEGORIES
+    )
+    return {
+        "percentage": home_pct,
+        "applies_to": sorted(HOME_OFFICE_CATEGORIES),
+        "original_total": round(original_total, 2),
+        "deductible_amount": round(original_total * home_pct / 100.0, 2),
+        "saved_to_arc_line": "9945",
+        "label": "Frais d'utilisation de la résidence aux fins de l'entreprise",
+    }
+
+
+def _t2125_compute_vehicle_adjustment(flat_expenses, vehicle_pct):
+    """Mode exclusif : si vehicle_pct > 0, retourne le dict ajustement pour la ligne 9281.
+    La catégorie vehicle_expenses doit être retirée de sa ligne ARC par l'appelant."""
+    if vehicle_pct is None or vehicle_pct <= 0:
+        return None
+    original_total = sum(
+        float(flat_expenses.get(cat, {}).get("gross", 0) or 0)
+        for cat in VEHICLE_CATEGORIES
+    )
+    return {
+        "percentage": vehicle_pct,
+        "applies_to": sorted(VEHICLE_CATEGORIES),
+        "original_total": round(original_total, 2),
+        "deductible_amount": round(original_total * vehicle_pct / 100.0, 2),
+        "saved_to_arc_line": "9281",
+        "label": "Frais relatifs aux véhicules à moteur",
+    }
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):

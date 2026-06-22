@@ -141,3 +141,73 @@ class TestGroupByArcLine:
         # exclude_codes None ne doit pas crasher
         out = _t2125_group_by_arc_line(flat, exclude_codes=None)
         assert len(out) == 1
+
+
+from server import (
+    _t2125_compute_home_office_adjustment,
+    _t2125_compute_vehicle_adjustment,
+)
+
+
+class TestHomeOfficeAdjustment:
+    def _flat(self):
+        return {
+            "rent": {"gross": 12000.0, "deductible": 12000.0, "arc_line": "8910"},
+            "utilities": {"gross": 2000.0, "deductible": 2000.0, "arc_line": "9220"},
+            "insurance": {"gross": 1000.0, "deductible": 1000.0, "arc_line": "8690"},
+            "advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"},  # exclu
+        }
+
+    def test_zero_returns_none(self):
+        assert _t2125_compute_home_office_adjustment(self._flat(), 0) is None
+        assert _t2125_compute_home_office_adjustment(self._flat(), 0.0) is None
+
+    def test_negative_returns_none(self):
+        assert _t2125_compute_home_office_adjustment(self._flat(), -5) is None
+
+    def test_15_percent(self):
+        adj = _t2125_compute_home_office_adjustment(self._flat(), 15)
+        assert adj["percentage"] == 15
+        assert adj["original_total"] == 15000.0  # 12000 + 2000 + 1000
+        assert adj["deductible_amount"] == 2250.0  # 15000 × 15%
+        assert adj["saved_to_arc_line"] == "9945"
+        assert set(adj["applies_to"]) == {"rent", "utilities", "insurance"}
+
+    def test_100_percent(self):
+        adj = _t2125_compute_home_office_adjustment(self._flat(), 100)
+        assert adj["deductible_amount"] == 15000.0
+
+    def test_no_relevant_expenses(self):
+        flat = {"advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"}}
+        adj = _t2125_compute_home_office_adjustment(flat, 15)
+        assert adj["original_total"] == 0
+        assert adj["deductible_amount"] == 0
+
+    def test_applies_to_sorted(self):
+        adj = _t2125_compute_home_office_adjustment(self._flat(), 15)
+        assert adj["applies_to"] == sorted(adj["applies_to"])
+
+
+class TestVehicleAdjustment:
+    def _flat(self):
+        return {
+            "vehicle_expenses": {"gross": 5000.0, "deductible": 5000.0, "arc_line": "9281"},
+            "advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"},
+        }
+
+    def test_zero_returns_none(self):
+        assert _t2125_compute_vehicle_adjustment(self._flat(), 0) is None
+
+    def test_40_percent(self):
+        adj = _t2125_compute_vehicle_adjustment(self._flat(), 40)
+        assert adj["percentage"] == 40
+        assert adj["original_total"] == 5000.0
+        assert adj["deductible_amount"] == 2000.0
+        assert adj["saved_to_arc_line"] == "9281"
+        assert adj["applies_to"] == ["vehicle_expenses"]
+
+    def test_no_vehicle_expenses(self):
+        flat = {"advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"}}
+        adj = _t2125_compute_vehicle_adjustment(flat, 40)
+        assert adj["original_total"] == 0
+        assert adj["deductible_amount"] == 0
