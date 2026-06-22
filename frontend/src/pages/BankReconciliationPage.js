@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { GitMerge, Plus, FileText } from "lucide-react";
 import { BACKEND_URL } from "../config";
+import BankImportWizard from "../components/BankImportWizard";
 
 export default function BankReconciliationPage() {
   const [imports, setImports] = useState([]);
@@ -23,12 +24,10 @@ export default function BankReconciliationPage() {
   useEffect(() => { fetchImports(); }, []);
 
   if (view.kind === "wizard") {
-    return (
-      <div style={{ padding: 24 }}>
-        <p>Wizard (T12).</p>
-        <button onClick={() => setView({ kind: "list" })}>Retour</button>
-      </div>
-    );
+    return <BankImportWizard
+      onCancel={() => setView({ kind: "list" })}
+      onDone={(importId) => { fetchImports(); setView({ kind: "matching", importId }); }}
+    />;
   }
   if (view.kind === "matching") {
     return (
