@@ -251,3 +251,23 @@ class TestExpenseReceiptIntegration:
 
         g = client.get(f"/api/receipts/{fid}", headers=auth_headers)
         assert g.status_code == 404
+
+
+class TestAuthMeQuota:
+    def test_auth_me_includes_scan_quota(self, client, auth_headers):
+        r = client.get("/api/auth/me", headers=auth_headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert "scan_count_this_month" in body
+        assert "scan_quota_limit" in body
+        assert body["scan_quota_limit"] == 200
+        assert "receipt_ocr_consent_at" in body
+
+    def test_grant_consent_endpoint(self, client, auth_headers):
+        r = client.post("/api/auth/me/receipt-ocr-consent", headers=auth_headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert body.get("receipt_ocr_consent_at")
+        # Verify it's now in auth/me
+        r2 = client.get("/api/auth/me", headers=auth_headers)
+        assert r2.json().get("receipt_ocr_consent_at")

@@ -1138,14 +1138,31 @@ def get_me(current_user: User = Depends(get_current_user_with_access)):
                 sub_status = "expired"
         except Exception:
             pass
-    return {
+    # Feature #8 — expose scan quota + consent (T10)
+    result = {
         "id": current_user.id,
         "email": current_user.email,
         "company_name": current_user.company_name,
         "subscription_status": "active" if is_exempt else sub_status,
         "trial_end_date": trial_end,
-        "is_exempt": is_exempt
+        "is_exempt": is_exempt,
+        "scan_count_this_month": user_doc.get("scan_count_this_month", 0),
+        "scan_quota_limit": SCAN_QUOTA_LIMIT,
+        "receipt_ocr_consent_at": user_doc.get("receipt_ocr_consent_at"),
     }
+    return result
+
+
+@app.post("/api/auth/me/receipt-ocr-consent")
+def grant_receipt_ocr_consent(current_user: User = Depends(get_current_user_with_access)):
+    """Marque le consent PIPEDA de l'utilisateur pour l'OCR de reçus."""
+    now = datetime.now(timezone.utc).isoformat()
+    db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"receipt_ocr_consent_at": now}}
+    )
+    return {"receipt_ocr_consent_at": now}
+
 
 # ─── Health ───
 @app.get("/")
