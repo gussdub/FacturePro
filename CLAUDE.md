@@ -147,6 +147,21 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Spec : `docs/superpowers/specs/2026-06-16-pnl-report-design.md`
   - Plan : `docs/superpowers/plans/2026-06-16-pnl-report.md`
 
+- **2026-06-17 — Export T2125 fin d'année (feature #10)**
+  - `GET /api/reports/t2125` (JSON), `/api/reports/t2125/pdf`, `/api/reports/t2125/csv` — auth requise
+  - Année civile forcée (UTC + 1 pour absorber timezone Quebec), base accrual/cash au choix, sole_proprietor seulement (corporation → message informatif renvoyant au P&L)
+  - **Mode EXCLUSIF anti-double-counting** : si `home_office_percentage > 0`, catégories `rent`/`utilities`/`insurance` retirées de leur ligne ARC et placées uniquement sur ligne 9945 avec % appliqué ; idem `vehicle_expenses` → ligne 9281
+  - Réutilise `_aggregate_pnl` (feature #5) via `_t2125_flatten_pnl_expenses` (expense_groups list → flat dict)
+  - 2 nouveaux champs Settings : `home_office_percentage`, `vehicle_business_percentage` (0-100, validation `math.isfinite`)
+  - PDF FR-CA (espace milliers, virgule décimale, `$` après) + CSV UTF-8 BOM (Excel FR)
+  - Sécurité : `html.escape` sur strings ReportLab, `_sanitize_cell` sur CSV, no-cache headers
+  - Onglet « Déclaration T2125 » dans ReportsPage à côté de TPS/TVQ + P&L
+  - Encadré statique « À compléter manuellement » dans PDF/UI : DPA ligne 9936, détails bureau à domicile (taxes/hypothèque/assurance), DPA véhicule sous-ligne 9281
+  - Limites v1 : T2 corporation hors scope, pas de DPA calculé, pas de capture détaillée bureau/véhicule, cash basis approximation issue_date, audit TPS/TVQ retiré (cf. onglet dédié feature #4)
+  - Tests : **57 nouveaux tests** (34 unitaires + 23 intégration), 0 régression
+  - Spec : `docs/superpowers/specs/2026-06-17-t2125-export-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-17-t2125-export.md`
+
 - **2026-06-17 — Capture reçus OCR Claude Vision (feature #8)**
   - Modèle : `claude-haiku-4-5-20251001` via SDK `anthropic` officiel (`anthropic>=0.40.0`)
   - Endpoint `POST /api/expenses/scan-receipt` : upload image → extraction structurée (vendor, date, montants, taxes, catégorie ARC) via tool_use forcé
