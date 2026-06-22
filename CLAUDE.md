@@ -147,6 +147,19 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Spec : `docs/superpowers/specs/2026-06-16-pnl-report-design.md`
   - Plan : `docs/superpowers/plans/2026-06-16-pnl-report.md`
 
+- **2026-06-17 — Rapprochement bancaire CSV (feature #7)**
+  - 3 collections : `bank_mappings` (max 20/user, POST + GET seuls en v1), `bank_imports` (anti-duplicate via sha256+user_id), `bank_transactions`
+  - POST `/api/bank/imports` accepte `dry_run=true` (preview 10 lignes) ou import complet + auto-match
+  - Algorithme : montant ±0,01 $, fenêtre 90j lookback / 3j lookahead (factures) ou ±3j (dépenses), score 1-3 ; auto-match seulement si UN candidat parfait (score 3)
+  - Mode parsing `single` ou `debit_credit`, sign_convention, 3 formats date, CSV injection sanitization (= + - @ tab strippés sur description seulement)
+  - Cascade : DELETE invoice/expense/payment libère les `bank_transactions` liées (`_release_bank_transaction`)
+  - Endpoints : /match (kind=invoice_payment|expense), /unmatch, /ignore, /unignore, /suggestions, /create-expense, /create-invoice, /close, DELETE imports avec force=true pour imports fermés
+  - Frontend : page dédiée Rapprochement (sidebar), wizard 2 étapes (upload + mapping), écran matching avec 5 états visuels (unmatched/matched/ignored/parse_error/closed) + filtres + progression live, 4 modals (BankSuggestionsActions, BankCreateExpenseModal, BankCreateInvoiceModal, BankManualSearchModal)
+  - Limites v1 : CAD seul, max 5 MB / 5 000 lignes, pas de PUT/DELETE mappings, pas de OFX, pas de split de transaction, pas de mobile responsive, create-invoice sans back-calcul de taxes (subtotal=total, user édite après)
+  - Tests : 26 unitaires + 21 intégration = **47 nouveaux tests**
+  - Spec : `docs/superpowers/specs/2026-06-17-bank-reconciliation-design.md`
+  - Plan : `docs/superpowers/plans/2026-06-17-bank-reconciliation.md`
+
 - **2026-06-17 — Acomptes et paiements partiels (feature #6)**
   - `payments[]` embarqué dans `invoices` (id, amount_cad, method, date, reference, created_at) — atomicité préférée à une collection séparée
   - `POST /api/invoices/{id}/payments` et `DELETE /api/invoices/{id}/payments/{pid}` recalculent `status` automatiquement (paid si solde ≤ 0, partial si paiements > 0, sinon `sent`)
