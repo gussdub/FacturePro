@@ -4,7 +4,7 @@ import stripe
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 import os
 import jwt
 import bcrypt
@@ -880,6 +880,48 @@ def _normalize_extraction(payload):
         except (ValueError, TypeError):
             out[field] = None
     return out
+
+
+SCAN_QUOTA_LIMIT = 200
+
+
+def _check_and_bill_scan(user_id):
+    """Atomique : reset le compteur si mois changé, puis l'incrémente.
+    Retourne le nouveau count (1..200). Lève HTTPException 429 si > 200
+    avec rollback decrement.
+
+    Aggregation pipeline (MongoDB 4.2+) garantit l'atomicité même sur des
+    requêtes concurrentes."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    now_iso = now.isoformat()
+    user_after = db.users.find_one_and_update(
+        {"id": user_id},
+        [{"$set": {
+            "scan_count_this_month": {
+                "$cond": [
+                    {"$lt": [{"$ifNull": ["$scan_quota_reset_at", ""]}, month_start]},
+                    1,
+                    {"$add": [{"$ifNull": ["$scan_count_this_month", 0]}, 1]},
+                ]
+            },
+            "scan_quota_reset_at": {
+                "$cond": [
+                    {"$lt": [{"$ifNull": ["$scan_quota_reset_at", ""]}, month_start]},
+                    now_iso,
+                    {"$ifNull": ["$scan_quota_reset_at", now_iso]},
+                ]
+            },
+        }}],
+        return_document=ReturnDocument.AFTER,
+    )
+    if user_after is None:
+        raise HTTPException(404, "User not found")
+    count = user_after.get("scan_count_this_month", 0)
+    if count > SCAN_QUOTA_LIMIT:
+        db.users.update_one({"id": user_id}, {"$inc": {"scan_count_this_month": -1}})
+        raise HTTPException(429, f"Quota mensuel atteint ({SCAN_QUOTA_LIMIT} scans)")
+    return count
 
 
 app = FastAPI(title="FacturePro API", version="2.0.0")

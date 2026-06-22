@@ -99,3 +99,76 @@ class TestNormalizeExtraction:
         first_code = EXPENSE_CATEGORIES[0]["code"]
         out = _normalize_extraction({"category_code": first_code})
         assert out["category_code"] == first_code
+
+
+import uuid
+from server import _check_and_bill_scan, db as server_db
+from fastapi import HTTPException
+from datetime import datetime, timezone
+
+
+class TestCheckAndBillScan:
+    def _setup_user(self, scan_count=0, reset_at=""):
+        uid = f"test-quota-{uuid.uuid4().hex[:8]}"
+        server_db.users.insert_one({
+            "id": uid,
+            "email": f"{uid}@test.test",
+            "scan_count_this_month": scan_count,
+            "scan_quota_reset_at": reset_at,
+        })
+        return uid
+
+    def _cleanup(self, uid):
+        server_db.users.delete_one({"id": uid})
+
+    def test_first_scan_ever_increments_to_1(self):
+        uid = self._setup_user(scan_count=0, reset_at="")
+        try:
+            count = _check_and_bill_scan(uid)
+            assert count == 1
+            user = server_db.users.find_one({"id": uid})
+            assert user["scan_count_this_month"] == 1
+            assert user["scan_quota_reset_at"]
+        finally:
+            self._cleanup(uid)
+
+    def test_increment_within_month(self):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        uid = self._setup_user(scan_count=5, reset_at=now_iso)
+        try:
+            count = _check_and_bill_scan(uid)
+            assert count == 6
+        finally:
+            self._cleanup(uid)
+
+    def test_reset_when_month_changed(self):
+        old_iso = "2020-01-15T00:00:00+00:00"
+        uid = self._setup_user(scan_count=199, reset_at=old_iso)
+        try:
+            count = _check_and_bill_scan(uid)
+            assert count == 1
+            user = server_db.users.find_one({"id": uid})
+            assert user["scan_count_this_month"] == 1
+        finally:
+            self._cleanup(uid)
+
+    def test_over_200_raises_429(self):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        uid = self._setup_user(scan_count=200, reset_at=now_iso)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _check_and_bill_scan(uid)
+            assert exc.value.status_code == 429
+            user = server_db.users.find_one({"id": uid})
+            assert user["scan_count_this_month"] == 200
+        finally:
+            self._cleanup(uid)
+
+    def test_at_limit_199_then_bill_passes(self):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        uid = self._setup_user(scan_count=199, reset_at=now_iso)
+        try:
+            count = _check_and_bill_scan(uid)
+            assert count == 200
+        finally:
+            self._cleanup(uid)
