@@ -2080,6 +2080,20 @@ def get_receipt_file(file_id: str,
     )
 
 
+@app.delete("/api/files/{file_id}")
+def delete_file_endpoint(file_id: str,
+                          current_user: User = Depends(get_current_user_with_access)):
+    """Soft-delete d'un fichier. Utilisé pour cleanup orphelins côté frontend
+    si l'utilisateur ferme le modal sans sauver."""
+    res = db.files.update_one(
+        {"id": file_id, "user_id": current_user.id, "is_deleted": False},
+        {"$set": {"is_deleted": True}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "File not found")
+    return Response(status_code=204)
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: User = Depends(get_current_user_with_access)):

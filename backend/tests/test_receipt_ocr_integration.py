@@ -161,3 +161,24 @@ class TestGetReceipt:
                     pass
         except Exception:
             pass
+
+
+class TestDeleteFile:
+    def test_delete_existing_soft_deletes(self, client, auth_headers, mock_extraction):
+        mock_extraction({"vendor": "X", "category_code": "other"})
+        jpeg = _make_minimal_jpeg()
+        scan = client.post("/api/expenses/scan-receipt",
+                           files={"file": ("a.jpg", jpeg, "image/jpeg")},
+                           headers=auth_headers).json()
+        fid = scan["file_id"]
+
+        r = client.delete(f"/api/files/{fid}", headers=auth_headers)
+        assert r.status_code == 204
+
+        # GET maintenant 404 (soft-deleted)
+        r2 = client.get(f"/api/receipts/{fid}", headers=auth_headers)
+        assert r2.status_code == 404
+
+    def test_delete_unknown_returns_404(self, client, auth_headers):
+        r = client.delete("/api/files/non-existent-id-xyz", headers=auth_headers)
+        assert r.status_code == 404
