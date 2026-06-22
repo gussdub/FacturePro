@@ -2261,6 +2261,7 @@ def create_expense(expense_data: dict, current_user: User = Depends(get_current_
         "status": "pending", "receipt_url": expense_data.get("receipt_url", ""),
         "notes": expense_data.get("notes", ""), "created_at": datetime.now(timezone.utc).isoformat()
     }
+    doc["receipt_file_id"] = expense_data.get("receipt_file_id")
     db.expenses.insert_one(doc)
     return clean_doc(doc)
 
@@ -2294,6 +2295,15 @@ def update_expense(expense_id: str, expense_data: dict, current_user: User = Dep
         stored_pct = current.get("deductible_percentage", 100)
         expense_data["amount_cad"] = new_amount_cad
         expense_data["deductible_amount"] = round(new_amount_cad * stored_pct / 100, 2)
+    # Feature #8 — swap receipt_file_id avec cascade soft-delete
+    if "receipt_file_id" in expense_data:
+        old_fid = current.get("receipt_file_id")
+        new_fid = expense_data.get("receipt_file_id")
+        if old_fid and old_fid != new_fid:
+            db.files.update_one(
+                {"id": old_fid, "user_id": current_user.id},
+                {"$set": {"is_deleted": True}},
+            )
     db.expenses.update_one({"id": expense_id, "user_id": current_user.id}, {"$set": expense_data})
     return clean_doc(db.expenses.find_one({"id": expense_id}, {"_id": 0}))
 
@@ -2309,6 +2319,12 @@ def delete_expense(expense_id: str, current_user: User = Depends(get_current_use
     exp = db.expenses.find_one({"id": expense_id, "user_id": current_user.id}, {"_id": 0})
     if exp and exp.get("bank_transaction_id"):
         _release_bank_transaction(exp["bank_transaction_id"], current_user.id)
+    # Feature #8 — cascade soft-delete du receipt file
+    if exp and exp.get("receipt_file_id"):
+        db.files.update_one(
+            {"id": exp["receipt_file_id"], "user_id": current_user.id},
+            {"$set": {"is_deleted": True}},
+        )
     result = db.expenses.delete_one({"id": expense_id, "user_id": current_user.id})
     if result.deleted_count == 0:
         raise HTTPException(404, "Expense not found")

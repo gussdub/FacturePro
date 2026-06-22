@@ -182,3 +182,72 @@ class TestDeleteFile:
     def test_delete_unknown_returns_404(self, client, auth_headers):
         r = client.delete("/api/files/non-existent-id-xyz", headers=auth_headers)
         assert r.status_code == 404
+
+
+class TestExpenseReceiptIntegration:
+    _cleanup_expenses = set()
+    _cleanup_files = set()
+
+    def _create_scan(self, client, auth_headers, mock_extraction):
+        mock_extraction({"vendor": "X", "category_code": "other"})
+        jpeg = _make_minimal_jpeg()
+        return client.post("/api/expenses/scan-receipt",
+                            files={"file": ("a.jpg", jpeg, "image/jpeg")},
+                            headers=auth_headers).json()
+
+    def test_post_expense_with_receipt_persists_link(self, client, auth_headers, mock_extraction):
+        scan = self._create_scan(client, auth_headers, mock_extraction)
+        fid = scan["file_id"]
+        TestExpenseReceiptIntegration._cleanup_files.add(fid)
+
+        r = client.post("/api/expenses", headers=auth_headers, json={
+            "vendor": "X", "expense_date": "2099-06-15",
+            "amount": 100.00, "currency": "CAD",
+            "category_code": "other",
+            "receipt_file_id": fid,
+        })
+        assert r.status_code in (200, 201), r.text
+        exp = r.json()
+        assert exp.get("receipt_file_id") == fid
+        TestExpenseReceiptIntegration._cleanup_expenses.add(exp["id"])
+
+    def test_put_expense_swap_receipt_soft_deletes_old(self, client, auth_headers, mock_extraction):
+        s1 = self._create_scan(client, auth_headers, mock_extraction)
+        s2 = self._create_scan(client, auth_headers, mock_extraction)
+        TestExpenseReceiptIntegration._cleanup_files.update([s1["file_id"], s2["file_id"]])
+
+        exp = client.post("/api/expenses", headers=auth_headers, json={
+            "vendor": "Y", "expense_date": "2099-06-16",
+            "amount": 50.00, "currency": "CAD",
+            "category_code": "other",
+            "receipt_file_id": s1["file_id"],
+        }).json()
+        TestExpenseReceiptIntegration._cleanup_expenses.add(exp["id"])
+
+        r = client.put(f"/api/expenses/{exp['id']}", headers=auth_headers, json={
+            "receipt_file_id": s2["file_id"],
+        })
+        assert r.status_code == 200
+
+        # s1 soft-deleted
+        g = client.get(f"/api/receipts/{s1['file_id']}", headers=auth_headers)
+        assert g.status_code == 404
+
+    def test_delete_expense_with_receipt_soft_deletes_file(self, client, auth_headers, mock_extraction):
+        scan = self._create_scan(client, auth_headers, mock_extraction)
+        fid = scan["file_id"]
+        TestExpenseReceiptIntegration._cleanup_files.add(fid)
+
+        exp = client.post("/api/expenses", headers=auth_headers, json={
+            "vendor": "Z", "expense_date": "2099-06-17",
+            "amount": 25.00, "currency": "CAD",
+            "category_code": "other",
+            "receipt_file_id": fid,
+        }).json()
+        TestExpenseReceiptIntegration._cleanup_expenses.add(exp["id"])
+
+        r = client.delete(f"/api/expenses/{exp['id']}", headers=auth_headers)
+        assert r.status_code in (200, 204)
+
+        g = client.get(f"/api/receipts/{fid}", headers=auth_headers)
+        assert g.status_code == 404
