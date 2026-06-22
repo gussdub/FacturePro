@@ -273,6 +273,48 @@ const SettingsPage = () => {
               <option value="NT">Territoires du Nord-Ouest</option>
             </select>
           </div>
+          <div style={{ marginTop: 16 }}>
+            <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+              Bureau à domicile — % surface utilisée pour l'entreprise
+            </label>
+            <input
+              type="number"
+              min="0" max="100" step="0.1"
+              value={settings.home_office_percentage ?? 0}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSettings(prev => ({ ...prev,
+                  home_office_percentage: v === '' ? 0 : parseFloat(v) || 0 }));
+              }}
+              placeholder="0"
+              style={{ width: 120, padding: 8, border: '1px solid #d1d5db',
+                       borderRadius: 6, fontSize: 14 }}
+            />
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+              Ex: bureau de 15 m² dans une maison de 100 m² = 15. Mettre 0 si bureau commercial.
+            </div>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
+              Véhicule — % utilisation commerciale
+            </label>
+            <input
+              type="number"
+              min="0" max="100" step="0.1"
+              value={settings.vehicle_business_percentage ?? 0}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSettings(prev => ({ ...prev,
+                  vehicle_business_percentage: v === '' ? 0 : parseFloat(v) || 0 }));
+              }}
+              placeholder="0"
+              style={{ width: 120, padding: 8, border: '1px solid #d1d5db',
+                       borderRadius: 6, fontSize: 14 }}
+            />
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+              Ex: 12 000 km commerciaux / 30 000 km total = 40. Mettre 0 si véhicule purement commercial.
+            </div>
+          </div>
         </div>
 
         {/* Tax Numbers */}
