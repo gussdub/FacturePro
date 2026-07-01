@@ -1296,7 +1296,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)) -> CurrentUser:
     """Résout le JWT → user → organisation → rôle → permissions.
-    Vérifie l'abonnement au niveau org. Retourne un CurrentUser complet."""
+    Retourne un CurrentUser complet.
+
+    NOTE: cette dépendance NE VÉRIFIE PAS l'abonnement (pas de 402). Le gate
+    de facturation n'est pas la responsabilité de cette dépendance — sinon
+    on lock out les endpoints /api/auth/me, /api/subscription/current et
+    /api/subscription/create-checkout qui sont exactement ceux dont l'utilisateur
+    expiré a besoin pour renouveler. Utiliser require_subscription() en dépendance
+    additionnelle sur les endpoints métier qui doivent gated."""
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
         user_id = payload.get("sub")
@@ -1310,7 +1317,6 @@ def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Dep
         raise HTTPException(401, "User not found or inactive")
 
     org = _get_org_for_user(user)
-    _check_subscription_active(org, user)
 
     role = user.get("role", "owner")
     return CurrentUser(
@@ -1321,6 +1327,20 @@ def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Dep
         permissions=_resolve_permissions(org, role),
         is_exempt=user["email"] in EXEMPT_USERS,
     )
+
+
+def require_subscription(current_user: CurrentUser = Depends(get_current_user_with_access)) -> CurrentUser:
+    """Dépendance additionnelle pour gated les endpoints métier.
+    Vérifie que l'abonnement est actif (raise 402 sinon). Ne pas utiliser
+    sur /api/auth/me ni les endpoints /api/subscription/* (l'utilisateur expiré
+    doit pouvoir voir son état et payer)."""
+    user = db.users.find_one({"id": current_user.id}, {"_id": 0})
+    if not user:
+        raise HTTPException(401, "User not found")
+    org = _get_org_for_user(user)
+    _check_subscription_active(org, user)
+    return current_user
+
 
 @app.get("/api/auth/me")
 def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
