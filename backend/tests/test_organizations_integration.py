@@ -1363,3 +1363,137 @@ class TestPermissionEnforcement:
             assert "expenses:write" not in body["current_user"]["permissions"]
         finally:
             self._cleanup_user(email)
+
+
+# ─── Task 17 : cross-org isolation, dynamic perms, migration ───
+
+class TestCrossOrgIsolation:
+    def _setup_second_org(self):
+        """Crée un second user + org isolé, retourne son user_id + org_id."""
+        uid = f"iso-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        server_module.db.organizations.insert_one({
+            "id": org_id, "name": "IsoOrg", "owner_id": uid,
+            "subscription_status": "trial",
+            "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=100)).isoformat(),
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.users.insert_one({
+            "id": uid, "email": f"{uid}@iso.test",
+            "company_name": "IsoOrg",
+            "is_active": True, "organization_id": org_id, "role": "owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.user_passwords.insert_one({
+            "user_id": uid,
+            "hashed_password": server_module.hash_password("isopass"),
+        })
+        return uid, org_id
+
+    def _cleanup_second_org(self, uid, org_id):
+        server_module.db.users.delete_one({"id": uid})
+        server_module.db.user_passwords.delete_one({"user_id": uid})
+        server_module.db.organizations.delete_one({"id": org_id})
+        # Cleanup any created business docs
+        for coll in ["invoices", "expenses", "quotes", "clients", "products"]:
+            server_module.db[coll].delete_many({"organization_id": org_id})
+
+    def _iso_headers(self, client, email):
+        r = client.post("/api/auth/login",
+                        json={"email": email, "password": "isopass"})
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    def test_iso_user_cannot_see_owner_expenses(self, client, owner_headers):
+        # Owner creates an expense
+        r = client.post("/api/expenses", headers=owner_headers, json={
+            "vendor": "OwnerVendor", "amount_cad": 42.0,
+            "date": "2026-06-01", "category_code": "other",
+        })
+        assert r.status_code in (200, 201)
+        expense_id = r.json().get("id")
+
+        # Second org user cannot list or fetch this expense
+        uid, org_id = self._setup_second_org()
+        try:
+            iso_headers = self._iso_headers(client, f"{uid}@iso.test")
+            r2 = client.get("/api/expenses", headers=iso_headers)
+            assert r2.status_code == 200
+            iso_expenses = r2.json()
+            assert not any(e.get("id") == expense_id for e in iso_expenses)
+        finally:
+            client.delete(f"/api/expenses/{expense_id}", headers=owner_headers)
+            self._cleanup_second_org(uid, org_id)
+
+    def test_iso_user_cannot_see_owner_invoices(self, client, owner_headers):
+        uid, org_id = self._setup_second_org()
+        try:
+            iso_headers = self._iso_headers(client, f"{uid}@iso.test")
+            # Owner's invoices should NOT appear in iso user's list
+            r_owner = client.get("/api/invoices", headers=owner_headers)
+            r_iso = client.get("/api/invoices", headers=iso_headers)
+            owner_invoice_ids = {i["id"] for i in r_owner.json()}
+            iso_invoice_ids = {i["id"] for i in r_iso.json()}
+            assert owner_invoice_ids.isdisjoint(iso_invoice_ids)
+        finally:
+            self._cleanup_second_org(uid, org_id)
+
+
+class TestPermissionsDynamic:
+    def test_permissions_reflect_matrix_change_immediately(self, client,
+                                                             owner_headers,
+                                                             monkeypatch):
+        """Test critique : si owner édite la matrice, le viewer perd/gagne
+        les perms au prochain call — pas de cache."""
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = f"dyn-{uuid.uuid4().hex[:8]}@test.local"
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": "viewer"})
+        token = server_module.db.invitations.find_one({"id": r.json()["id"]})["token"]
+        r2 = client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "dynpass",
+            "pipeda_consent": True,
+        })
+        viewer_headers = {"Authorization": f"Bearer {r2.json()['access_token']}"}
+
+        try:
+            # Initially viewer has expenses:read
+            r3 = client.get("/api/expenses", headers=viewer_headers)
+            assert r3.status_code == 200
+
+            # Owner removes expenses:read from viewer matrix
+            client.put("/api/org/role-permissions", headers=owner_headers, json={
+                "role": "viewer",
+                "permissions": ["invoices:read"],  # only invoices, no expenses
+            })
+
+            # Same JWT — but next call must reflect the new matrix (no cache)
+            r4 = client.get("/api/expenses", headers=viewer_headers)
+            assert r4.status_code == 403
+
+            # Restore default matrix
+            client.put("/api/org/role-permissions", headers=owner_headers, json={
+                "role": "viewer",
+                "permissions": server_module.DEFAULT_ROLE_PERMISSIONS["viewer"],
+            })
+        finally:
+            user = server_module.db.users.find_one({"email": email})
+            if user:
+                server_module.db.users.delete_one({"id": user["id"]})
+                server_module.db.user_passwords.delete_one({"user_id": user["id"]})
+
+
+class TestMigrationIntegration:
+    def test_migration_at_startup_is_idempotent(self, client, owner_headers):
+        # gussdub should have organization_id set after startup
+        r = client.get("/api/org/me", headers=owner_headers)
+        assert r.status_code == 200
+        org_id = r.json()["organization"]["id"]
+
+        # Re-run migration manually
+        server_module.migrate_organizations_v1()
+
+        # gussdub's org_id should be unchanged
+        r2 = client.get("/api/org/me", headers=owner_headers)
+        assert r2.json()["organization"]["id"] == org_id
