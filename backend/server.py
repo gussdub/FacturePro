@@ -1467,6 +1467,140 @@ def update_role_permissions(
     return {"role": role, "permissions": permissions}
 
 
+# ─── Task 5 : Invitations ───
+
+import secrets as _secrets
+import re as _re
+
+
+_EMAIL_RE = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _send_invitation_email(to_email: str, org_name: str, token: str):
+    """Envoie l'email d'invitation via Resend. Retourne True/False sans lever.
+    Réutilise le pattern existant du fichier (RESEND_API_KEY, SENDER_EMAIL)."""
+    try:
+        import resend
+        resend.api_key = os.environ.get("RESEND_API_KEY")
+        sender = os.environ.get("SENDER_EMAIL", "noreply@facturepro.ca")
+        link = f"https://facturepro.ca/accept-invite?token={token}"
+        html = f"""
+        <p>Bonjour,</p>
+        <p>Vous êtes invité(e) à rejoindre <strong>{org_name}</strong> sur FacturePro.</p>
+        <p><a href="{link}" style="background:#00A08C;color:#fff;padding:10px 20px;
+           text-decoration:none;border-radius:6px;display:inline-block;">
+           Accepter l'invitation</a></p>
+        <p style="color:#6b7280;font-size:12px">Ce lien expire dans 7 jours.
+           Si le bouton ne fonctionne pas, copie ce lien : <br/>{link}</p>
+        """
+        resend.Emails.send({
+            "from": sender,
+            "to": to_email,
+            "subject": f"Invitation à rejoindre {org_name} sur FacturePro",
+            "html": html,
+        })
+        return True
+    except Exception as e:
+        print(f"[invitations] Resend error type={type(e).__name__}")  # no secrets in log
+        return False
+
+
+@app.post("/api/org/invitations", status_code=201)
+def create_invitation(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    email = (body.get("email") or "").strip().lower()
+    role = body.get("role")
+    if not email or not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Email invalide")
+    if role not in ("accountant", "viewer"):
+        raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
+
+    # Check no duplicate pending invitation in this org
+    existing = db.invitations.find_one({
+        "organization_id": current_user.organization_id,
+        "email": email,
+        "status": "pending",
+    })
+    if existing:
+        raise HTTPException(409, "Une invitation en attente existe déjà pour cet email")
+
+    # Check email is not already a member of this org
+    already_member = db.users.find_one({
+        "email": email,
+        "organization_id": current_user.organization_id,
+    })
+    if already_member:
+        raise HTTPException(409, "Cet utilisateur est déjà membre de l'organisation")
+
+    invitation_id = str(uuid.uuid4())
+    token = _secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    expires_at = (now + timedelta(days=7)).isoformat()
+
+    inv_doc = {
+        "id": invitation_id,
+        "organization_id": current_user.organization_id,
+        "email": email,
+        "role": role,
+        "token": token,
+        "expires_at": expires_at,
+        "status": "pending",
+        "invited_by_user_id": current_user.id,
+        "created_at": now.isoformat(),
+        "consumed_at": None,
+    }
+    db.invitations.insert_one(inv_doc)
+
+    # Envoi email — rollback si échec
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    org_name = (org or {}).get("name") or "FacturePro"
+    if not _send_invitation_email(email, org_name, token):
+        db.invitations.delete_one({"id": invitation_id})
+        raise HTTPException(502, "Envoi de l'email d'invitation impossible — réessaie plus tard")
+
+    return {
+        "id": invitation_id,
+        "email": email,
+        "role": role,
+        "expires_at": expires_at,
+    }
+
+
+@app.get("/api/org/invitations")
+def list_invitations(
+    status: str = "pending",
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    query = {"organization_id": current_user.organization_id}
+    if status != "all":
+        query["status"] = status
+    cursor = db.invitations.find(query, {"_id": 0, "token": 0}) \
+                            .sort("created_at", -1)
+    return list(cursor)
+
+
+@app.delete("/api/org/invitations/{invitation_id}", status_code=204)
+def revoke_invitation(
+    invitation_id: str,
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    inv = db.invitations.find_one({
+        "id": invitation_id,
+        "organization_id": current_user.organization_id,
+    })
+    if not inv:
+        raise HTTPException(404, "Invitation introuvable")
+    if inv["status"] == "accepted":
+        raise HTTPException(400, "Impossible de révoquer une invitation déjà acceptée")
+    db.invitations.update_one(
+        {"id": invitation_id},
+        {"$set": {"status": "revoked"}}
+    )
+    return
+
+
 # ─── Health ───
 @app.get("/")
 def root():

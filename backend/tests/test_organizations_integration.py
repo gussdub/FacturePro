@@ -312,3 +312,102 @@ class TestRolePermissionsEndpoint:
                        json={"role": "accountant",
                              "permissions": list(server_module.PERMISSIONS_EDITABLE)})
         assert r.status_code == 200
+
+
+# ─── Task 5 : Invitations ───
+
+import re
+
+
+class TestInvitations:
+    @pytest.fixture
+    def cleanup_invitations(self, client, owner_headers):
+        """Cleanup les invitations pending de tests précédents."""
+        r = client.get("/api/org/invitations?status=all", headers=owner_headers)
+        for inv in r.json():
+            if inv.get("email", "").startswith("invite-test-"):
+                client.delete(f"/api/org/invitations/{inv['id']}",
+                              headers=owner_headers)
+        yield
+
+    def _random_email(self):
+        return f"invite-test-{uuid.uuid4().hex[:8]}@example.com"
+
+    def test_create_invitation_happy_path(self, client, owner_headers,
+                                           cleanup_invitations, monkeypatch):
+        # Mock Resend to avoid real emails
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = self._random_email()
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": "accountant"})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["email"] == email.lower()
+        assert body["role"] == "accountant"
+        assert "id" in body
+        assert "expires_at" in body
+
+    def test_list_invitations_pending(self, client, owner_headers,
+                                        cleanup_invitations, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = self._random_email()
+        client.post("/api/org/invitations", headers=owner_headers,
+                    json={"email": email, "role": "viewer"})
+        r = client.get("/api/org/invitations", headers=owner_headers)
+        assert r.status_code == 200
+        pending = [i for i in r.json() if i["email"] == email.lower()]
+        assert len(pending) == 1
+        assert pending[0]["status"] == "pending"
+
+    def test_invalid_role_rejected(self, client, owner_headers):
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": "x@y.com", "role": "owner"})
+        assert r.status_code == 400
+
+    def test_invalid_email_rejected(self, client, owner_headers):
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": "not-an-email", "role": "viewer"})
+        assert r.status_code == 400
+
+    def test_duplicate_pending_rejected(self, client, owner_headers,
+                                          cleanup_invitations, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = self._random_email()
+        r1 = client.post("/api/org/invitations", headers=owner_headers,
+                         json={"email": email, "role": "accountant"})
+        assert r1.status_code == 201
+        r2 = client.post("/api/org/invitations", headers=owner_headers,
+                         json={"email": email, "role": "accountant"})
+        assert r2.status_code == 409
+
+    def test_already_member_rejected(self, client, owner_headers, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        # gussdub@gmail.com is already owner
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": "gussdub@gmail.com", "role": "accountant"})
+        assert r.status_code == 409
+
+    def test_revoke_pending_invitation(self, client, owner_headers,
+                                         cleanup_invitations, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = self._random_email()
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": "viewer"})
+        inv_id = r.json()["id"]
+        r2 = client.delete(f"/api/org/invitations/{inv_id}", headers=owner_headers)
+        assert r2.status_code == 204
+        # Verify status changed (not hard-deleted)
+        r3 = client.get("/api/org/invitations?status=all", headers=owner_headers)
+        found = next((i for i in r3.json() if i["id"] == inv_id), None)
+        assert found is not None
+        assert found["status"] == "revoked"
+
+    def test_revoke_unknown_invitation_returns_404(self, client, owner_headers):
+        r = client.delete(f"/api/org/invitations/{uuid.uuid4()}",
+                          headers=owner_headers)
+        assert r.status_code == 404
