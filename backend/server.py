@@ -2496,8 +2496,12 @@ def get_bank_import(import_id: str, page: int = 1, per_page: int = 100,
 
 # ─── Bank Transaction Action Endpoints (T8) ───
 
-def _get_tx_or_404(tx_id, user_id):
-    tx = db.bank_transactions.find_one({"id": tx_id, "user_id": user_id}, {"_id": 0})
+def _get_tx_or_404(tx_id, scope):
+    """Fetch a bank transaction scoped by `scope` (a Mongo filter dict).
+
+    `scope` peut etre `_org_scope(current_user)` (recommande pour endpoints multi-tenant)
+    ou `{"user_id": current_user.id}` (legacy, pour endpoints WRITE Task 10 pas encore migres)."""
+    tx = db.bank_transactions.find_one({"id": tx_id, **scope}, {"_id": 0})
     if not tx:
         raise HTTPException(404, "Transaction not found")
     return tx
@@ -2506,7 +2510,7 @@ def _get_tx_or_404(tx_id, user_id):
 @app.post("/api/bank/transactions/{tx_id}/match")
 def match_bank_transaction(tx_id: str, body: dict,
                             current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
     kind = body.get("kind")
     target_id = body.get("target_id")
     if not target_id:
@@ -2517,7 +2521,7 @@ def match_bank_transaction(tx_id: str, body: dict,
 @app.post("/api/bank/transactions/{tx_id}/unmatch")
 def unmatch_bank_transaction(tx_id: str,
                               current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
     if tx.get("status") != "matched":
         raise HTTPException(409, "Transaction is not matched")
     if tx.get("match_kind") == "invoice_payment":
@@ -2545,7 +2549,7 @@ def unmatch_bank_transaction(tx_id: str,
 @app.post("/api/bank/transactions/{tx_id}/ignore")
 def ignore_bank_transaction(tx_id: str,
                              current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
     if tx.get("status") == "matched":
         raise HTTPException(409, "Cannot ignore a matched transaction; unmatch first")
     db.bank_transactions.update_one(
@@ -2557,7 +2561,7 @@ def ignore_bank_transaction(tx_id: str,
 @app.post("/api/bank/transactions/{tx_id}/unignore")
 def unignore_bank_transaction(tx_id: str,
                                current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
     if tx.get("status") != "ignored":
         raise HTTPException(409, "Transaction is not ignored")
     db.bank_transactions.update_one(
@@ -2569,7 +2573,8 @@ def unignore_bank_transaction(tx_id: str,
 @app.get("/api/bank/transactions/{tx_id}/suggestions")
 def get_bank_suggestions(tx_id: str,
                           current_user: CurrentUser = Depends(require_permission("bank:read"))):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    scope = _org_scope(current_user)
+    tx = _get_tx_or_404(tx_id, scope)
     if tx.get("date") is None or tx.get("amount_cad") is None:
         return {"invoices": [], "expenses": []}
     tx_date = _parse_iso_date(tx["date"])
@@ -2580,7 +2585,7 @@ def get_bank_suggestions(tx_id: str,
     if tx["amount_cad"] > 0:
         cands = []
         for inv in db.invoices.find(
-                {"user_id": current_user.id,
+                {**scope,
                  "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}):
             outstanding = _get_invoice_outstanding(inv)
             if abs(outstanding - target) > 0.01:
@@ -2589,7 +2594,7 @@ def get_bank_suggestions(tx_id: str,
             if not issue or not (tx_date - timedelta(days=90) <= issue <= tx_date + timedelta(days=3)):
                 continue
             client = db.clients.find_one(
-                {"id": inv.get("client_id"), "user_id": current_user.id},
+                {"id": inv.get("client_id"), **scope},
                 {"_id": 0, "name": 1}) or {}
             client_name = (client.get("name") or "").lower()
             score, ddiff, adiff = _score_invoice_candidate(
@@ -2601,7 +2606,7 @@ def get_bank_suggestions(tx_id: str,
     elif tx["amount_cad"] < 0:
         cands = []
         for exp in db.expenses.find(
-                {"user_id": current_user.id, "bank_transaction_id": None}, {"_id": 0}):
+                {**scope, "bank_transaction_id": None}, {"_id": 0}):
             if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
                 continue
             exp_date = _parse_iso_date(exp.get("date"))
@@ -2619,7 +2624,7 @@ def get_bank_suggestions(tx_id: str,
 @app.post("/api/bank/transactions/{tx_id}/create-expense", status_code=201)
 def create_expense_from_tx(tx_id: str, body: dict,
                             current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
     if tx.get("status") != "unmatched":
         raise HTTPException(409, "Transaction already matched or ignored")
     if tx.get("amount_cad") is None or tx.get("date") is None:
@@ -2664,7 +2669,7 @@ def create_expense_from_tx(tx_id: str, body: dict,
 @app.post("/api/bank/transactions/{tx_id}/create-invoice", status_code=201)
 def create_invoice_from_tx(tx_id: str, body: dict,
                             current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, current_user.id)
+    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
     if tx.get("status") != "unmatched":
         raise HTTPException(409, "Transaction already matched or ignored")
     if tx.get("amount_cad") is None or tx.get("date") is None:
