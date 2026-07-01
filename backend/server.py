@@ -891,18 +891,22 @@ SCAN_QUOTA_LIMIT = 200
 import anthropic
 
 
-def _check_and_bill_scan(user_id):
+def _check_and_bill_scan(organization_id):
     """Atomique : reset le compteur si mois changé, puis l'incrémente.
     Retourne le nouveau count (1..200). Lève HTTPException 429 si > 200
     avec rollback decrement.
+
+    Feature #11 — le quota est partagé entre tous les membres d'une même
+    organisation : on écrit désormais sur `db.organizations` (source de
+    vérité multi-tenant) plutôt que sur `db.users`.
 
     Aggregation pipeline (MongoDB 4.2+) garantit l'atomicité même sur des
     requêtes concurrentes."""
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
     now_iso = now.isoformat()
-    user_after = db.users.find_one_and_update(
-        {"id": user_id},
+    org_after = db.organizations.find_one_and_update(
+        {"id": organization_id},
         [{"$set": {
             "scan_count_this_month": {
                 "$cond": [
@@ -921,11 +925,11 @@ def _check_and_bill_scan(user_id):
         }}],
         return_document=ReturnDocument.AFTER,
     )
-    if user_after is None:
-        raise HTTPException(404, "User not found")
-    count = user_after.get("scan_count_this_month", 0)
+    if org_after is None:
+        raise HTTPException(404, "Organization not found")
+    count = org_after.get("scan_count_this_month", 0)
     if count > SCAN_QUOTA_LIMIT:
-        db.users.update_one({"id": user_id}, {"$inc": {"scan_count_this_month": -1}})
+        db.organizations.update_one({"id": organization_id}, {"$inc": {"scan_count_this_month": -1}})
         raise HTTPException(429, f"Quota mensuel atteint ({SCAN_QUOTA_LIMIT} scans)")
     return count
 
@@ -1382,9 +1386,12 @@ def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
         "subscription_status": "active" if is_exempt else sub_status,
         "trial_end_date": trial_end,
         "is_exempt": is_exempt,
-        # scan_count_this_month reste sur user_doc (transition — _check_and_bill_scan
-        # écrit sur db.users pour l'instant ; migration vers org prévue plus tard)
-        "scan_count_this_month": user_doc.get("scan_count_this_month", 0),
+        # Feature #11 — quota scan partagé au niveau org (source de vérité).
+        # Fallback sur user_doc pour les users pre-migration sans org sync.
+        "scan_count_this_month": org.get(
+            "scan_count_this_month",
+            user_doc.get("scan_count_this_month", 0),
+        ),
         "scan_quota_limit": SCAN_QUOTA_LIMIT,
         "receipt_ocr_consent_at": user_doc.get("receipt_ocr_consent_at"),
     }
@@ -2721,14 +2728,17 @@ async def scan_receipt(
             raise HTTPException(422, str(e))
 
     # 4. Quota check + bill (atomique)
-    scan_count = _check_and_bill_scan(current_user.id)
+    scan_count = _check_and_bill_scan(current_user.organization_id)
 
     # 5. Appel Anthropic
     try:
         raw_extraction = _call_anthropic_extract(raw, mime)
     except HTTPException:
-        # rollback quota
-        db.users.update_one({"id": current_user.id}, {"$inc": {"scan_count_this_month": -1}})
+        # rollback quota (org-scoped depuis feature #11)
+        db.organizations.update_one(
+            {"id": current_user.organization_id},
+            {"$inc": {"scan_count_this_month": -1}},
+        )
         raise
 
     # 6. Normalize
@@ -4161,10 +4171,13 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: User = Depends
 # ─── Stripe Subscription ───
 @app.get("/api/subscription/current")
 def get_subscription(current_user: User = Depends(get_current_user_with_access)):
+    # Feature #11 — la source de vérité pour l'abonnement est l'organisation.
     user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0})
-    sub_status = user_doc.get("subscription_status", "trial")
-    trial_end = user_doc.get("trial_end_date")
-    is_exempt = user_doc.get("email") in EXEMPT_USERS
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0}) \
+          or _synthesize_solo_org_from_user(user_doc)
+    sub_status = org.get("subscription_status", "trial")
+    trial_end = org.get("trial_ends_at")
+    is_exempt = (user_doc or {}).get("email") in EXEMPT_USERS
     if sub_status == "trial" and trial_end and not is_exempt:
         try:
             trial_end_dt = datetime.fromisoformat(trial_end)
@@ -4186,7 +4199,11 @@ def get_subscription(current_user: User = Depends(get_current_user_with_access))
 
 
 @app.post("/api/subscription/create-checkout")
-def create_subscription_checkout(body: dict, request: Request, current_user: User = Depends(get_current_user_with_access)):
+def create_subscription_checkout(
+    body: dict,
+    request: Request,
+    current_user: CurrentUser = Depends(require_permission("billing:manage")),
+):
     if not STRIPE_API_KEY:
         raise HTTPException(500, "Stripe non configure")
     origin_url = body.get("origin_url", "")
@@ -4209,6 +4226,9 @@ def create_subscription_checkout(body: dict, request: Request, current_user: Use
         cancel_url=cancel_url,
         metadata={
             "user_id": current_user.id,
+            # Feature #11 — carry organization_id through Stripe so the webhook
+            # can route the paid status to the correct org (multi-tenant SoT).
+            "organization_id": current_user.organization_id,
             "email": current_user.email,
             "plan": "facturepro_monthly"
         }
@@ -4216,6 +4236,7 @@ def create_subscription_checkout(body: dict, request: Request, current_user: Use
     tx_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
         "session_id": session.id,
         "amount": SUBSCRIPTION_PRICE_CAD,
         "currency": "cad",
@@ -4229,7 +4250,11 @@ def create_subscription_checkout(body: dict, request: Request, current_user: Use
 
 
 @app.get("/api/subscription/checkout-status/{session_id}")
-def check_subscription_status(session_id: str, request: Request, current_user: User = Depends(get_current_user_with_access)):
+def check_subscription_status(
+    session_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(require_permission("billing:manage")),
+):
     if not STRIPE_API_KEY:
         raise HTTPException(500, "Stripe non configure")
     session = stripe.checkout.Session.retrieve(session_id)
@@ -4244,16 +4269,22 @@ def check_subscription_status(session_id: str, request: Request, current_user: U
             }}
         )
         now_iso = datetime.now(timezone.utc).isoformat()
+        # Feature #11 — l'organisation est la source de vérité multi-tenant.
+        # On persiste stripe_customer_id (utile pour un futur customer portal).
+        org_update = {
+            "subscription_status": "active",
+            "subscription_started_at": now_iso,
+        }
+        customer_id = getattr(session, "customer", None)
+        if customer_id:
+            org_update["stripe_customer_id"] = customer_id
+        db.organizations.update_one(
+            {"id": current_user.organization_id},
+            {"$set": org_update},
+        )
+        # Miroir legacy sur db.users (transition — 4 semaines)
         db.users.update_one(
             {"id": current_user.id},
-            {"$set": {
-                "subscription_status": "active",
-                "subscription_started_at": now_iso
-            }}
-        )
-        # Feature #11 — miroir sur l'organisation (source de vérité multi-tenant)
-        db.organizations.update_one(
-            {"owner_id": current_user.id},
             {"$set": {
                 "subscription_status": "active",
                 "subscription_started_at": now_iso
@@ -4290,16 +4321,37 @@ async def stripe_webhook(request: Request):
                         {"session_id": session_id},
                         {"$set": {"payment_status": "paid", "status": "complete", "paid_at": datetime.now(timezone.utc).isoformat()}}
                     )
-                    user_id = tx.get("user_id") or (session_data.get("metadata") or {}).get("user_id")
+                    metadata = session_data.get("metadata") or {}
+                    user_id = tx.get("user_id") or metadata.get("user_id")
+                    # Feature #11 — route paid status to the org (source of vérité
+                    # multi-tenant). Preferred key : metadata.organization_id,
+                    # fallback tx.organization_id, fallback lookup via user_id.
+                    organization_id = (
+                        metadata.get("organization_id")
+                        or tx.get("organization_id")
+                    )
+                    if not organization_id and user_id:
+                        user_doc = db.users.find_one(
+                            {"id": user_id}, {"_id": 0, "organization_id": 1}
+                        )
+                        if user_doc:
+                            organization_id = user_doc.get("organization_id")
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    org_update = {
+                        "subscription_status": "active",
+                        "subscription_started_at": now_iso,
+                    }
+                    customer_id = session_data.get("customer")
+                    if customer_id:
+                        org_update["stripe_customer_id"] = customer_id
+                    if organization_id:
+                        db.organizations.update_one(
+                            {"id": organization_id},
+                            {"$set": org_update},
+                        )
                     if user_id:
-                        now_iso = datetime.now(timezone.utc).isoformat()
                         db.users.update_one(
                             {"id": user_id},
-                            {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
-                        )
-                        # Feature #11 — miroir sur l'organisation (source de vérité multi-tenant)
-                        db.organizations.update_one(
-                            {"owner_id": user_id},
                             {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
                         )
         return {"status": "ok"}
@@ -4310,26 +4362,40 @@ async def stripe_webhook(request: Request):
 
 @app.post("/api/subscription/check-trial-expiry")
 async def check_trial_expiry(request: Request):
-    """Check for users whose trial expires in 3 days and send them a reminder email."""
+    """Check for orgs whose trial expires in 3 days and email their owner.
+    Feature #11 — l'organisation est la source de vérité de l'abonnement ;
+    on itère donc sur `db.organizations` (subscription_status='trial') et
+    on cible l'owner pour l'email."""
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email non configure")
     now = datetime.now(timezone.utc)
     three_days = now + timedelta(days=3)
     users_to_notify = []
-    all_trial_users = list(db.users.find({"subscription_status": "trial"}, {"_id": 0}))
-    for u in all_trial_users:
-        if u.get("email") in EXEMPT_USERS:
-            continue
-        trial_end = u.get("trial_end_date")
+    all_trial_orgs = list(db.organizations.find(
+        {"subscription_status": "trial"}, {"_id": 0}
+    ))
+    for org in all_trial_orgs:
+        trial_end = org.get("trial_ends_at")
         if not trial_end:
+            continue
+        owner = db.users.find_one({"id": org.get("owner_id")}, {"_id": 0})
+        if not owner:
+            continue
+        if owner.get("email") in EXEMPT_USERS:
             continue
         try:
             end_dt = datetime.fromisoformat(trial_end)
             days_left = (end_dt - now).days
             if 0 <= days_left <= 3:
-                already_notified = db.trial_notifications.find_one({"user_id": u["id"], "type": "trial_expiry_3d"})
+                already_notified = db.trial_notifications.find_one(
+                    {"user_id": owner["id"], "type": "trial_expiry_3d"}
+                )
                 if not already_notified:
-                    users_to_notify.append(u)
+                    # Attach trial_end for the mailing loop below (kept
+                    # under 'trial_end_date' for backward compat).
+                    owner = dict(owner)
+                    owner["trial_end_date"] = trial_end
+                    users_to_notify.append(owner)
         except Exception:
             continue
     sent = 0

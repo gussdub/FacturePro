@@ -113,12 +113,13 @@ class TestExpiredUserNotHardGated:
             self._cleanup(uid, org_id)
 
 
-class TestScanCountReadFromUser:
-    """Fix 3 (regression): _check_and_bill_scan writes to db.users, so /api/auth/me
-    must read scan_count_this_month from user_doc, not from org (which stays frozen
-    at boot value / 0 after register)."""
+class TestScanCountReadFromOrg:
+    """Task 8: _check_and_bill_scan writes to db.organizations (source of truth
+    multi-tenant), so /api/auth/me must read scan_count_this_month from the
+    org, not from user_doc. Falls back to user_doc if the org has no value
+    (pre-migration edge case)."""
 
-    def test_scan_count_reflects_user_doc_not_org(self, client):
+    def test_scan_count_reflects_org_not_user_doc(self, client):
         db = server_module.db
         uid = f"test-scan-{uuid.uuid4().hex[:8]}"
         email = f"{uid}@test.local"
@@ -131,8 +132,8 @@ class TestScanCountReadFromUser:
             "subscription_status": "trial",
             "trial_ends_at": future_iso,
             "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
-            # Org has 0 (frozen at register)
-            "scan_count_this_month": 0,
+            # Org is now the source of truth (Task 8)
+            "scan_count_this_month": 12,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         db.users.insert_one({
@@ -144,7 +145,7 @@ class TestScanCountReadFromUser:
             "role": "owner",
             "subscription_status": "trial",
             "trial_end_date": future_iso,
-            # User doc has real value from scan writes
+            # Stale user_doc value should be ignored
             "scan_count_this_month": 7,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
@@ -154,10 +155,10 @@ class TestScanCountReadFromUser:
             resp = client.get("/api/auth/me", headers=headers)
             assert resp.status_code == 200, resp.text
             body = resp.json()
-            # MUST be 7 (from user_doc) not 0 (from org)
-            assert body["scan_count_this_month"] == 7, (
-                "Fix 3 regression: /api/auth/me must read scan_count_this_month "
-                "from user_doc, not from org (org value is frozen)"
+            # MUST be 12 (from org) not 7 (stale user_doc)
+            assert body["scan_count_this_month"] == 12, (
+                "Task 8: /api/auth/me must read scan_count_this_month from "
+                "the organization (source of truth), not user_doc"
             )
         finally:
             db.users.delete_one({"id": uid})
@@ -733,3 +734,133 @@ class TestMembers:
         owner = server_module.db.users.find_one({"email": "gussdub@gmail.com"})
         r = client.delete(f"/api/org/members/{owner['id']}", headers=owner_headers)
         assert r.status_code == 400
+
+
+# ─── Task 8 : Move Stripe subscription + scan quota to org ───
+
+class TestSubscriptionOnOrg:
+    """Task 8: subscription_status / trial_ends_at / stripe_customer_id and
+    scan_count_this_month are now stored on the organization (source of vérité
+    multi-tenant). /api/org/me exposes them; _check_and_bill_scan writes to
+    db.organizations; the Stripe webhook routes to the correct org via
+    metadata.organization_id."""
+
+    def test_org_me_exposes_subscription(self, client, owner_headers):
+        r = client.get("/api/org/me", headers=owner_headers)
+        assert r.status_code == 200, r.text
+        org = r.json()["organization"]
+        assert "subscription_status" in org
+        assert "trial_ends_at" in org
+
+    def test_scan_quota_shared_across_org(self, client, owner_headers):
+        # Owner scan_count is stored on org, not user (shared across members).
+        r = client.get("/api/org/me", headers=owner_headers)
+        assert r.status_code == 200, r.text
+        org = r.json()["organization"]
+        assert "scan_count_this_month" in org
+
+    def test_check_and_bill_scan_writes_to_org(self):
+        """Direct unit-ish call: _check_and_bill_scan must operate on
+        db.organizations, not db.users."""
+        db = server_module.db
+        uid = f"test-cbs-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        db.organizations.insert_one({
+            "id": org_id,
+            "name": "CBS Test Co",
+            "owner_id": uid,
+            "subscription_status": "trial",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.users.insert_one({
+            "id": uid,
+            "email": f"{uid}@test.local",
+            "company_name": "CBS Test Co",
+            "is_active": True,
+            "organization_id": org_id,
+            "role": "owner",
+            "scan_count_this_month": 999,  # sentinel — must NOT be touched
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        try:
+            n1 = server_module._check_and_bill_scan(org_id)
+            n2 = server_module._check_and_bill_scan(org_id)
+            org_after = db.organizations.find_one({"id": org_id})
+            user_after = db.users.find_one({"id": uid})
+            assert n1 == 1 and n2 == 2
+            assert org_after["scan_count_this_month"] == 2
+            # User doc sentinel is untouched — writes go to org only
+            assert user_after["scan_count_this_month"] == 999
+        finally:
+            db.users.delete_one({"id": uid})
+            db.organizations.delete_one({"id": org_id})
+
+    def test_webhook_routes_by_organization_id_in_metadata(self, client):
+        """Webhook uses metadata.organization_id to route paid status to the
+        correct org — not the owner_id fallback (which breaks for multi-user
+        orgs where the paying user isn't the owner)."""
+        db = server_module.db
+        uid = f"test-wh-org-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        past_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        session_id = f"cs_test_{uuid.uuid4().hex}"
+        tx_id = str(uuid.uuid4())
+        db.organizations.insert_one({
+            "id": org_id,
+            "name": "Webhook Metadata Test Co",
+            # Deliberately different owner_id from uid to prove routing goes
+            # by metadata.organization_id, not owner_id lookup.
+            "owner_id": f"other-owner-{uuid.uuid4().hex[:6]}",
+            "subscription_status": "trial",
+            "trial_ends_at": past_iso,
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.users.insert_one({
+            "id": uid,
+            "email": f"{uid}@test.local",
+            "company_name": "Webhook Metadata Test Co",
+            "is_active": True,
+            "organization_id": org_id,
+            "role": "accountant",
+            "subscription_status": "trial",
+            "trial_end_date": past_iso,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.payment_transactions.insert_one({
+            "id": tx_id,
+            "user_id": uid,
+            "organization_id": org_id,
+            "session_id": session_id,
+            "amount": 15.0,
+            "currency": "cad",
+            "payment_status": "pending",
+            "status": "initiated",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        original_key = server_module.STRIPE_API_KEY
+        server_module.STRIPE_API_KEY = "sk_test_dummy"
+        original_secret = server_module.STRIPE_WEBHOOK_SECRET
+        server_module.STRIPE_WEBHOOK_SECRET = ""
+        try:
+            payload = {
+                "type": "checkout.session.completed",
+                "data": {"object": {
+                    "id": session_id,
+                    "payment_status": "paid",
+                    "customer": "cus_test_dummy_123",
+                    "metadata": {"user_id": uid, "organization_id": org_id},
+                }},
+            }
+            resp = client.post("/api/webhook/stripe", json=payload)
+            assert resp.status_code == 200, resp.text
+            org_after = db.organizations.find_one({"id": org_id})
+            assert org_after["subscription_status"] == "active"
+            # stripe_customer_id persisted for future customer portal usage
+            assert org_after.get("stripe_customer_id") == "cus_test_dummy_123"
+        finally:
+            server_module.STRIPE_API_KEY = original_key
+            server_module.STRIPE_WEBHOOK_SECRET = original_secret
+            db.users.delete_one({"id": uid})
+            db.organizations.delete_one({"id": org_id})
+            db.payment_transactions.delete_one({"id": tx_id})
