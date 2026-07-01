@@ -548,6 +548,17 @@ const ExpensesPage = () => {
                         Voir le recu
                       </a>
                     )}
+                    {!exp.receipt_url && exp.receipt_file_id && (
+                      <button
+                        type="button"
+                        data-testid={`view-receipt-${exp.id}`}
+                        onClick={(e) => { e.stopPropagation(); viewReceipt(exp.receipt_file_id); }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '13px', color: '#008F7A', fontWeight: '600', textDecoration: 'none', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                        Voir le reçu
+                      </button>
+                    )}
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '4px' }}>{formatCurrency(exp.amount, exp.currency)}</div>
@@ -556,20 +567,6 @@ const ExpensesPage = () => {
                     )}
                     <span style={{ background: st.bg, color: st.color, padding: '3px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>{st.label}</span>
                     <div style={{ display: 'flex', gap: '6px', marginTop: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                      {exp.receipt_file_id && (
-                        <button
-                          type="button"
-                          data-testid={`view-receipt-${exp.id}`}
-                          onClick={(e) => { e.stopPropagation(); viewReceipt(exp.receipt_file_id); }}
-                          title="Voir le reçu"
-                          style={{ background: '#dcfce7', color: '#166534', border: 'none',
-                                   padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
-                                   fontSize: '12px', fontWeight: '600',
-                                   display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                          <Paperclip size={14} />
-                          Reçu
-                        </button>
-                      )}
                       <button
                         type="button"
                         data-testid={`edit-expense-${exp.id}`}
