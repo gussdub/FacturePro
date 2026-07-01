@@ -3626,12 +3626,17 @@ def get_exchange_rates():
 
 # ─── Settings ───
 @app.get("/api/settings/company")
-def get_settings(current_user: User = Depends(get_current_user_with_access)):
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0})
+def get_settings(current_user: CurrentUser = Depends(require_permission("settings:manage"))):
+    # Feature #11 — company_settings est scopé par organization_id (multi-tenant).
+    # Fallback pre-migration : accepter les docs legacy sans organization_id keyés
+    # sur user_id du owner (via _org_scope).
+    settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0})
     if not settings:
         _user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0}) or {}
         default = {
-            "id": str(uuid.uuid4()), "user_id": current_user.id,
+            "id": str(uuid.uuid4()),
+            "organization_id": current_user.organization_id,
+            "user_id": current_user.id,  # legacy mirror
             "company_name": _user_doc.get("company_name", ""), "email": current_user.email,
             "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
             "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
@@ -3651,9 +3656,13 @@ def get_settings(current_user: User = Depends(get_current_user_with_access)):
     return settings
 
 @app.put("/api/settings/company")
-def update_settings(settings_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def update_settings(
+    settings_data: dict,
+    current_user: CurrentUser = Depends(require_permission("settings:manage"))
+):
     settings_data.pop("_id", None)
     settings_data.pop("user_id", None)
+    settings_data.pop("organization_id", None)
     settings_data.pop("tax_number_warnings", None)
     # Normalize tax numbers before saving
     normalize_tax_fields(settings_data)
@@ -3675,9 +3684,27 @@ def update_settings(settings_data: dict, current_user: User = Depends(get_curren
             if not (0 <= v <= 100):
                 raise HTTPException(422, f"{field} doit être entre 0 et 100")
             settings_data[field] = v
-    db.company_settings.update_one({"user_id": current_user.id}, {"$set": settings_data}, upsert=True)
+    # Feature #11 — update par organization_id (source de vérité multi-tenant),
+    # avec fallback pre-migration sur user_id du owner (docs legacy).
+    db.company_settings.update_one(
+        _org_scope(current_user),
+        {"$set": settings_data},
+        upsert=False,
+    )
+    # Si aucun doc trouvé (nouvel org sans settings), on upsert avec organization_id.
+    existing = db.company_settings.find_one(_org_scope(current_user), {"_id": 0})
+    if not existing:
+        db.company_settings.update_one(
+            {"organization_id": current_user.organization_id},
+            {"$set": {
+                **settings_data,
+                "organization_id": current_user.organization_id,
+                "user_id": current_user.id,  # legacy mirror
+            }},
+            upsert=True,
+        )
     # Re-fetch + decorate so the frontend can update warnings without a separate GET
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
+    settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
     for f in TAX_FIELDS:
         settings.setdefault(f, "")
     settings.setdefault("entity_type", "sole_proprietor")

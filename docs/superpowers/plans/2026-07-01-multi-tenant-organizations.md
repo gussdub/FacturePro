@@ -2173,7 +2173,7 @@ git commit -m "feat(organizations): apply require_permission + organization_id o
 - Modify: `backend/server.py`
 - Test: `backend/tests/test_organizations_integration.py`
 
-- [ ] **Step 1: Repérer les endpoints settings + billing**
+- [x] **Step 1: Repérer les endpoints settings + billing**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -2190,7 +2190,7 @@ Mapping :
 
 (Note : `/api/expense-categories` reste public — c'est une donnée de référence.)
 
-- [ ] **Step 2: Écrire des tests de permission enforcement**
+- [x] **Step 2: Écrire des tests de permission enforcement**
 
 Append à `backend/tests/test_organizations_integration.py` :
 ```python
@@ -2282,7 +2282,7 @@ class TestPermissionEnforcement:
             self._cleanup_user(email)
 ```
 
-- [ ] **Step 3: Appliquer `require_permission("settings:manage")`**
+- [x] **Step 3: Appliquer `require_permission("settings:manage")`**
 
 Sur `GET /api/settings/company` et `PUT /api/settings/company` :
 
@@ -2311,11 +2311,11 @@ def update_company_settings(
     )
 ```
 
-- [ ] **Step 4: Appliquer `require_permission("billing:manage")`**
+- [x] **Step 4: Appliquer `require_permission("billing:manage")`**
 
 Sur `POST /api/subscribe` et l'endpoint portal — déjà fait en Task 8, vérifier.
 
-- [ ] **Step 5: Tests pass**
+- [x] **Step 5: Tests pass**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro/backend"
@@ -2327,14 +2327,14 @@ pytest tests/test_organizations_integration.py::TestPermissionEnforcement -v 2>&
 ```
 Expected : 6 tests pass.
 
-- [ ] **Step 6: Full backend non-regression run**
+- [x] **Step 6: Full backend non-regression run**
 
 ```bash
 pytest tests/ 2>&1 | tail -20
 ```
 Expected : aucun test rouge nouveau. Certains anciens tests peuvent nécessiter ajustement si assertions strictes de payload (ex. `/api/auth/me` retourne maintenant plus de champs) — c'est acceptable.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"

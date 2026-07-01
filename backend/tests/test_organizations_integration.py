@@ -1262,3 +1262,104 @@ class TestTask10MultiMemberHelpers:
             if created_client_id:
                 db.clients.delete_one({"id": created_client_id})
             self._cleanup_user(uid)
+
+
+# ─── Task 11 : Permission enforcement on settings/billing/team endpoints ───
+
+class TestPermissionEnforcement:
+    """Task 11 — settings/billing/team endpoints must reject viewers/accountants
+    without the required permission (settings:manage / billing:manage /
+    team:manage). Verifies that require_permission gates work end-to-end."""
+
+    def _create_viewer_headers(self, client, owner_headers, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                            lambda *a, **kw: True)
+        # Reset the in-memory rate-limit bucket so parallel tests in this class
+        # don't trip the 5-per-minute cap on /accept-invite.
+        server_module._ACCEPT_INVITE_RATE.clear()
+        email = f"viewer-perm-{uuid.uuid4().hex[:8]}@example.com"
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": "viewer"})
+        assert r.status_code == 201, r.text
+        token = server_module.db.invitations.find_one({"id": r.json()["id"]})["token"]
+        r2 = client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "viewerpass",
+            "pipeda_consent": True,
+        })
+        assert r2.status_code == 200, r2.text
+        access_token = r2.json()["access_token"]
+        return {"Authorization": f"Bearer {access_token}"}, email
+
+    def _cleanup_user(self, email):
+        user = server_module.db.users.find_one({"email": email.lower()})
+        if user:
+            server_module.db.users.delete_one({"id": user["id"]})
+            server_module.db.user_passwords.delete_one({"user_id": user["id"]})
+        # Also drop any leftover invitation for this email.
+        server_module.db.invitations.delete_many({"email": email.lower()})
+
+    def test_viewer_can_read_expenses(self, client, owner_headers, monkeypatch):
+        vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
+        try:
+            r = client.get("/api/expenses", headers=vh)
+            assert r.status_code == 200
+        finally:
+            self._cleanup_user(email)
+
+    def test_viewer_cannot_write_expenses(self, client, owner_headers, monkeypatch):
+        vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
+        try:
+            r = client.post("/api/expenses", headers=vh,
+                            json={"vendor": "X", "amount_cad": 10})
+            assert r.status_code == 403
+            assert "expenses:write" in r.json()["detail"]
+        finally:
+            self._cleanup_user(email)
+
+    def test_viewer_cannot_scan_receipt(self, client, owner_headers, monkeypatch):
+        vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
+        try:
+            # Send a valid image
+            from io import BytesIO
+            from PIL import Image
+            buf = BytesIO()
+            Image.new("RGB", (200, 200), (200, 200, 200)).save(buf, "JPEG")
+            buf.seek(0)
+            r = client.post("/api/expenses/scan-receipt", headers=vh,
+                            files={"file": ("test.jpg", buf, "image/jpeg")})
+            assert r.status_code == 403
+        finally:
+            self._cleanup_user(email)
+
+    def test_viewer_cannot_access_settings(self, client, owner_headers, monkeypatch):
+        vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
+        try:
+            r = client.get("/api/settings/company", headers=vh)
+            assert r.status_code == 403
+            r2 = client.put("/api/settings/company", headers=vh,
+                            json={"company_name": "hacked"})
+            assert r2.status_code == 403
+        finally:
+            self._cleanup_user(email)
+
+    def test_viewer_cannot_invite_members(self, client, owner_headers, monkeypatch):
+        vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
+        try:
+            r = client.post("/api/org/invitations", headers=vh,
+                            json={"email": "hacker@x.com", "role": "viewer"})
+            assert r.status_code == 403
+        finally:
+            self._cleanup_user(email)
+
+    def test_viewer_can_read_own_org_context(self, client, owner_headers,
+                                             monkeypatch):
+        vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
+        try:
+            r = client.get("/api/org/me", headers=vh)
+            assert r.status_code == 200
+            body = r.json()
+            assert body["current_user"]["role"] == "viewer"
+            assert "expenses:read" in body["current_user"]["permissions"]
+            assert "expenses:write" not in body["current_user"]["permissions"]
+        finally:
+            self._cleanup_user(email)
