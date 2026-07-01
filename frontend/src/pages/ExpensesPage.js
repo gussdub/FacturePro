@@ -346,16 +346,18 @@ const ExpensesPage = () => {
       });
       setShowForm(true);
     } catch (err) {
-      if (err.response?.status === 413) {
-        setScanError("Photo trop volumineuse (max 5 MB).");
-      } else if (err.response?.status === 422) {
-        setScanError(err.response.data?.detail || "Format non supporté.");
-      } else if (err.response?.status === 429) {
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      if (status === 413) {
+        setScanError("Fichier trop volumineux (max 5 MB).");
+      } else if (status === 422) {
+        setScanError(detail || "Format non supporté.");
+      } else if (status === 429) {
         setScanError("Limite mensuelle atteinte (200 scans).");
-      } else if (err.response?.status === 502) {
-        setScanError("Service temporairement indisponible.");
+      } else if (status === 502) {
+        setScanError(detail || "Service temporairement indisponible.");
       } else {
-        setScanError("Erreur d'extraction. Réessaye.");
+        setScanError(`Erreur d'extraction${status ? ` (${status})` : ""}${detail ? " : " + detail : ""}. Réessaye.`);
       }
     } finally {
       setScanLoading(false);
