@@ -1480,13 +1480,17 @@ def _send_invitation_email(to_email: str, org_name: str, token: str):
     """Envoie l'email d'invitation via Resend. Retourne True/False sans lever.
     Réutilise le pattern existant du fichier (RESEND_API_KEY, SENDER_EMAIL)."""
     try:
+        from html import escape as html_escape
         import resend
         resend.api_key = os.environ.get("RESEND_API_KEY")
         sender = os.environ.get("SENDER_EMAIL", "noreply@facturepro.ca")
         link = f"https://facturepro.ca/accept-invite?token={token}"
+        # org_name proviennent de user-supplied company_name — escape pour éviter
+        # l'injection HTML dans le corps et le sujet de l'email.
+        safe_org_name = html_escape(org_name)
         html = f"""
         <p>Bonjour,</p>
-        <p>Vous êtes invité(e) à rejoindre <strong>{org_name}</strong> sur FacturePro.</p>
+        <p>Vous êtes invité(e) à rejoindre <strong>{safe_org_name}</strong> sur FacturePro.</p>
         <p><a href="{link}" style="background:#00A08C;color:#fff;padding:10px 20px;
            text-decoration:none;border-radius:6px;display:inline-block;">
            Accepter l'invitation</a></p>
@@ -1496,7 +1500,7 @@ def _send_invitation_email(to_email: str, org_name: str, token: str):
         resend.Emails.send({
             "from": sender,
             "to": to_email,
-            "subject": f"Invitation à rejoindre {org_name} sur FacturePro",
+            "subject": f"Invitation à rejoindre {safe_org_name} sur FacturePro",
             "html": html,
         })
         return True
