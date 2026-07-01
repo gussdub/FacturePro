@@ -2663,7 +2663,7 @@ git commit -m "feat(organizations): RouteGuard + sidebar filtering by permission
 **Files:**
 - Modify: `frontend/src/pages/SettingsPage.js`
 
-- [ ] **Step 1: Repérer la structure des onglets existants dans SettingsPage**
+- [x] **Step 1: Repérer la structure des onglets existants dans SettingsPage**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -2675,7 +2675,7 @@ Repérer :
 - Les autres onglets existants (probable : "Entreprise", "Informations fiscales", etc.)
 - La structure des boutons d'onglet + le render conditionnel
 
-- [ ] **Step 2: Ajouter les états + fetchers pour Équipe**
+- [x] **Step 2: Ajouter les états + fetchers pour Équipe**
 
 Dans SettingsPage, en haut du composant :
 
@@ -2710,7 +2710,7 @@ useEffect(() => {
 }, [activeTab, hasPermission, fetchOrgData]);
 ```
 
-- [ ] **Step 3: Créer `frontend/src/constants/permissions.js`**
+- [x] **Step 3: Créer `frontend/src/constants/permissions.js`**
 
 ```jsx
 // Permissions éditables — miroir de PERMISSIONS_EDITABLE côté backend.
@@ -2736,7 +2736,7 @@ export const PERMISSIONS_EDITABLE = [
 export const PERMISSION_GROUPS = ['Dépenses', 'Factures', 'Devis', 'Clients', 'Produits', 'Employés', 'Rapports', 'Bancaire'];
 ```
 
-- [ ] **Step 4: Ajouter le bouton d'onglet « Équipe »**
+- [x] **Step 4: Ajouter le bouton d'onglet « Équipe »**
 
 Dans la barre d'onglets existante, ajouter (visible seulement si `hasPermission('team:manage')`) :
 
@@ -2749,7 +2749,7 @@ Dans la barre d'onglets existante, ajouter (visible seulement si `hasPermission(
 )}
 ```
 
-- [ ] **Step 5: Ajouter le contenu de l'onglet Équipe**
+- [x] **Step 5: Ajouter le contenu de l'onglet Équipe**
 
 Ajouter le render conditionnel :
 
@@ -2772,7 +2772,7 @@ Ajouter le render conditionnel :
 )}
 ```
 
-- [ ] **Step 6: Créer le composant `TeamManagementSection`**
+- [x] **Step 6: Créer le composant `TeamManagementSection`**
 
 À la fin de `SettingsPage.js` (avant `export default`) :
 
@@ -2998,7 +2998,7 @@ function RoleMatrixCard({ role, permissions, isDirty, saving, onToggle, onSave }
 }
 ```
 
-- [ ] **Step 7: Sanity parse**
+- [x] **Step 7: Sanity parse**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro/frontend"
@@ -3006,7 +3006,7 @@ node -e "require('@babel/parser').parse(require('fs').readFileSync('src/pages/Se
 node -e "require('@babel/parser').parse(require('fs').readFileSync('src/constants/permissions.js','utf8'), {sourceType:'module', plugins:['jsx']}); console.log('OK constants')"
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"

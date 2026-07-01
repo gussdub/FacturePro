@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import { Trash2, UserPlus, X as XIcon } from 'lucide-react';
 import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
+import InviteMemberModal from '../components/InviteMemberModal';
+import { useAuth } from '../context/AuthContext';
+import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS } from '../constants/permissions';
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
@@ -17,6 +21,34 @@ const SettingsPage = () => {
   const [success, setSuccess] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Onglets + gestion équipe (T14)
+  const [activeTab, setActiveTab] = useState('company');
+  const [orgData, setOrgData] = useState(null);
+  const [orgLoading, setOrgLoading] = useState(false);
+  const [invitations, setInvitations] = useState([]);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const { hasPermission, user: currentUser } = useAuth();
+
+  const fetchOrgData = useCallback(async () => {
+    setOrgLoading(true);
+    try {
+      const [orgMe, invs] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/org/me`),
+        axios.get(`${BACKEND_URL}/api/org/invitations`),
+      ]);
+      setOrgData(orgMe.data);
+      setInvitations(invs.data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setOrgLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'team' && hasPermission('team:manage')) fetchOrgData();
+  }, [activeTab, hasPermission, fetchOrgData]);
 
   useEffect(() => { fetchSettings(); }, []);
 
@@ -104,6 +136,58 @@ const SettingsPage = () => {
       {error && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '16px', borderRadius: '12px', marginBottom: '20px' }}>{error}</div>}
       {success && <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '16px', borderRadius: '12px', marginBottom: '20px' }}>{success}</div>}
 
+      {/* Barre d'onglets */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e5e7eb', marginBottom: 24 }}>
+        <button
+          type="button"
+          onClick={() => setActiveTab('company')}
+          data-testid="tab-company"
+          style={{
+            background: 'none', border: 'none', padding: '12px 20px', cursor: 'pointer',
+            fontSize: 14, fontWeight: 600,
+            color: activeTab === 'company' ? '#00A08C' : '#6b7280',
+            borderBottom: activeTab === 'company' ? '2px solid #00A08C' : '2px solid transparent',
+            marginBottom: -1,
+          }}
+        >
+          Entreprise
+        </button>
+        {hasPermission('team:manage') && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('team')}
+            data-testid="tab-team"
+            style={{
+              background: 'none', border: 'none', padding: '12px 20px', cursor: 'pointer',
+              fontSize: 14, fontWeight: 600,
+              color: activeTab === 'team' ? '#00A08C' : '#6b7280',
+              borderBottom: activeTab === 'team' ? '2px solid #00A08C' : '2px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            Équipe
+          </button>
+        )}
+      </div>
+
+      {activeTab === 'team' && hasPermission('team:manage') && (
+        <TeamManagementSection
+          orgData={orgData}
+          invitations={invitations}
+          loading={orgLoading}
+          onRefresh={fetchOrgData}
+          onInvite={() => setShowInviteModal(true)}
+          currentUserId={currentUser?.id}
+        />
+      )}
+      {showInviteModal && (
+        <InviteMemberModal
+          onClose={() => setShowInviteModal(false)}
+          onSuccess={() => { setShowInviteModal(false); fetchOrgData(); }}
+        />
+      )}
+
+      {activeTab === 'company' && (
       <form onSubmit={handleSubmit}>
         {/* Logo Upload Section */}
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
@@ -392,10 +476,228 @@ const SettingsPage = () => {
           }}>{saving ? 'Sauvegarde...' : 'Sauvegarder tous les parametres'}</button>
         </div>
       </form>
+      )}
 
       <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
     </div>
   );
 };
+
+function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInvite, currentUserId }) {
+  const [matrixEdits, setMatrixEdits] = useState({});
+  const [savingRole, setSavingRole] = useState(null);
+
+  if (loading || !orgData) return <div style={{ padding: 24 }}>Chargement…</div>;
+
+  const { organization, members } = orgData;
+  const rolePermissions = { ...organization.role_permissions, ...matrixEdits };
+
+  const changeMemberRole = async (userId, newRole) => {
+    if (!window.confirm(`Changer le rôle en ${newRole} ?`)) return;
+    try {
+      await axios.put(`${BACKEND_URL}/api/org/members/${userId}/role`, { role: newRole });
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const removeMember = async (userId, email) => {
+    if (!window.confirm(`Retirer ${email} de l'organisation ?`)) return;
+    try {
+      await axios.delete(`${BACKEND_URL}/api/org/members/${userId}`);
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const revokeInvitation = async (invId, email) => {
+    if (!window.confirm(`Révoquer l'invitation pour ${email} ?`)) return;
+    try {
+      await axios.delete(`${BACKEND_URL}/api/org/invitations/${invId}`);
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const togglePermission = (role, code) => {
+    const current = rolePermissions[role] || [];
+    const next = current.includes(code)
+      ? current.filter(c => c !== code)
+      : [...current, code];
+    setMatrixEdits(prev => ({ ...prev, [role]: next }));
+  };
+
+  const saveRoleMatrix = async (role) => {
+    setSavingRole(role);
+    try {
+      await axios.put(`${BACKEND_URL}/api/org/role-permissions`, {
+        role, permissions: rolePermissions[role] || [],
+      });
+      setMatrixEdits(prev => {
+        const next = { ...prev };
+        delete next[role];
+        return next;
+      });
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    } finally {
+      setSavingRole(null);
+    }
+  };
+
+  const isOwner = (uid) => organization.owner_id === uid;
+
+  return (
+    <div style={{ padding: 24 }} data-testid="team-management-section">
+      {/* Section : Membres */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 18 }}>Membres actifs</h3>
+        <button onClick={onInvite} data-testid="invite-member-btn" style={{
+          background: '#00A08C', color: '#fff', border: 'none',
+          padding: '8px 16px', borderRadius: 6, cursor: 'pointer',
+          fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <UserPlus size={16} /> Inviter un membre
+        </button>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 32 }}>
+        <thead>
+          <tr style={{ background: '#f9fafb', textAlign: 'left' }}>
+            <th style={{ padding: 10 }}>Email</th>
+            <th style={{ padding: 10 }}>Rôle</th>
+            <th style={{ padding: 10 }}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {members.map(m => (
+            <tr key={m.id} style={{ borderTop: '1px solid #e5e7eb' }}>
+              <td style={{ padding: 10 }}>
+                {m.email}
+                {isOwner(m.id) && <span style={{
+                  marginLeft: 8, fontSize: 11, background: '#00A08C', color: '#fff',
+                  padding: '2px 6px', borderRadius: 4,
+                }}>Propriétaire</span>}
+              </td>
+              <td style={{ padding: 10 }}>
+                {isOwner(m.id) ? (
+                  <span style={{ color: '#6b7280' }}>owner</span>
+                ) : (
+                  <select value={m.role || 'viewer'}
+                          onChange={e => changeMemberRole(m.id, e.target.value)}
+                          style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 4 }}>
+                    <option value="accountant">accountant</option>
+                    <option value="viewer">viewer</option>
+                  </select>
+                )}
+              </td>
+              <td style={{ padding: 10 }}>
+                {!isOwner(m.id) && m.id !== currentUserId && (
+                  <button onClick={() => removeMember(m.id, m.email)} style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: '#991b1b', display: 'flex', alignItems: 'center', gap: 4,
+                  }}>
+                    <Trash2 size={14} /> Retirer
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Section : Invitations en cours */}
+      <h3 style={{ margin: '0 0 16px', fontSize: 18 }}>Invitations en cours</h3>
+      {invitations.length === 0 ? (
+        <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 32 }}>
+          Aucune invitation en attente.
+        </p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 32 }}>
+          <thead>
+            <tr style={{ background: '#f9fafb', textAlign: 'left' }}>
+              <th style={{ padding: 10 }}>Email</th>
+              <th style={{ padding: 10 }}>Rôle</th>
+              <th style={{ padding: 10 }}>Expire le</th>
+              <th style={{ padding: 10 }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {invitations.map(inv => (
+              <tr key={inv.id} style={{ borderTop: '1px solid #e5e7eb' }}>
+                <td style={{ padding: 10 }}>{inv.email}</td>
+                <td style={{ padding: 10 }}>{inv.role}</td>
+                <td style={{ padding: 10 }}>
+                  {new Date(inv.expires_at).toLocaleDateString('fr-CA')}
+                </td>
+                <td style={{ padding: 10 }}>
+                  <button onClick={() => revokeInvitation(inv.id, inv.email)} style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: '#991b1b', display: 'flex', alignItems: 'center', gap: 4,
+                  }}>
+                    <XIcon size={14} /> Révoquer
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* Section : Matrice permissions */}
+      <h3 style={{ margin: '0 0 16px', fontSize: 18 }}>Rôles et permissions</h3>
+      {['accountant', 'viewer'].map(role => (
+        <RoleMatrixCard
+          key={role}
+          role={role}
+          permissions={rolePermissions[role] || []}
+          isDirty={matrixEdits[role] !== undefined}
+          saving={savingRole === role}
+          onToggle={(code) => togglePermission(role, code)}
+          onSave={() => saveRoleMatrix(role)}
+        />
+      ))}
+    </div>
+  );
+}
+
+
+function RoleMatrixCard({ role, permissions, isDirty, saving, onToggle, onSave }) {
+  return (
+    <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <h4 style={{ margin: 0, fontSize: 16, textTransform: 'capitalize' }}>{role}</h4>
+        {isDirty && (
+          <button onClick={onSave} disabled={saving} style={{
+            background: '#00A08C', color: '#fff', border: 'none',
+            padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 600,
+          }}>
+            {saving ? 'Enregistrement…' : 'Enregistrer'}
+          </button>
+        )}
+      </div>
+      {PERMISSION_GROUPS.map(group => (
+        <div key={group} style={{ marginBottom: 10 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: '#374151', marginBottom: 4 }}>{group}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+            {PERMISSIONS_EDITABLE.filter(p => p.group === group).map(p => (
+              <label key={p.code} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={permissions.includes(p.code)}
+                  onChange={() => onToggle(p.code)}
+                />
+                {p.label}
+              </label>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default SettingsPage;
