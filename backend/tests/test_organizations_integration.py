@@ -113,6 +113,57 @@ class TestExpiredUserNotHardGated:
             self._cleanup(uid, org_id)
 
 
+class TestScanCountReadFromUser:
+    """Fix 3 (regression): _check_and_bill_scan writes to db.users, so /api/auth/me
+    must read scan_count_this_month from user_doc, not from org (which stays frozen
+    at boot value / 0 after register)."""
+
+    def test_scan_count_reflects_user_doc_not_org(self, client):
+        db = server_module.db
+        uid = f"test-scan-{uuid.uuid4().hex[:8]}"
+        email = f"{uid}@test.local"
+        org_id = str(uuid.uuid4())
+        future_iso = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+        db.organizations.insert_one({
+            "id": org_id,
+            "name": "Scan Test Co",
+            "owner_id": uid,
+            "subscription_status": "trial",
+            "trial_ends_at": future_iso,
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            # Org has 0 (frozen at register)
+            "scan_count_this_month": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.users.insert_one({
+            "id": uid,
+            "email": email,
+            "company_name": "Scan Test Co",
+            "is_active": True,
+            "organization_id": org_id,
+            "role": "owner",
+            "subscription_status": "trial",
+            "trial_end_date": future_iso,
+            # User doc has real value from scan writes
+            "scan_count_this_month": 7,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            resp = client.get("/api/auth/me", headers=headers)
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            # MUST be 7 (from user_doc) not 0 (from org)
+            assert body["scan_count_this_month"] == 7, (
+                "Fix 3 regression: /api/auth/me must read scan_count_this_month "
+                "from user_doc, not from org (org value is frozen)"
+            )
+        finally:
+            db.users.delete_one({"id": uid})
+            db.organizations.delete_one({"id": org_id})
+
+
 class TestStripeWebhookMirrorsOrg:
     """Fix 2 (regression): Stripe webhook writes subscription_status='active' only
     to db.users. Because _check_subscription_active reads from org, the user

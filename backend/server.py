@@ -1370,7 +1370,9 @@ def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
         "subscription_status": "active" if is_exempt else sub_status,
         "trial_end_date": trial_end,
         "is_exempt": is_exempt,
-        "scan_count_this_month": org.get("scan_count_this_month", 0),
+        # scan_count_this_month reste sur user_doc (transition — _check_and_bill_scan
+        # écrit sur db.users pour l'instant ; migration vers org prévue plus tard)
+        "scan_count_this_month": user_doc.get("scan_count_this_month", 0),
         "scan_quota_limit": SCAN_QUOTA_LIMIT,
         "receipt_ocr_consent_at": user_doc.get("receipt_ocr_consent_at"),
     }
