@@ -15,6 +15,7 @@ import SettingsPage from './pages/SettingsPage';
 import SubscriptionPage from './pages/SubscriptionPage';
 import ReportsPage from './pages/ReportsPage';
 import BankReconciliationPage from './pages/BankReconciliationPage';
+import AcceptInvitePage from './pages/AcceptInvitePage';
 
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
@@ -34,6 +35,11 @@ function App() {
     window.history.pushState({}, '', path);
     setCurrentRoute(path);
   };
+
+  // Public route — no auth required
+  if (window.location.pathname === '/accept-invite') {
+    return <AcceptInvitePage />;
+  }
 
   if (!isAuthenticated) {
     return <LoginPage />;
