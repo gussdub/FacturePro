@@ -3373,7 +3373,7 @@ git commit -m "feat(organizations): /accept-invite public page with PIPEDA conse
 **Files:**
 - Modify: `backend/tests/test_organizations_integration.py`
 
-- [ ] **Step 1: Ajouter les tests d'isolation cross-org**
+- [x] **Step 1: Ajouter les tests d'isolation cross-org**
 
 Append à `backend/tests/test_organizations_integration.py` :
 ```python
@@ -3508,7 +3508,7 @@ class TestMigrationIntegration:
         assert r2.json()["organization"]["id"] == org_id
 ```
 
-- [ ] **Step 2: Run les nouveaux tests**
+- [x] **Step 2: Run les nouveaux tests**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro/backend"
@@ -3520,14 +3520,14 @@ pytest tests/test_organizations_integration.py -v 2>&1 | tail -30
 ```
 Expected : tous les nouveaux tests d'isolation + dynamique + migration passent.
 
-- [ ] **Step 3: Full non-regression run**
+- [x] **Step 3: Full non-regression run**
 
 ```bash
 pytest tests/ 2>&1 | tail -30
 ```
 Expected : la suite complète passe, sans nouveau rouge non-résolu.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -3539,7 +3539,7 @@ git commit -m "test(organizations): cross-org isolation, dynamic perms, migratio
 
 ## Task 18 : E2E manual + push prod + update CLAUDE.md
 
-- [ ] **Step 1: Sanity build frontend**
+- [x] **Step 1: Sanity build frontend**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro/frontend"
@@ -3547,7 +3547,7 @@ npm run build 2>&1 | tail -10
 ```
 Expected : build success. Fixer toute erreur ESLint/parse.
 
-- [ ] **Step 2: E2E manuel local**
+- [x] **Step 2: E2E manuel local**
 
 Démarrer les 2 services :
 ```bash
@@ -3607,7 +3607,7 @@ Sur `http://localhost:3000` :
 
 Ajuster tout bug trouvé.
 
-- [ ] **Step 3: Update CLAUDE.md — ajouter la feature dans le changelog**
+- [x] **Step 3: Update CLAUDE.md — ajouter la feature dans le changelog**
 
 Ajouter en tête de la section "Features livrées" (avant feature #10) :
 
@@ -3628,7 +3628,7 @@ Ajouter en tête de la section "Features livrées" (avant feature #10) :
   - Plan : `docs/superpowers/plans/2026-07-01-multi-tenant-organizations.md`
 ```
 
-- [ ] **Step 4: Push prod**
+- [x] **Step 4: Push prod**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -3639,7 +3639,7 @@ git push origin main
 
 Render redéploie backend (~3-5 min — la migration `migrate_organizations_v1()` s'exécute au boot pour toute la prod). Vercel redéploie frontend (~2 min).
 
-- [ ] **Step 5: Monitoring post-deploy**
+- [x] **Step 5: Monitoring post-deploy**
 
 Vérifier les logs Render dans les 30 min post-deploy :
 - Ligne `MIGRATION organizations_v1 : N orgs créées` doit apparaître.
@@ -3653,7 +3653,7 @@ Si tout OK → feature livrée. Sinon hotfix via git push, la migration idempote
 
 **Point de non-retour** : le script `backend/scripts/drop_legacy_user_fields.py` (§6.4 spec) **NE PAS** l'exécuter avant 4 semaines de stabilité prod. Il retirera `subscription_status`, `stripe_customer_id`, `trial_end_date`, `scan_count_this_month`, `scan_quota_reset_at` de `users` et `user_id` des collections métier une fois qu'on aura la certitude qu'aucun code legacy n'y accède.
 
-- [ ] **Step 6: Commit final (si smoke tests OK)**
+- [x] **Step 6: Commit final (si smoke tests OK)**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"

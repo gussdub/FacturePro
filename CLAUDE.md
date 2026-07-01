@@ -106,6 +106,21 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-01 — Organisations multi-tenant (feature #11)**
+  - Nouvelles collections : `organizations` (subscription Stripe + role_permissions + scan quota) et `invitations` (link signé Resend TTL 7j single-use)
+  - Nouveau modèle Pydantic `CurrentUser` (id + email + organization_id + role + permissions) résolu à chaque requête via `get_current_user_with_access` refactoré
+  - Dependency `require_permission("code")` appliquée sur ~60 endpoints métier ; toutes les queries filtrent par `organization_id` au lieu de `user_id` (avec fallback transitoire `$or` pendant 4 semaines)
+  - Migration idempotente au startup `migrate_organizations_v1()` : chaque user existant devient owner d'une org auto-créée qui reprend son `company_name` ; backfill `organization_id` + `created_by_user_id` sur toutes les collections métier
+  - 3 rôles fixes : **owner** (toutes perms), **accountant** (defaults éditables par owner), **viewer** (read-only). Matrice `role_permissions` éditable sur l'organisation ; owner-only codes (`settings:manage`, `billing:manage`, `team:manage`) hardcodés dans le résolveur — impossible de les injecter via la matrice
+  - Nouveaux endpoints : `GET /api/org/me` (context complet), `PUT /api/org/role-permissions` (matrix), `POST/GET/DELETE /api/org/invitations`, `GET /api/org/invitations/preview` (public), `POST /api/auth/accept-invite` (public + rate-limité 5/min/IP + PIPEDA consent obligatoire), `PUT /api/org/members/{id}/role`, `DELETE /api/org/members/{id}` (soft, unset org+role — audit trail préservé via `created_by_user_id`)
+  - Anti-lockout owner : `owner_id` immutable, impossible de changer son rôle, impossible de le retirer, impossible pour lui de se retirer lui-même
+  - Frontend : `AuthContext` expose `permissions`, `role`, `organization`, `hasPermission()` ; nouveau `<RouteGuard permission="...">` wrapper ; sidebar filtre par permission ; onglet « Équipe » dans SettingsPage (membres + invitations + matrice UI groupée par domaine) ; page publique `/accept-invite` avec form password + PIPEDA checkbox
+  - Sécurité : `_resolve_permissions` filtre à `PERMISSIONS_EDITABLE` (codes owner-only jamais accordés via matrice, codes inconnus ignorés) ; token invitation `secrets.token_urlsafe(32)` ~256 bits d'entropie ; `bcrypt.checkpw` constant-time sur `/accept-invite` ; jamais de token/password dans les logs
+  - Limites v1 : custom roles, SSO/SAML, audit log endpoint, 2FA, multi-org par user, transfert d'ownership, facturation pro-rata ; abonnement Stripe reste flat $15 CAD/mois par org, quota scan reçus reste 200/org/mois (partagé org-wide)
+  - Tests : ~15 unitaires + ~35 intégration = **~50 nouveaux tests**, 0 régression
+  - Spec : `docs/superpowers/specs/2026-07-01-multi-tenant-organizations-design.md`
+  - Plan : `docs/superpowers/plans/2026-07-01-multi-tenant-organizations.md`
+
 - **2026-06-16 — Numéros officiels canadiens sur PDF (feature #2)**
   - 5 champs (BN, TPS, TVQ, TVH, NEQ) côté entreprise (`Settings`) et côté client (`Clients`)
   - Snapshot `tax_registrations` sur création de facture/devis (audit immutability)
