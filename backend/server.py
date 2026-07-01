@@ -1221,6 +1221,18 @@ def _get_org_for_user(user: dict) -> dict:
     return org
 
 
+def require_permission(perm_code: str):
+    """FastAPI dependency factory. Utilisation :
+        @app.get("/api/expenses", dependencies=[...])
+        def list_expenses(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+            ..."""
+    def _dep(current_user: CurrentUser = Depends(get_current_user_with_access)) -> CurrentUser:
+        if perm_code not in current_user.permissions:
+            raise HTTPException(403, f"Permission requise : {perm_code}")
+        return current_user
+    return _dep
+
+
 # Collections metier scopees par organisation (utilisees par migration + queries).
 _ORG_SCOPED_COLLECTIONS = [
     "invoices", "quotes", "expenses", "clients", "products", "employees",

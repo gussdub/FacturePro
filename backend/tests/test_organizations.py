@@ -213,3 +213,36 @@ class TestCurrentUserModel:
         assert cu.id == "u1"
         assert cu.role == "accountant"
         assert "expenses:read" in cu.permissions
+
+
+from server import require_permission
+from fastapi import HTTPException
+
+
+class TestRequirePermission:
+    def _make_current_user(self, permissions):
+        return CurrentUser(
+            id="u1", email="a@b.com", organization_id="org1",
+            role="accountant", permissions=permissions, is_exempt=False,
+        )
+
+    def test_grants_access_when_perm_present(self):
+        dep = require_permission("expenses:read")
+        cu = self._make_current_user(["expenses:read", "expenses:write"])
+        result = dep(current_user=cu)
+        assert result is cu
+
+    def test_denies_when_perm_missing(self):
+        dep = require_permission("expenses:write")
+        cu = self._make_current_user(["expenses:read"])
+        with pytest.raises(HTTPException) as exc:
+            dep(current_user=cu)
+        assert exc.value.status_code == 403
+        assert "expenses:write" in exc.value.detail
+
+    def test_owner_only_perm_denied_for_accountant(self):
+        dep = require_permission("team:manage")
+        cu = self._make_current_user(list(PERMISSIONS_EDITABLE))  # no owner-only
+        with pytest.raises(HTTPException) as exc:
+            dep(current_user=cu)
+        assert exc.value.status_code == 403
