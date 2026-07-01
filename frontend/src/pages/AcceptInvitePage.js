@@ -3,6 +3,7 @@ import axios from 'axios';
 import { BACKEND_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
 import FactureProLogo from '../components/FactureProLogo';
+import { roleLabel } from '../constants/permissions';
 
 
 function useQueryToken() {
@@ -90,7 +91,7 @@ export default function AcceptInvitePage() {
       </div>
       <h1 style={{ fontSize: 22, marginBottom: 8, textAlign: 'center' }}>Rejoindre {preview.org_name}</h1>
       <p style={{ color: '#6b7280', textAlign: 'center', marginBottom: 24 }}>
-        Vous avez été invité(e) en tant que <strong>{preview.role}</strong>.
+        Vous avez été invité(e) en tant que <strong>{roleLabel(preview.role)}</strong>.
       </p>
 
       <form onSubmit={submit}>

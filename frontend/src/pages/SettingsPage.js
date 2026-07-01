@@ -5,7 +5,7 @@ import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
 import { useAuth } from '../context/AuthContext';
-import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS } from '../constants/permissions';
+import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS, roleLabel } from '../constants/permissions';
 
 const SettingsPage = () => {
   const [settings, setSettings] = useState({
@@ -584,13 +584,13 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
               </td>
               <td style={{ padding: 10 }}>
                 {isOwner(m.id) ? (
-                  <span style={{ color: '#6b7280' }}>owner</span>
+                  <span style={{ color: '#6b7280' }}>Propriétaire</span>
                 ) : (
                   <select value={m.role || 'viewer'}
                           onChange={e => changeMemberRole(m.id, e.target.value)}
                           style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 4 }}>
-                    <option value="accountant">accountant</option>
-                    <option value="viewer">viewer</option>
+                    <option value="accountant">Comptable</option>
+                    <option value="viewer">Lecteur</option>
                   </select>
                 )}
               </td>
@@ -629,7 +629,7 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
             {invitations.map(inv => (
               <tr key={inv.id} style={{ borderTop: '1px solid #e5e7eb' }}>
                 <td style={{ padding: 10 }}>{inv.email}</td>
-                <td style={{ padding: 10 }}>{inv.role}</td>
+                <td style={{ padding: 10 }}>{roleLabel(inv.role)}</td>
                 <td style={{ padding: 10 }}>
                   {new Date(inv.expires_at).toLocaleDateString('fr-CA')}
                 </td>
@@ -669,7 +669,7 @@ function RoleMatrixCard({ role, permissions, isDirty, saving, onToggle, onSave }
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <h4 style={{ margin: 0, fontSize: 16, textTransform: 'capitalize' }}>{role}</h4>
+        <h4 style={{ margin: 0, fontSize: 16 }}>{roleLabel(role)}</h4>
         {isDirty && (
           <button onClick={onSave} disabled={saving} style={{
             background: '#00A08C', color: '#fff', border: 'none',

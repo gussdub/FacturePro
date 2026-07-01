@@ -19,3 +19,12 @@ export const PERMISSIONS_EDITABLE = [
 ];
 
 export const PERMISSION_GROUPS = ['Dépenses', 'Factures', 'Devis', 'Clients', 'Produits', 'Employés', 'Rapports', 'Bancaire'];
+
+// Libellés FR des rôles (le code interne reste anglais côté backend).
+export const ROLE_LABELS = {
+  owner: 'Propriétaire',
+  accountant: 'Comptable',
+  viewer: 'Lecteur',
+};
+
+export const roleLabel = (code) => ROLE_LABELS[code] || code;
