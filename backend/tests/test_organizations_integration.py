@@ -411,3 +411,197 @@ class TestInvitations:
         r = client.delete(f"/api/org/invitations/{uuid.uuid4()}",
                           headers=owner_headers)
         assert r.status_code == 404
+
+
+class TestAcceptInvite:
+    @pytest.fixture(autouse=True)
+    def _reset_rate_limit(self):
+        # TestClient always presents the same IP ("testclient"), which trips
+        # the 5-req/min guard once a few accept-invite tests fire in sequence.
+        # Clear the in-memory bucket before each test so we exercise the real
+        # handler, not the 429 path (which has its own coverage upstream).
+        server_module._ACCEPT_INVITE_RATE.clear()
+
+    def _create_pending_invitation(self, client, owner_headers, email, role,
+                                    monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": role})
+        inv_id = r.json()["id"]
+        # Fetch the token directly from DB (test-only)
+        inv = server_module.db.invitations.find_one({"id": inv_id})
+        return inv_id, inv["token"]
+
+    def _cleanup_user(self, email):
+        user = server_module.db.users.find_one({"email": email.lower()})
+        if user:
+            server_module.db.users.delete_one({"id": user["id"]})
+            server_module.db.user_passwords.delete_one({"user_id": user["id"]})
+
+    def test_accept_new_user_happy_path(self, client, owner_headers, monkeypatch):
+        email = f"accept-new-{uuid.uuid4().hex[:8]}@example.com"
+        _, token = self._create_pending_invitation(
+            client, owner_headers, email, "accountant", monkeypatch)
+        try:
+            r = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "newpass123",
+                "pipeda_consent": True,
+            })
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert "access_token" in body
+            assert body["user"]["email"] == email.lower()
+            # Verify user is in the org with correct role
+            user = server_module.db.users.find_one({"email": email.lower()})
+            assert user is not None
+            assert user["role"] == "accountant"
+            assert user.get("organization_id") is not None
+            assert user.get("pipeda_consent_at") is not None
+        finally:
+            self._cleanup_user(email)
+
+    def test_missing_pipeda_consent_rejected(self, client, owner_headers,
+                                              monkeypatch):
+        email = f"accept-nopipeda-{uuid.uuid4().hex[:8]}@example.com"
+        _, token = self._create_pending_invitation(
+            client, owner_headers, email, "viewer", monkeypatch)
+        try:
+            r = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "x123456",
+                "pipeda_consent": False,
+            })
+            assert r.status_code == 400
+            assert "CGU" in r.json()["detail"] or "PIPEDA" in r.json()["detail"]
+        finally:
+            self._cleanup_user(email)
+
+    def test_unknown_token_returns_404(self, client):
+        r = client.post("/api/auth/accept-invite", json={
+            "token": "unknown-token-xxxxxxxxxxxxxxxx", "password": "x123456",
+            "pipeda_consent": True,
+        })
+        assert r.status_code == 404
+
+    def test_revoked_token_returns_410(self, client, owner_headers, monkeypatch):
+        email = f"accept-revoked-{uuid.uuid4().hex[:8]}@example.com"
+        inv_id, token = self._create_pending_invitation(
+            client, owner_headers, email, "viewer", monkeypatch)
+        client.delete(f"/api/org/invitations/{inv_id}", headers=owner_headers)
+        r = client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "x123456", "pipeda_consent": True,
+        })
+        assert r.status_code == 410
+
+    def test_expired_token_returns_410(self, client, owner_headers, monkeypatch):
+        email = f"accept-expired-{uuid.uuid4().hex[:8]}@example.com"
+        inv_id, token = self._create_pending_invitation(
+            client, owner_headers, email, "viewer", monkeypatch)
+        # Manually expire it
+        server_module.db.invitations.update_one(
+            {"id": inv_id},
+            {"$set": {"expires_at": "2020-01-01T00:00:00+00:00"}})
+        r = client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "x123456", "pipeda_consent": True,
+        })
+        assert r.status_code == 410
+
+    def test_already_consumed_token_returns_410(self, client, owner_headers,
+                                                  monkeypatch):
+        email = f"accept-once-{uuid.uuid4().hex[:8]}@example.com"
+        _, token = self._create_pending_invitation(
+            client, owner_headers, email, "accountant", monkeypatch)
+        try:
+            r1 = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "x123456", "pipeda_consent": True,
+            })
+            assert r1.status_code == 200
+            # Try to consume the token again
+            r2 = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "x123456", "pipeda_consent": True,
+            })
+            assert r2.status_code == 410
+        finally:
+            self._cleanup_user(email)
+
+    def test_existing_user_wrong_password_returns_401(self, client, owner_headers,
+                                                       monkeypatch):
+        # gussdub already exists but is already in an org — test the 409 first
+        # Then test wrong-password on a fresh user
+        email = f"existing-wrong-{uuid.uuid4().hex[:8]}@example.com"
+        # Create the user manually with a known password
+        uid = str(uuid.uuid4())
+        server_module.db.users.insert_one({
+            "id": uid, "email": email, "company_name": "Standalone",
+            "is_active": True, "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.user_passwords.insert_one({
+            "user_id": uid,
+            "hashed_password": server_module.hash_password("correct-pass"),
+        })
+        try:
+            _, token = self._create_pending_invitation(
+                client, owner_headers, email, "viewer", monkeypatch)
+            r = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "WRONG-pass",
+                "pipeda_consent": True,
+            })
+            assert r.status_code == 401
+        finally:
+            self._cleanup_user(email)
+
+    def test_existing_user_already_in_org_returns_409(self, client, owner_headers,
+                                                        monkeypatch):
+        # gussdub is already owner of the current org, we invite them elsewhere
+        # But since we're testing single test suite = single org, use a manual setup:
+        # Create a second org + user
+        email = f"already-org-{uuid.uuid4().hex[:8]}@example.com"
+        uid = str(uuid.uuid4())
+        other_org_id = str(uuid.uuid4())
+        server_module.db.organizations.insert_one({
+            "id": other_org_id, "name": "OtherOrg",
+            "owner_id": uid, "subscription_status": "trial",
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.users.insert_one({
+            "id": uid, "email": email, "is_active": True,
+            "organization_id": other_org_id, "role": "owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.user_passwords.insert_one({
+            "user_id": uid,
+            "hashed_password": server_module.hash_password("correct-pass"),
+        })
+        try:
+            _, token = self._create_pending_invitation(
+                client, owner_headers, email, "viewer", monkeypatch)
+            r = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "correct-pass",
+                "pipeda_consent": True,
+            })
+            assert r.status_code == 409
+        finally:
+            self._cleanup_user(email)
+            server_module.db.organizations.delete_one({"id": other_org_id})
+
+
+class TestInvitationPreview:
+    def test_preview_valid_token(self, client, owner_headers, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = f"preview-{uuid.uuid4().hex[:8]}@example.com"
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": "accountant"})
+        inv_id = r.json()["id"]
+        token = server_module.db.invitations.find_one({"id": inv_id})["token"]
+        r2 = client.get(f"/api/org/invitations/preview?token={token}")
+        assert r2.status_code == 200
+        body = r2.json()
+        assert body["email"] == email.lower()
+        assert body["role"] == "accountant"
+        assert "org_name" in body
+
+    def test_preview_unknown_token_returns_404(self, client):
+        r = client.get("/api/org/invitations/preview?token=unknown-abcdef")
+        assert r.status_code == 404

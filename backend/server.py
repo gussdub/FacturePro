@@ -1612,6 +1612,146 @@ def revoke_invitation(
     return
 
 
+# Rate-limit simple in-memory pour /accept-invite (production-adequate pour v1).
+_ACCEPT_INVITE_RATE = {}  # {ip: [(timestamp, ...), ...]}
+_ACCEPT_INVITE_WINDOW_SEC = 60
+_ACCEPT_INVITE_MAX_REQUESTS = 5
+
+
+def _rate_limit_accept_invite(ip: str) -> bool:
+    """True si dans les limites, False si dépassé."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    window_start = now_ts - _ACCEPT_INVITE_WINDOW_SEC
+    hits = _ACCEPT_INVITE_RATE.get(ip, [])
+    hits = [t for t in hits if t > window_start]
+    if len(hits) >= _ACCEPT_INVITE_MAX_REQUESTS:
+        _ACCEPT_INVITE_RATE[ip] = hits
+        return False
+    hits.append(now_ts)
+    _ACCEPT_INVITE_RATE[ip] = hits
+    return True
+
+
+@app.get("/api/org/invitations/preview")
+def preview_invitation(token: str):
+    """Endpoint public : depuis un token, renvoie email + org_name + role
+    pour l'écran /accept-invite. Ne renvoie jamais le token."""
+    inv = db.invitations.find_one({"token": token, "status": "pending"},
+                                    {"_id": 0, "token": 0})
+    if not inv:
+        raise HTTPException(404, "Invitation introuvable")
+    # Check expiration
+    try:
+        expires = datetime.fromisoformat(inv["expires_at"])
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(410, "Invitation expirée")
+    except (ValueError, TypeError):
+        raise HTTPException(410, "Invitation invalide")
+    org = db.organizations.find_one({"id": inv["organization_id"]}, {"_id": 0})
+    return {
+        "email": inv["email"],
+        "role": inv["role"],
+        "org_name": (org or {}).get("name") or "FacturePro",
+    }
+
+
+@app.post("/api/auth/accept-invite")
+def accept_invite(body: dict, request: Request):
+    """Endpoint public : accepte une invitation.
+    - Vérifie pipeda_consent === true.
+    - Cherche l'invitation par token (pending + non-expirée + non-révoquée).
+    - Si user nouveau → crée user + hash password.
+    - Si user existant → verify password, refuse si déjà dans une org.
+    - Update invitation : status=accepted, consumed_at.
+    - Retourne JWT."""
+    client_ip = (request.client.host if request.client else "unknown")
+    if not _rate_limit_accept_invite(client_ip):
+        raise HTTPException(429, "Trop de requêtes — réessaie dans 1 minute")
+
+    token = (body.get("token") or "").strip()
+    password = body.get("password") or ""
+    pipeda_consent = body.get("pipeda_consent")
+
+    if pipeda_consent is not True:
+        raise HTTPException(400, "Vous devez accepter les CGU/PIPEDA")
+    if not token:
+        raise HTTPException(404, "Invitation introuvable")
+
+    inv = db.invitations.find_one({"token": token})
+    if not inv:
+        raise HTTPException(404, "Invitation introuvable")
+    if inv["status"] == "revoked":
+        raise HTTPException(410, "Invitation révoquée")
+    if inv["status"] == "accepted":
+        raise HTTPException(410, "Invitation déjà consommée")
+
+    # Check expiration
+    try:
+        expires = datetime.fromisoformat(inv["expires_at"])
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(410, "Invitation expirée")
+    except (ValueError, TypeError):
+        raise HTTPException(410, "Invitation invalide")
+
+    email = inv["email"].lower()
+    now = datetime.now(timezone.utc).isoformat()
+    user = db.users.find_one({"email": email})
+
+    if user:
+        # Existing user path
+        if user.get("organization_id"):
+            raise HTTPException(409, "Cet email est déjà dans une organisation")
+        pwd_doc = db.user_passwords.find_one({"user_id": user["id"]})
+        if not pwd_doc or not verify_password(password, pwd_doc["hashed_password"]):
+            raise HTTPException(401, "Mot de passe incorrect")
+        db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {
+                "organization_id": inv["organization_id"],
+                "role": inv["role"],
+                "pipeda_consent_at": now,
+            }}
+        )
+        user_id = user["id"]
+    else:
+        # New user path
+        if len(password) < 6:
+            raise HTTPException(400, "Le mot de passe doit contenir au moins 6 caractères")
+        user_id = str(uuid.uuid4())
+        db.users.insert_one({
+            "id": user_id,
+            "email": email,
+            "company_name": None,
+            "is_active": True,
+            "organization_id": inv["organization_id"],
+            "role": inv["role"],
+            "pipeda_consent_at": now,
+            "created_at": now,
+        })
+        db.user_passwords.insert_one({
+            "user_id": user_id,
+            "hashed_password": hash_password(password),
+        })
+
+    # Consume the invitation
+    db.invitations.update_one(
+        {"id": inv["id"]},
+        {"$set": {"status": "accepted", "consumed_at": now}}
+    )
+
+    token_jwt = create_token(user_id)
+    return {
+        "access_token": token_jwt,
+        "token_type": "bearer",
+        "user": {
+            "id": user_id,
+            "email": email,
+            "organization_id": inv["organization_id"],
+            "role": inv["role"],
+        },
+    }
+
+
 # ─── Health ───
 @app.get("/")
 def root():
