@@ -1126,6 +1126,93 @@ def calculate_taxes(subtotal, province):
         hst = 0
     return round(gst, 2), round(pst, 2), round(hst, 2), round(gst + pst + hst, 2)
 
+# ─── Organizations & permissions (feature #11) ───
+
+PERMISSIONS_EDITABLE = [
+    "expenses:read",   "expenses:write",
+    "invoices:read",   "invoices:write",
+    "quotes:read",     "quotes:write",
+    "clients:read",    "clients:write",
+    "products:read",   "products:write",
+    "employees:read",  "employees:write",
+    "reports:read",
+    "bank:read",       "bank:write",
+    "receipts:scan",
+]
+
+PERMISSIONS_OWNER_ONLY = [
+    "settings:manage",  # company_info, entity_type, province, home/vehicle %
+    "billing:manage",   # Stripe subscription + customer portal
+    "team:manage",      # invite, remove, change role, edit permissions
+]
+
+DEFAULT_ROLE_PERMISSIONS = {
+    "accountant": list(PERMISSIONS_EDITABLE),  # tout coche par defaut
+    "viewer": [
+        "expenses:read", "invoices:read", "quotes:read",
+        "clients:read", "products:read", "employees:read",
+        "reports:read", "bank:read",
+    ],
+}
+
+
+# Collections metier scopees par organisation (utilisees par migration + queries).
+_ORG_SCOPED_COLLECTIONS = [
+    "invoices", "quotes", "expenses", "clients", "products", "employees",
+    "company_settings", "files", "bank_mappings", "bank_imports",
+    "bank_transactions", "payment_transactions", "trial_notifications",
+    "quote_tokens",
+]
+
+
+def migrate_organizations_v1():
+    """Idempotente. Safe a executer a chaque boot backend.
+    - Cree une organisation pour chaque user sans organization_id.
+    - Backfill organization_id + created_by_user_id sur toutes les collections metier.
+    - Cree les indexes necessaires."""
+    users_without_org = list(db.users.find({"organization_id": {"$exists": False}}))
+    for user in users_without_org:
+        org_id = str(uuid.uuid4())
+        org_doc = {
+            "id": org_id,
+            "name": user.get("company_name") or user["email"],
+            "owner_id": user["id"],
+            "subscription_status": user.get("subscription_status", "trial"),
+            "stripe_customer_id": user.get("stripe_customer_id"),
+            "trial_ends_at": user.get("trial_end_date"),
+            "role_permissions": DEFAULT_ROLE_PERMISSIONS,
+            "scan_count_this_month": user.get("scan_count_this_month", 0),
+            "scan_quota_reset_at": user.get("scan_quota_reset_at"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        db.organizations.insert_one(org_doc)
+        db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"organization_id": org_id, "role": "owner"}}
+        )
+        # Backfill business collections : organization_id + created_by_user_id
+        for coll_name in _ORG_SCOPED_COLLECTIONS:
+            db[coll_name].update_many(
+                {"user_id": user["id"], "organization_id": {"$exists": False}},
+                [{"$set": {
+                    "organization_id": org_id,
+                    "created_by_user_id": "$user_id",
+                }}]
+            )
+
+    # Indexes idempotents
+    db.organizations.create_index("id", unique=True)
+    db.organizations.create_index("owner_id")
+    db.invitations.create_index("token", unique=True, sparse=True)
+    db.invitations.create_index([("organization_id", 1), ("status", 1)])
+    db.invitations.create_index([("email", 1), ("status", 1)])
+    for coll_name in _ORG_SCOPED_COLLECTIONS:
+        db[coll_name].create_index("organization_id")
+
+    if users_without_org:
+        print(f"MIGRATION organizations_v1 : {len(users_without_org)} orgs creees")
+
+
 # ─── Auth Dependencies ───
 EXEMPT_USERS = ["gussdub@gmail.com"]
 
@@ -4385,6 +4472,9 @@ def seed_data():
 
         # Migration tax_registrations (Section 2 du spec) — idempotente
         migrate_pst_to_qst()
+
+        # Migration feature #11 — organizations multi-tenant (idempotente)
+        migrate_organizations_v1()
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(
