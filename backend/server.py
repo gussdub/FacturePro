@@ -312,18 +312,19 @@ def _pct_delta(previous, current):
     return round((current - previous) / previous * 100, 1)
 
 
-def _aggregate_pnl(user_id, start, end, basis):
+def _aggregate_pnl(scope, start, end, basis):
     """Calcule la portion 'current' (sans comparaison) du P&L pour la période [start, end].
 
     basis = 'accrual' : status ∈ {sent, paid, overdue}
     basis = 'cash'    : status == paid
+    `scope` : filtre Mongo qui identifie l'organisation.
     """
     if basis == "cash":
         status_filter = "paid"
     else:
         status_filter = {"$in": ["sent", "paid", "overdue"]}
     invoice_filter = {
-        "user_id": user_id,
+        **scope,
         "issue_date": {"$gte": start, "$lte": end},
         "status": status_filter,
     }
@@ -338,7 +339,7 @@ def _aggregate_pnl(user_id, start, end, basis):
         revenue += subtotal
 
     expenses = list(db.expenses.find({
-        "user_id": user_id,
+        **scope,
         "expense_date": {"$gte": start, "$lte": end},
     }, {"_id": 0}))
 
@@ -1237,6 +1238,18 @@ def require_permission(perm_code: str):
     return _dep
 
 
+def _org_scope(current_user: CurrentUser) -> dict:
+    """Retourne le filtre Mongo `$or` pour scoper une query business à l'organisation
+    du user, avec fallback pre-migration sur user_id (docs sans organization_id).
+
+    Exemple : db.invoices.find({**_org_scope(u), "status": "sent"})
+    """
+    return {"$or": [
+        {"organization_id": current_user.organization_id},
+        {"user_id": current_user.id, "organization_id": {"$exists": False}},
+    ]}
+
+
 # Collections metier scopees par organisation (utilisees par migration + queries).
 _ORG_SCOPED_COLLECTIONS = [
     "invoices", "quotes", "expenses", "clients", "products", "employees",
@@ -1956,8 +1969,14 @@ def reset_password(request: dict):
 
 # ─── Clients CRUD ───
 @app.get("/api/clients")
-def get_clients(current_user: User = Depends(get_current_user_with_access)):
-    return clean_docs(db.clients.find({"user_id": current_user.id}, {"_id": 0}))
+def get_clients(current_user: CurrentUser = Depends(require_permission("clients:read"))):
+    return clean_docs(db.clients.find(
+        {"$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ))
 
 @app.post("/api/clients")
 def create_client(client_data: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -1997,8 +2016,17 @@ def delete_client(client_id: str, current_user: User = Depends(get_current_user_
 
 # ─── Products CRUD ───
 @app.get("/api/products")
-def get_products(current_user: User = Depends(get_current_user_with_access)):
-    return clean_docs(db.products.find({"user_id": current_user.id, "is_active": True}, {"_id": 0}))
+def get_products(current_user: CurrentUser = Depends(require_permission("products:read"))):
+    return clean_docs(db.products.find(
+        {
+            "$or": [
+                {"organization_id": current_user.organization_id},
+                {"user_id": current_user.id, "organization_id": {"$exists": False}},
+            ],
+            "is_active": True,
+        },
+        {"_id": 0}
+    ))
 
 @app.post("/api/products")
 def create_product(product_data: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -2030,13 +2058,25 @@ def delete_product(product_id: str, current_user: User = Depends(get_current_use
 
 # ─── Invoices CRUD ───
 @app.get("/api/invoices")
-def get_invoices(current_user: User = Depends(get_current_user_with_access)):
+def get_invoices(current_user: CurrentUser = Depends(require_permission("invoices:read"))):
     return [_enrich_invoice(clean_doc(doc))
-            for doc in db.invoices.find({"user_id": current_user.id}, {"_id": 0})]
+            for doc in db.invoices.find(
+                {"$or": [
+                    {"organization_id": current_user.organization_id},
+                    {"user_id": current_user.id, "organization_id": {"$exists": False}},
+                ]},
+                {"_id": 0}
+            )]
 
 @app.get("/api/invoices/{invoice_id}")
-def get_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
-    doc = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+def get_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_permission("invoices:read"))):
+    doc = db.invoices.find_one(
+        {"id": invoice_id, "$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    )
     if not doc:
         raise HTTPException(404, "Invoice not found")
     return _enrich_invoice(clean_doc(doc))
@@ -2252,8 +2292,14 @@ BANK_MAPPING_LIMIT = 20
 
 
 @app.get("/api/bank/mappings")
-def list_bank_mappings(current_user: User = Depends(get_current_user_with_access)):
-    cursor = db.bank_mappings.find({"user_id": current_user.id}, {"_id": 0}).sort("last_used_at", -1)
+def list_bank_mappings(current_user: CurrentUser = Depends(require_permission("bank:read"))):
+    cursor = db.bank_mappings.find(
+        {"$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ).sort("last_used_at", -1)
     return list(cursor)
 
 
@@ -2401,26 +2447,44 @@ def _import_with_live_counts(imp):
 
 @app.get("/api/bank/imports")
 def list_bank_imports(limit: int = 50,
-                      current_user: User = Depends(get_current_user_with_access)):
+                      current_user: CurrentUser = Depends(require_permission("bank:read"))):
     limit = min(max(limit, 1), 50)
     cursor = db.bank_imports.find(
-        {"user_id": current_user.id}, {"_id": 0}).sort("imported_at", -1).limit(limit)
+        {"$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ).sort("imported_at", -1).limit(limit)
     return [_import_with_live_counts(imp) for imp in cursor]
 
 
 @app.get("/api/bank/imports/{import_id}")
 def get_bank_import(import_id: str, page: int = 1, per_page: int = 100,
-                    current_user: User = Depends(get_current_user_with_access)):
+                    current_user: CurrentUser = Depends(require_permission("bank:read"))):
     per_page = min(max(per_page, 1), 500)
     page = max(page, 1)
-    imp = db.bank_imports.find_one({"id": import_id, "user_id": current_user.id}, {"_id": 0})
+    imp = db.bank_imports.find_one(
+        {"id": import_id, "$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    )
     if not imp:
         raise HTTPException(404, "Import not found")
     total = db.bank_transactions.count_documents(
-        {"import_id": import_id, "user_id": current_user.id})
+        {"import_id": import_id, "$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]})
     cursor = db.bank_transactions.find(
-        {"import_id": import_id, "user_id": current_user.id}, {"_id": 0})\
-        .sort("row_index", 1).skip((page - 1) * per_page).limit(per_page)
+        {"import_id": import_id, "$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ).sort("row_index", 1).skip((page - 1) * per_page).limit(per_page)
     return {
         "import": _import_with_live_counts(imp),
         "transactions": [clean_doc(t) for t in cursor],
@@ -2504,7 +2568,7 @@ def unignore_bank_transaction(tx_id: str,
 
 @app.get("/api/bank/transactions/{tx_id}/suggestions")
 def get_bank_suggestions(tx_id: str,
-                          current_user: User = Depends(get_current_user_with_access)):
+                          current_user: CurrentUser = Depends(require_permission("bank:read"))):
     tx = _get_tx_or_404(tx_id, current_user.id)
     if tx.get("date") is None or tx.get("amount_cad") is None:
         return {"invoices": [], "expenses": []}
@@ -2771,14 +2835,17 @@ async def scan_receipt(
 
 @app.get("/api/receipts/{file_id}")
 def get_receipt_file(file_id: str,
-                     current_user: User = Depends(get_current_user_with_access)):
+                     current_user: CurrentUser = Depends(require_permission("expenses:read"))):
     """Endpoint authentifié pour servir les images de reçus.
-    Filtre par user_id ET purpose=receipt pour ne pas exposer les logos."""
+    Filtre par organization_id (fallback user_id pre-migration) ET purpose=receipt pour ne pas exposer les logos."""
     record = db.files.find_one({
         "id": file_id,
-        "user_id": current_user.id,
         "purpose": "receipt",
         "is_deleted": False,
+        "$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ],
     })
     if not record:
         raise HTTPException(404, "Receipt not found")
@@ -2930,10 +2997,11 @@ def _t2125_compute_vehicle_adjustment(flat_expenses, vehicle_pct):
     }
 
 
-def _build_t2125_report(user_id, year, basis):
+def _build_t2125_report(scope, year, basis):
     """Construit le rapport T2125 pour une année et base données.
     Mode EXCLUSIF : si home_office_percentage > 0, les catégories rent/utilities/insurance
-    sont retirées de leurs lignes ARC et placées sur la ligne 9945 ; idem véhicule sur 9281."""
+    sont retirées de leurs lignes ARC et placées sur la ligne 9945 ; idem véhicule sur 9281.
+    `scope` : filtre Mongo qui identifie l'organisation."""
     # Validation année (avec +1 pour absorber la dérive timezone Quebec)
     upper_year = datetime.now(timezone.utc).year + 1
     if not (T2125_MIN_YEAR <= year <= upper_year):
@@ -2941,7 +3009,7 @@ def _build_t2125_report(user_id, year, basis):
     if basis not in T2125_VALID_BASES:
         raise HTTPException(422, "basis must be 'accrual' or 'cash'")
 
-    settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0})
+    settings = db.company_settings.find_one(scope, {"_id": 0})
     if not settings:
         raise HTTPException(422, "Complète tes informations dans Réglages avant de générer ton T2125")
     if settings.get("entity_type", "sole_proprietor") != "sole_proprietor":
@@ -2950,7 +3018,7 @@ def _build_t2125_report(user_id, year, basis):
     period = {"start": f"{year}-01-01", "end": f"{year}-12-31"}
 
     # Aggregate via _aggregate_pnl (feature #5)
-    pnl = _aggregate_pnl(user_id, period["start"], period["end"], basis=basis)
+    pnl = _aggregate_pnl(scope, period["start"], period["end"], basis=basis)
 
     # Flatten expense_groups → dict plat
     flat_expenses = _t2125_flatten_pnl_expenses(pnl.get("expense_groups", []))
@@ -3026,8 +3094,14 @@ def _build_t2125_report(user_id, year, basis):
 
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
-def get_quotes(current_user: User = Depends(get_current_user_with_access)):
-    return clean_docs(db.quotes.find({"user_id": current_user.id}, {"_id": 0}))
+def get_quotes(current_user: CurrentUser = Depends(require_permission("quotes:read"))):
+    return clean_docs(db.quotes.find(
+        {"$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ))
 
 @app.post("/api/quotes")
 def create_quote(quote_data: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -3128,8 +3202,17 @@ def delete_quote(quote_id: str, current_user: User = Depends(get_current_user_wi
 
 # ─── Employees CRUD ───
 @app.get("/api/employees")
-def get_employees(current_user: User = Depends(get_current_user_with_access)):
-    return clean_docs(db.employees.find({"user_id": current_user.id, "is_active": True}, {"_id": 0}))
+def get_employees(current_user: CurrentUser = Depends(require_permission("employees:read"))):
+    return clean_docs(db.employees.find(
+        {
+            "$or": [
+                {"organization_id": current_user.organization_id},
+                {"user_id": current_user.id, "organization_id": {"$exists": False}},
+            ],
+            "is_active": True,
+        },
+        {"_id": 0}
+    ))
 
 @app.post("/api/employees")
 def create_employee(employee_data: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -3166,8 +3249,14 @@ def get_expense_categories():
     return {"categories": EXPENSE_CATEGORIES, "groups": EXPENSE_CATEGORY_GROUPS}
 
 @app.get("/api/expenses")
-def get_expenses(current_user: User = Depends(get_current_user_with_access)):
-    return clean_docs(db.expenses.find({"user_id": current_user.id}, {"_id": 0}))
+def get_expenses(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    return clean_docs(db.expenses.find(
+        {"$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ))
 
 @app.post("/api/expenses")
 def create_expense(expense_data: dict, current_user: User = Depends(get_current_user_with_access)):
@@ -3393,8 +3482,14 @@ def import_csv_confirm(import_data: dict, current_user: User = Depends(get_curre
     return {"message": f"{created} depense(s) importee(s)", "created": created}
 
 @app.get("/api/dashboard/expense-analytics")
-def get_expense_analytics(current_user: User = Depends(get_current_user_with_access)):
-    expenses = list(db.expenses.find({"user_id": current_user.id}, {"_id": 0}))
+def get_expense_analytics(current_user: CurrentUser = Depends(require_permission("reports:read"))):
+    expenses = list(db.expenses.find(
+        {"$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ]},
+        {"_id": 0}
+    ))
     by_category = {}
     by_month = {}
     for exp in expenses:
@@ -3598,16 +3693,20 @@ def upload_logo_file(file: UploadFile = File(...), current_user: User = Depends(
 
 # ─── Dashboard ───
 @app.get("/api/dashboard/stats")
-def get_stats(current_user: User = Depends(get_current_user_with_access)):
-    total_clients = db.clients.count_documents({"user_id": current_user.id})
-    total_invoices = db.invoices.count_documents({"user_id": current_user.id})
-    total_quotes = db.quotes.count_documents({"user_id": current_user.id})
-    total_products = db.products.count_documents({"user_id": current_user.id, "is_active": True})
-    total_employees = db.employees.count_documents({"user_id": current_user.id, "is_active": True})
-    total_expenses = db.expenses.count_documents({"user_id": current_user.id})
-    paid_invoices = list(db.invoices.find({"user_id": current_user.id, "status": "paid"}, {"total": 1, "total_cad": 1, "currency": 1, "_id": 0}))
+def get_stats(current_user: CurrentUser = Depends(require_permission("reports:read"))):
+    scope = {"$or": [
+        {"organization_id": current_user.organization_id},
+        {"user_id": current_user.id, "organization_id": {"$exists": False}},
+    ]}
+    total_clients = db.clients.count_documents(scope)
+    total_invoices = db.invoices.count_documents(scope)
+    total_quotes = db.quotes.count_documents(scope)
+    total_products = db.products.count_documents({**scope, "is_active": True})
+    total_employees = db.employees.count_documents({**scope, "is_active": True})
+    total_expenses = db.expenses.count_documents(scope)
+    paid_invoices = list(db.invoices.find({**scope, "status": "paid"}, {"total": 1, "total_cad": 1, "currency": 1, "_id": 0}))
     total_revenue = sum(inv.get("total_cad", inv.get("total", 0)) for inv in paid_invoices)
-    pending_count = db.invoices.count_documents({"user_id": current_user.id, "status": {"$in": ["sent", "overdue"]}})
+    pending_count = db.invoices.count_documents({**scope, "status": {"$in": ["sent", "overdue"]}})
     return {
         "total_clients": total_clients, "total_invoices": total_invoices,
         "total_quotes": total_quotes, "total_products": total_products,
@@ -3616,9 +3715,13 @@ def get_stats(current_user: User = Depends(get_current_user_with_access)):
     }
 
 @app.get("/api/dashboard/overdue")
-def get_overdue_invoices(current_user: User = Depends(get_current_user_with_access)):
+def get_overdue_invoices(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    invoices = list(db.invoices.find({"user_id": current_user.id, "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}))
+    scope = {"$or": [
+        {"organization_id": current_user.organization_id},
+        {"user_id": current_user.id, "organization_id": {"$exists": False}},
+    ]}
+    invoices = list(db.invoices.find({**scope, "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}))
     overdue = []
     for inv in invoices:
         raw_due = inv.get("due_date", "")
@@ -3632,7 +3735,7 @@ def get_overdue_invoices(current_user: User = Depends(get_current_user_with_acce
                 db.invoices.update_one({"id": inv["id"]}, {"$set": {"status": "overdue"}})
                 inv["status"] = "overdue"
             _enrich_invoice(inv)
-            client = db.clients.find_one({"id": inv.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+            client = db.clients.find_one({"id": inv.get("client_id"), **scope}, {"_id": 0})
             overdue.append({
                 "id": inv["id"],
                 "invoice_number": inv.get("invoice_number", ""),
@@ -3650,10 +3753,13 @@ def get_overdue_invoices(current_user: User = Depends(get_current_user_with_acce
     return {"overdue_invoices": overdue, "total_overdue": round(total_overdue, 2), "count": len(overdue)}
 
 @app.get("/api/dashboard/outstanding")
-def get_dashboard_outstanding(current_user: User = Depends(get_current_user_with_access)):
+def get_dashboard_outstanding(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     """Total des soldes restants pour les invoices non-finalisées."""
     invoices = list(db.invoices.find({
-        "user_id": current_user.id,
+        "$or": [
+            {"organization_id": current_user.organization_id},
+            {"user_id": current_user.id, "organization_id": {"$exists": False}},
+        ],
         "status": {"$in": ["sent", "partial", "overdue"]},
     }, {"_id": 0}))
     total = 0.0
@@ -3706,8 +3812,8 @@ def send_invoice_reminder(invoice_id: str, body: dict, current_user: User = Depe
 
 # ─── CSV Exports ───
 @app.get("/api/export/invoices/csv")
-def export_invoices_csv(current_user: User = Depends(get_current_user_with_access)):
-    invoices = list(db.invoices.find({"user_id": current_user.id}, {"_id": 0}))
+def export_invoices_csv(current_user: CurrentUser = Depends(require_permission("invoices:read"))):
+    invoices = list(db.invoices.find(_org_scope(current_user), {"_id": 0}))
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Numero", "Client ID", "Date", "Echeance", "Sous-total", "TPS", "TVQ", "TVH", "Total", "Statut"])
@@ -3720,8 +3826,8 @@ def export_invoices_csv(current_user: User = Depends(get_current_user_with_acces
         media_type="text/csv", headers={"Content-Disposition": "attachment; filename=factures.csv"})
 
 @app.get("/api/export/expenses/csv")
-def export_expenses_csv(current_user: User = Depends(get_current_user_with_access)):
-    expenses = list(db.expenses.find({"user_id": current_user.id}, {"_id": 0}))
+def export_expenses_csv(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    expenses = list(db.expenses.find(_org_scope(current_user), {"_id": 0}))
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Description", "Montant", "Categorie", "Date", "Employe ID", "Statut"])
@@ -4053,13 +4159,17 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
 
 # ─── PDF Endpoints ───
 @app.get("/api/quotes/{quote_id}/pdf")
-def get_quote_pdf(quote_id: str, current_user: User = Depends(get_current_user_with_access)):
-    quote = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+def get_quote_pdf(quote_id: str, current_user: CurrentUser = Depends(require_permission("quotes:read"))):
+    scope = {"$or": [
+        {"organization_id": current_user.organization_id},
+        {"user_id": current_user.id, "organization_id": {"$exists": False}},
+    ]}
+    quote = db.quotes.find_one({"id": quote_id, **scope}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": quote.get("client_id"), "user_id": current_user.id}, {"_id": 0})
-    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": quote.get("client_id"), **scope}, {"_id": 0})
+    products = list(db.products.find(scope, {"_id": 0}))
 
     pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
     filename = f"soumission_{quote.get('quote_number', 'N-A')}.pdf"
@@ -4071,13 +4181,17 @@ def get_quote_pdf(quote_id: str, current_user: User = Depends(get_current_user_w
         })
 
 @app.get("/api/invoices/{invoice_id}/pdf")
-def get_invoice_pdf(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
-    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+def get_invoice_pdf(invoice_id: str, current_user: CurrentUser = Depends(require_permission("invoices:read"))):
+    scope = {"$or": [
+        {"organization_id": current_user.organization_id},
+        {"user_id": current_user.id, "organization_id": {"$exists": False}},
+    ]}
+    invoice = db.invoices.find_one({"id": invoice_id, **scope}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": invoice.get("client_id"), "user_id": current_user.id}, {"_id": 0})
-    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": invoice.get("client_id"), **scope}, {"_id": 0})
+    products = list(db.products.find(scope, {"_id": 0}))
 
     pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
     filename = f"facture_{invoice.get('invoice_number', 'N-A')}.pdf"
@@ -4429,15 +4543,18 @@ async def check_trial_expiry(request: Request):
 
 
 # ─── Sales Tax Report ───
-def _aggregate_sales_tax(user_id, start, end):
-    """Calcule sommaire + détails CRA + Revenu Québec pour la période [start, end] inclusive."""
+def _aggregate_sales_tax(scope, start, end):
+    """Calcule sommaire + détails CRA + Revenu Québec pour la période [start, end] inclusive.
+
+    `scope` : filtre Mongo qui identifie l'organisation (dict ex. {"$or": [...]}).
+    """
     invoices = list(db.invoices.find({
-        "user_id": user_id,
+        **scope,
         "status": {"$in": ["sent", "paid", "overdue"]},
         "issue_date": {"$gte": start, "$lte": end},
     }, {"_id": 0}))
     expenses = list(db.expenses.find({
-        "user_id": user_id,
+        **scope,
         "expense_date": {"$gte": start, "$lte": end},
     }, {"_id": 0}))
 
@@ -4507,15 +4624,15 @@ def _aggregate_sales_tax(user_id, start, end):
 
 @app.get("/api/reports/sales-tax")
 def get_sales_tax_report(start: str = Query(...), end: str = Query(...),
-                         current_user: User = Depends(get_current_user_with_access)):
+                         current_user: CurrentUser = Depends(require_permission("reports:read"))):
     """Rapport TPS/TVQ pour une période donnée."""
-    return _aggregate_sales_tax(current_user.id, start, end)
+    return _aggregate_sales_tax(_org_scope(current_user), start, end)
 
 
-def generate_sales_tax_report_pdf(user_id, start, end):
+def generate_sales_tax_report_pdf(scope, start, end):
     """Génère un PDF A4 du rapport TPS/TVQ."""
-    data = _aggregate_sales_tax(user_id, start, end)
-    company_settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    data = _aggregate_sales_tax(scope, start, end)
+    company_settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
 
     buffer = io.BytesIO()
     pdf = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch,
@@ -4632,8 +4749,8 @@ def generate_sales_tax_report_pdf(user_id, start, end):
 
 @app.get("/api/reports/sales-tax/pdf")
 def get_sales_tax_report_pdf(start: str = Query(...), end: str = Query(...),
-                              current_user: User = Depends(get_current_user_with_access)):
-    pdf_buffer = generate_sales_tax_report_pdf(current_user.id, start, end)
+                              current_user: CurrentUser = Depends(require_permission("reports:read"))):
+    pdf_buffer = generate_sales_tax_report_pdf(_org_scope(current_user), start, end)
     filename = f"rapport-tps-tvq-{start}-au-{end}.pdf"
     return StreamingResponse(pdf_buffer, media_type="application/pdf",
                               headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -4645,7 +4762,7 @@ def get_pnl_report(
     end: str = Query(...),
     basis: str = Query("accrual"),
     compare: str = Query("none"),
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
 ):
     """État des résultats simplifié (P&L)."""
     if basis not in ("accrual", "cash"):
@@ -4653,7 +4770,8 @@ def get_pnl_report(
     if compare not in ("none", "previous", "prior_year"):
         compare = "none"
 
-    current = _aggregate_pnl(current_user.id, start, end, basis)
+    scope = _org_scope(current_user)
+    current = _aggregate_pnl(scope, start, end, basis)
     out = {
         "period": {"start": start, "end": end},
         "basis": basis,
@@ -4669,7 +4787,7 @@ def get_pnl_report(
     compare_period = _compute_compare_period(start, end, compare)
     if compare_period:
         cs, ce = compare_period
-        previous = _aggregate_pnl(current_user.id, cs, ce, basis)
+        previous = _aggregate_pnl(scope, cs, ce, basis)
         out["compare_period"] = {"start": cs, "end": ce}
         out["revenue"]["previous"] = previous["revenue"]
         out["revenue"]["delta_pct"] = _pct_delta(previous["revenue"], current["revenue"])
@@ -4698,9 +4816,10 @@ def get_pnl_report(
     return out
 
 
-def generate_pnl_report_pdf(user_id, data):
-    """Génère un PDF du rapport P&L. `data` est la sortie de get_pnl_report."""
-    company_settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+def generate_pnl_report_pdf(scope, data):
+    """Génère un PDF du rapport P&L. `data` est la sortie de get_pnl_report.
+    `scope` : filtre Mongo qui identifie l'organisation."""
+    company_settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
     buffer = io.BytesIO()
     pdf = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch,
                             bottomMargin=0.5*inch, leftMargin=0.6*inch, rightMargin=0.6*inch)
@@ -4821,10 +4940,10 @@ def get_pnl_report_pdf(
     end: str = Query(...),
     basis: str = Query("accrual"),
     compare: str = Query("none"),
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
 ):
     data = get_pnl_report(start, end, basis, compare, current_user)
-    pdf_buffer = generate_pnl_report_pdf(current_user.id, data)
+    pdf_buffer = generate_pnl_report_pdf(_org_scope(current_user), data)
     filename = f"etat-des-resultats-{start}-au-{end}.pdf"
     return StreamingResponse(pdf_buffer, media_type="application/pdf",
                               headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -4837,10 +4956,10 @@ def get_pnl_report_pdf(
 def get_t2125_report(
     year: int,
     basis: str = "accrual",
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
 ):
     """Retourne le rapport T2125 au format JSON pour preview UI."""
-    return _build_t2125_report(current_user.id, year, basis)
+    return _build_t2125_report(_org_scope(current_user), year, basis)
 
 
 def _render_t2125_csv(report):
@@ -4884,10 +5003,10 @@ def _render_t2125_csv(report):
 def get_t2125_csv(
     year: int,
     basis: str = "accrual",
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
 ):
     """Export T2125 au format CSV (UTF-8 BOM)."""
-    report = _build_t2125_report(current_user.id, year, basis)
+    report = _build_t2125_report(_org_scope(current_user), year, basis)
     csv_bytes = _render_t2125_csv(report)
     return Response(
         content=csv_bytes,
@@ -5086,10 +5205,10 @@ def _render_t2125_pdf(report):
 def get_t2125_pdf(
     year: int,
     basis: str = "accrual",
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
 ):
     """Export T2125 au format PDF."""
-    report = _build_t2125_report(current_user.id, year, basis)
+    report = _build_t2125_report(_org_scope(current_user), year, basis)
     pdf_bytes = _render_t2125_pdf(report)
     return Response(
         content=pdf_bytes,

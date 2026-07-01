@@ -107,7 +107,7 @@ class TestAggregatePnl:
         import server
         monkeypatch.setattr(server, "db", isolated_db)
         _seed_for_aggregate(isolated_db, "u1")
-        result = server._aggregate_pnl("u1", "2099-04-01", "2099-06-30", "accrual")
+        result = server._aggregate_pnl({"user_id": "u1"}, "2099-04-01", "2099-06-30", "accrual")
         # 2 paid + 1 sent = 3500 (draft exclu)
         assert result["revenue"] == 3500.00
         assert result["invoice_count"] == 3
@@ -117,7 +117,7 @@ class TestAggregatePnl:
         import server
         monkeypatch.setattr(server, "db", isolated_db)
         _seed_for_aggregate(isolated_db, "u1")
-        result = server._aggregate_pnl("u1", "2099-04-01", "2099-06-30", "cash")
+        result = server._aggregate_pnl({"user_id": "u1"}, "2099-04-01", "2099-06-30", "cash")
         # 2 paid uniquement
         assert result["revenue"] == 3000.00
         assert result["invoice_count"] == 2
@@ -126,7 +126,7 @@ class TestAggregatePnl:
         import server
         monkeypatch.setattr(server, "db", isolated_db)
         _seed_for_aggregate(isolated_db, "u1")
-        result = server._aggregate_pnl("u1", "2099-04-01", "2099-06-30", "accrual")
+        result = server._aggregate_pnl({"user_id": "u1"}, "2099-04-01", "2099-06-30", "accrual")
         groups = {g["group"]: g for g in result["expense_groups"]}
         assert "office" in groups
         office_cats = [c["code"] for c in groups["office"]["categories"]]
@@ -141,7 +141,7 @@ class TestAggregatePnl:
         import server
         monkeypatch.setattr(server, "db", isolated_db)
         _seed_for_aggregate(isolated_db, "u1")
-        result = server._aggregate_pnl("u1", "2099-04-01", "2099-06-30", "accrual")
+        result = server._aggregate_pnl({"user_id": "u1"}, "2099-04-01", "2099-06-30", "accrual")
         assert result["total_expenses"]["gross"] == 650.00
         assert result["total_expenses"]["deductible"] == 500.00
         assert result["net_income"]["management"] == 2850.00
@@ -150,7 +150,7 @@ class TestAggregatePnl:
     def test_empty_period(self, isolated_db, monkeypatch):
         import server
         monkeypatch.setattr(server, "db", isolated_db)
-        result = server._aggregate_pnl("u1", "2020-01-01", "2020-01-31", "accrual")
+        result = server._aggregate_pnl({"user_id": "u1"}, "2020-01-01", "2020-01-31", "accrual")
         assert result["revenue"] == 0
         assert result["total_expenses"] == {"gross": 0, "deductible": 0}
         assert result["net_income"] == {"management": 0, "taxable": 0}

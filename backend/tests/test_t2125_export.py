@@ -243,7 +243,7 @@ class TestBuildT2125Report:
         self._setup_settings(uid)
         try:
             with pytest.raises(HTTPException) as exc:
-                _build_t2125_report(uid, 1999, "accrual")
+                _build_t2125_report({"user_id": uid}, 1999, "accrual")
             assert exc.value.status_code == 422
         finally:
             self._cleanup_settings(uid)
@@ -254,7 +254,7 @@ class TestBuildT2125Report:
         try:
             future = datetime.now(timezone.utc).year + 5
             with pytest.raises(HTTPException) as exc:
-                _build_t2125_report(uid, future, "accrual")
+                _build_t2125_report({"user_id": uid}, future, "accrual")
             assert exc.value.status_code == 422
         finally:
             self._cleanup_settings(uid)
@@ -264,7 +264,7 @@ class TestBuildT2125Report:
         self._setup_settings(uid)
         try:
             yr = datetime.now(timezone.utc).year + 1
-            report = _build_t2125_report(uid, yr, "accrual")
+            report = _build_t2125_report({"user_id": uid}, yr, "accrual")
             assert report["year"] == yr
             assert report["is_partial_year"] is True
         finally:
@@ -275,7 +275,7 @@ class TestBuildT2125Report:
         self._setup_settings(uid)
         try:
             with pytest.raises(HTTPException) as exc:
-                _build_t2125_report(uid, 2099, "xxx")
+                _build_t2125_report({"user_id": uid}, 2099, "xxx")
             assert exc.value.status_code == 422
         finally:
             self._cleanup_settings(uid)
@@ -285,7 +285,7 @@ class TestBuildT2125Report:
         self._setup_settings(uid, entity_type="corporation")
         try:
             with pytest.raises(HTTPException) as exc:
-                _build_t2125_report(uid, 2099, "accrual")
+                _build_t2125_report({"user_id": uid}, 2099, "accrual")
             assert exc.value.status_code == 422
         finally:
             self._cleanup_settings(uid)
@@ -295,7 +295,7 @@ class TestBuildT2125Report:
         valid_year = datetime.now(timezone.utc).year + 1
         # Pas de _setup_settings → settings absent
         with pytest.raises(HTTPException) as exc:
-            _build_t2125_report(uid, valid_year, "accrual")
+            _build_t2125_report({"user_id": uid}, valid_year, "accrual")
         assert exc.value.status_code == 422
         assert "Réglages" in exc.value.detail
 
@@ -304,7 +304,7 @@ class TestBuildT2125Report:
         valid_year = datetime.now(timezone.utc).year + 1
         self._setup_settings(uid)
         try:
-            report = _build_t2125_report(uid, valid_year, "accrual")
+            report = _build_t2125_report({"user_id": uid}, valid_year, "accrual")
             assert report["gross_income"] == 0
             assert report["expenses_by_arc_line"] == []
             assert report["total_expenses_deductible"] == 0
@@ -318,7 +318,7 @@ class TestBuildT2125Report:
         valid_year = datetime.now(timezone.utc).year + 1
         self._setup_settings(uid)
         try:
-            report = _build_t2125_report(uid, valid_year, "accrual")
+            report = _build_t2125_report({"user_id": uid}, valid_year, "accrual")
             for key in ["year", "basis", "period", "entity_type", "province",
                         "company_name", "bn_number", "gross_income", "income_line",
                         "expenses_by_arc_line", "total_expenses_deductible",
