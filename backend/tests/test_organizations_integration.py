@@ -239,3 +239,76 @@ class TestStripeWebhookMirrorsOrg:
             db.users.delete_one({"id": uid})
             db.organizations.delete_one({"id": org_id})
             db.payment_transactions.delete_one({"id": tx_id})
+
+
+# ─── Task 4 : GET /api/org/me + PUT /api/org/role-permissions ───
+
+class TestOrgMeEndpoint:
+    def test_owner_gets_full_context(self, client, owner_headers):
+        r = client.get("/api/org/me", headers=owner_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "organization" in body
+        assert "current_user" in body
+        assert "members" in body
+        org = body["organization"]
+        assert "id" in org
+        assert "name" in org
+        assert "role_permissions" in org
+        cu = body["current_user"]
+        assert cu["role"] == "owner"
+        # Owner has all permissions (editable + owner-only)
+        for code in ["expenses:read", "settings:manage", "team:manage"]:
+            assert code in cu["permissions"]
+        assert isinstance(body["members"], list)
+        assert any(m["id"] == cu["id"] for m in body["members"])
+
+    def test_unauthenticated_returns_401_or_403(self, client):
+        r = client.get("/api/org/me")
+        assert r.status_code in (401, 403)
+
+
+class TestRolePermissionsEndpoint:
+    def test_owner_can_edit_matrix(self, client, owner_headers):
+        r = client.put("/api/org/role-permissions", headers=owner_headers,
+                       json={"role": "accountant",
+                             "permissions": ["expenses:read", "invoices:read"]})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["role"] == "accountant"
+        assert set(body["permissions"]) == {"expenses:read", "invoices:read"}
+
+        # Verify persistence
+        r2 = client.get("/api/org/me", headers=owner_headers)
+        matrix = r2.json()["organization"]["role_permissions"]
+        assert set(matrix["accountant"]) == {"expenses:read", "invoices:read"}
+
+    def test_cannot_edit_owner_role(self, client, owner_headers):
+        r = client.put("/api/org/role-permissions", headers=owner_headers,
+                       json={"role": "owner", "permissions": ["expenses:read"]})
+        assert r.status_code == 400
+
+    def test_cannot_inject_owner_only_code(self, client, owner_headers):
+        r = client.put("/api/org/role-permissions", headers=owner_headers,
+                       json={"role": "accountant",
+                             "permissions": ["expenses:read", "team:manage"]})
+        assert r.status_code == 400
+        assert "team:manage" in r.json()["detail"]
+
+    def test_cannot_use_unknown_code(self, client, owner_headers):
+        r = client.put("/api/org/role-permissions", headers=owner_headers,
+                       json={"role": "accountant",
+                             "permissions": ["not:a:real:code"]})
+        assert r.status_code == 400
+
+    def test_invalid_role_rejected(self, client, owner_headers):
+        r = client.put("/api/org/role-permissions", headers=owner_headers,
+                       json={"role": "root", "permissions": []})
+        assert r.status_code == 400
+
+    def test_reset_matrix_to_defaults(self, client, owner_headers):
+        # Restore default accountant permissions (cleanup for other tests)
+        r = client.put("/api/org/role-permissions", headers=owner_headers,
+                       json={"role": "accountant",
+                             "permissions": list(server_module.PERMISSIONS_EDITABLE)})
+        assert r.status_code == 200

@@ -1401,6 +1401,72 @@ def grant_receipt_ocr_consent(current_user: User = Depends(get_current_user_with
     return {"receipt_ocr_consent_at": now}
 
 
+# ─── Organization endpoints (feature #11) ───
+
+@app.get("/api/org/me")
+def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Retourne le contexte complet de l'organisation du user courant :
+    organisation + user courant (rôle + permissions) + liste des membres."""
+    org = db.organizations.find_one(
+        {"id": current_user.organization_id}, {"_id": 0}
+    )
+    if not org:
+        # Synthesized virtual org (pre-migration edge case) — reconstruire.
+        user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0})
+        org = _synthesize_solo_org_from_user(user_doc)
+
+    members_cursor = db.users.find(
+        {"organization_id": current_user.organization_id, "is_active": True},
+        {"_id": 0, "id": 1, "email": 1, "role": 1, "created_at": 1}
+    )
+    members = list(members_cursor)
+
+    return {
+        "organization": {
+            "id": org["id"],
+            "name": org.get("name"),
+            "owner_id": org.get("owner_id"),
+            "subscription_status": org.get("subscription_status"),
+            "trial_ends_at": org.get("trial_ends_at"),
+            "role_permissions": org.get("role_permissions") or DEFAULT_ROLE_PERMISSIONS,
+            "scan_count_this_month": org.get("scan_count_this_month", 0),
+            "scan_quota_limit": SCAN_QUOTA_LIMIT,
+        },
+        "current_user": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "role": current_user.role,
+            "permissions": current_user.permissions,
+        },
+        "members": members,
+    }
+
+
+@app.put("/api/org/role-permissions")
+def update_role_permissions(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    """Éditer la matrice de permissions pour un rôle donné.
+    - role ∈ {"accountant", "viewer"} — jamais "owner".
+    - Chaque code doit être dans PERMISSIONS_EDITABLE — 400 si code owner-only ou inconnu."""
+    role = body.get("role")
+    permissions = body.get("permissions", [])
+    if role not in ("accountant", "viewer"):
+        raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
+    if not isinstance(permissions, list):
+        raise HTTPException(400, "permissions must be a list")
+    for code in permissions:
+        if code not in PERMISSIONS_EDITABLE:
+            raise HTTPException(400, f"Permission code invalide : {code}")
+    # Persist (idempotent update on the org)
+    db.organizations.update_one(
+        {"id": current_user.organization_id},
+        {"$set": {f"role_permissions.{role}": permissions}}
+    )
+    return {"role": role, "permissions": permissions}
+
+
 # ─── Health ───
 @app.get("/")
 def root():
