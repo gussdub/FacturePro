@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
-import { ScanLine, Paperclip } from 'lucide-react';
+import { ScanLine, Paperclip, Edit } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 
 function computeTaxesPaid(amountGross, province) {
@@ -51,6 +51,29 @@ const ExpensesPage = () => {
   const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
   const [needsConsent, setNeedsConsent] = useState(false);
   const [consentAt, setConsentAt] = useState(null);
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [filters, setFilters] = useState({
+    q: '', category_code: '', date_from: '', date_to: '', amount_min: '', amount_max: ''
+  });
+
+  const filteredExpenses = useMemo(() => {
+    const q = filters.q.trim().toLowerCase();
+    const min = filters.amount_min === '' ? null : parseFloat(filters.amount_min);
+    const max = filters.amount_max === '' ? null : parseFloat(filters.amount_max);
+    return expenses.filter(exp => {
+      if (q) {
+        const hay = `${exp.description || ''} ${exp.vendor || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (filters.category_code && exp.category_code !== filters.category_code) return false;
+      if (filters.date_from && exp.expense_date < filters.date_from) return false;
+      if (filters.date_to && exp.expense_date > filters.date_to) return false;
+      const amt = parseFloat(exp.amount);
+      if (min !== null && !isNaN(min) && amt < min) return false;
+      if (max !== null && !isNaN(max) && amt > max) return false;
+      return true;
+    });
+  }, [expenses, filters]);
 
   useEffect(() => { fetchData(); }, []);
 
@@ -86,21 +109,52 @@ const ExpensesPage = () => {
   const resetForm = () => {
     setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0, category_code: '', category_custom_label: '', gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false });
     setPreviewReceipt(null);
+    setEditingExpenseId(null);
+  };
+
+  const handleEdit = (exp) => {
+    setEditingExpenseId(exp.id);
+    setFormData({
+      employee_id: exp.employee_id || '',
+      description: exp.description || '',
+      category: exp.category || '',
+      notes: exp.notes || '',
+      receipt_url: exp.receipt_url || '',
+      currency: exp.currency || 'CAD',
+      exchange_rate_to_cad: exp.exchange_rate_to_cad || 1.0,
+      category_custom_label: exp.category_custom_label || '',
+      taxes_auto_computed: exp.taxes_auto_computed || false,
+      vendor: exp.vendor || '',
+      expense_date: exp.expense_date || new Date().toISOString().slice(0, 10),
+      amount: exp.amount ?? '',
+      gst_paid_cad: exp.gst_paid_cad ?? 0,
+      qst_paid_cad: exp.qst_paid_cad ?? 0,
+      hst_paid_cad: exp.hst_paid_cad ?? 0,
+      category_code: exp.category_code || 'other',
+      receipt_file_id: exp.receipt_file_id || null,
+    });
+    setShowForm(true);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault(); setError(''); setSuccess('');
     try {
-      await axios.post(`${BACKEND_URL}/api/expenses`, { ...formData, amount: parseFloat(formData.amount) });
+      if (editingExpenseId) {
+        await axios.put(`${BACKEND_URL}/api/expenses/${editingExpenseId}`, { ...formData, amount: parseFloat(formData.amount) });
+      } else {
+        await axios.post(`${BACKEND_URL}/api/expenses`, { ...formData, amount: parseFloat(formData.amount) });
+      }
       // Clear scan state after successful save (file is now linked to the expense — do NOT delete it)
       if (receiptScan) {
         if (receiptScan.blobUrl) URL.revokeObjectURL(receiptScan.blobUrl);
         setReceiptScan(null);
       }
-      setSuccess('Depense creee avec succes'); setShowForm(false);
+      setSuccess(editingExpenseId ? 'Depense modifiee avec succes' : 'Depense creee avec succes');
+      setShowForm(false);
+      setEditingExpenseId(null);
       resetForm();
       fetchData();
-    } catch { setError('Erreur lors de la creation'); }
+    } catch { setError(editingExpenseId ? 'Erreur lors de la modification' : 'Erreur lors de la creation'); }
   };
 
   const updateStatus = async (id, status) => {
@@ -406,6 +460,49 @@ const ExpensesPage = () => {
       {error && <div data-testid="expense-error" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px', cursor: 'pointer' }} onClick={() => setError('')}>{error}</div>}
       {success && <div data-testid="expense-success" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px', cursor: 'pointer' }} onClick={() => setSuccess('')}>{success}</div>}
 
+      {/* Filter bar */}
+      {expenses.length > 0 && (
+        <div data-testid="expenses-filter-bar" style={{
+          background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px',
+          padding: '12px 16px', marginBottom: '16px'
+        }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+            <input type="text" placeholder="Nom ou vendeur..." value={filters.q}
+              onChange={e => setFilters(f => ({...f, q: e.target.value}))}
+              style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', minWidth: '180px', flex: '1 1 180px' }} />
+            <select value={filters.category_code}
+              onChange={e => setFilters(f => ({...f, category_code: e.target.value}))}
+              style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', minWidth: '160px' }}>
+              <option value="">Toutes catégories</option>
+              {(categoryCatalog.categories || []).map(c => (
+                <option key={c.code} value={c.code}>{c.label_fr}</option>
+              ))}
+            </select>
+            <input type="date" value={filters.date_from}
+              onChange={e => setFilters(f => ({...f, date_from: e.target.value}))}
+              title="Date de début"
+              style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }} />
+            <input type="date" value={filters.date_to}
+              onChange={e => setFilters(f => ({...f, date_to: e.target.value}))}
+              title="Date de fin"
+              style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px' }} />
+            <input type="number" step="0.01" placeholder="Min $" value={filters.amount_min}
+              onChange={e => setFilters(f => ({...f, amount_min: e.target.value}))}
+              style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', width: '90px' }} />
+            <input type="number" step="0.01" placeholder="Max $" value={filters.amount_max}
+              onChange={e => setFilters(f => ({...f, amount_max: e.target.value}))}
+              style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: '6px', fontSize: '13px', width: '90px' }} />
+            <button type="button" onClick={() => setFilters({ q: '', category_code: '', date_from: '', date_to: '', amount_min: '', amount_max: '' })}
+              style={{ padding: '6px 12px', background: '#fff', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>
+              Effacer
+            </button>
+          </div>
+          <div style={{ marginTop: '8px', fontSize: '12px', color: '#64748b' }}>
+            {filteredExpenses.length} sur {expenses.length} dépense{expenses.length > 1 ? 's' : ''}
+          </div>
+        </div>
+      )}
+
       {/* List */}
       {expenses.length === 0 ? (
         <div style={{ background: '#fff', border: '2px dashed #d1d5db', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
@@ -416,9 +513,15 @@ const ExpensesPage = () => {
             <button onClick={() => { resetForm(); setShowForm(true); }} style={btnPrimary}>Ajouter une depense</button>
           </div>
         </div>
+      ) : filteredExpenses.length === 0 ? (
+        <div data-testid="expenses-filtered-empty" style={{ background: '#fff', border: '2px dashed #d1d5db', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#374151', margin: '0 0 8px' }}>Aucune dépense ne correspond aux filtres</h3>
+          <p style={{ color: '#6b7280', margin: '0 0 16px' }}>Ajustez ou effacez les filtres pour voir plus de résultats.</p>
+          <button type="button" onClick={() => setFilters({ q: '', category_code: '', date_from: '', date_to: '', amount_min: '', amount_max: '' })} style={btnSecondary}>Effacer les filtres</button>
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {expenses.map(exp => {
+          {filteredExpenses.map(exp => {
             const st = statusColors[exp.status] || statusColors.pending;
             const empName = getEmployeeName(exp.employee_id);
             return (
@@ -453,22 +556,37 @@ const ExpensesPage = () => {
                     )}
                     <span style={{ background: st.bg, color: st.color, padding: '3px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>{st.label}</span>
                     <div style={{ display: 'flex', gap: '6px', marginTop: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      {exp.receipt_file_id && (
+                        <button
+                          type="button"
+                          data-testid={`view-receipt-${exp.id}`}
+                          onClick={(e) => { e.stopPropagation(); viewReceipt(exp.receipt_file_id); }}
+                          title="Voir le reçu"
+                          style={{ background: '#dcfce7', color: '#166534', border: 'none',
+                                   padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
+                                   fontSize: '12px', fontWeight: '600',
+                                   display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          <Paperclip size={14} />
+                          Reçu
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        data-testid={`edit-expense-${exp.id}`}
+                        onClick={() => handleEdit(exp)}
+                        title="Éditer"
+                        style={{ background: '#dbeafe', color: '#1e40af', border: 'none',
+                                 padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
+                                 fontSize: '12px', fontWeight: '600',
+                                 display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                        <Edit size={14} />
+                        Éditer
+                      </button>
                       {exp.status === 'pending' && (
                         <>
                           <button data-testid={`approve-${exp.id}`} onClick={() => updateStatus(exp.id, 'approved')} style={{ background: '#dcfce7', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Approuver</button>
                           <button data-testid={`reject-${exp.id}`} onClick={() => updateStatus(exp.id, 'rejected')} style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Rejeter</button>
                         </>
-                      )}
-                      {exp.receipt_file_id && (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); viewReceipt(exp.receipt_file_id); }}
-                          title="Voir le reçu"
-                          style={{ background: "none", border: "none", cursor: "pointer",
-                                   color: "#6b7280", padding: 4,
-                                   display: "inline-flex", alignItems: "center" }}>
-                          <Paperclip size={14} />
-                        </button>
                       )}
                       <button data-testid={`delete-expense-${exp.id}`} onClick={() => handleDelete(exp.id)} style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>Suppr.</button>
                     </div>
@@ -485,7 +603,7 @@ const ExpensesPage = () => {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}>
           <div style={{ background: '#fff', borderRadius: '16px', width: '95%', maxWidth: '560px', maxHeight: '92vh', overflow: 'auto', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
             <div style={{ padding: '24px 28px', borderBottom: '1px solid #e5e7eb' }}>
-              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700' }}>Nouvelle Depense</h3>
+              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: '700' }}>{editingExpenseId ? 'Modifier la dépense' : 'Nouvelle Depense'}</h3>
             </div>
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
               {receiptScan && (
@@ -708,7 +826,31 @@ const ExpensesPage = () => {
               <div style={{ marginBottom: '16px' }}>
                 <label style={labelStyle}>Recu <span style={{ color: '#9ca3af', fontWeight: '400' }}>(optionnel — glisser-deposer ou cliquer)</span></label>
                 <input ref={receiptInputRef} type="file" accept="image/*,application/pdf" onChange={handleReceiptFileSelect} style={{ display: 'none' }} />
-                {!previewReceipt && !formData.receipt_url ? (
+                {formData.receipt_file_id ? (
+                  <div data-testid="receipt-scan-attached" style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: '10px', padding: '12px 16px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <Paperclip size={18} color="#1e40af" />
+                      <span style={{ fontSize: '14px', fontWeight: '600', color: '#1e40af' }}>
+                        Reçu scanné joint
+                      </span>
+                      {receiptScan?.blobUrl && (
+                        <a href={receiptScan.blobUrl} target="_blank" rel="noopener noreferrer"
+                           style={{ fontSize: '13px', color: '#1e40af', textDecoration: 'underline' }}>
+                          Voir en grand
+                        </a>
+                      )}
+                    </div>
+                    <button type="button" onClick={removeReceiptFromForm} data-testid="remove-scan-btn"
+                            style={{ background: '#fef2f2', color: '#dc2626', border: 'none',
+                                     padding: '4px 10px', borderRadius: '6px', cursor: 'pointer',
+                                     fontSize: '12px', fontWeight: '600' }}>
+                      Retirer
+                    </button>
+                  </div>
+                ) : (!previewReceipt && !formData.receipt_url) ? (
                   <div
                     data-testid="receipt-dropzone"
                     onDragEnter={handleDrag}
@@ -767,9 +909,9 @@ const ExpensesPage = () => {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', borderTop: '1px solid #e5e7eb', paddingTop: '20px' }}>
-                <button type="button" onClick={async () => { if (receiptScan) { await removeReceiptFromForm(); } setShowForm(false); resetForm(); }} style={btnSecondary}>Annuler</button>
+                <button type="button" onClick={async () => { if (receiptScan) { await removeReceiptFromForm(); } setShowForm(false); setEditingExpenseId(null); resetForm(); }} style={btnSecondary}>Annuler</button>
                 <button type="submit" data-testid="save-expense-btn" disabled={uploading}
-                  style={{ ...btnPrimary, opacity: uploading ? 0.6 : 1 }}>Creer la depense</button>
+                  style={{ ...btnPrimary, opacity: uploading ? 0.6 : 1 }}>{editingExpenseId ? 'Enregistrer les modifications' : 'Creer la depense'}</button>
               </div>
             </form>
           </div>
