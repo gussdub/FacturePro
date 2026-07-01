@@ -1521,7 +1521,10 @@ def create_invitation(
     if role not in ("accountant", "viewer"):
         raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
 
-    # Check no duplicate pending invitation in this org
+    # Check no duplicate pending invitation in this org.
+    # Safe to compare exact-match: invariant — invitations.email is always
+    # written lowercase (l. 1513 above), and no other endpoint inserts
+    # invitations, so both writer and reader agree on lowercase form.
     existing = db.invitations.find_one({
         "organization_id": current_user.organization_id,
         "email": email,
@@ -1530,9 +1533,13 @@ def create_invitation(
     if existing:
         raise HTTPException(409, "Une invitation en attente existe déjà pour cet email")
 
-    # Check email is not already a member of this org
+    # Check email is not already a member of this org.
+    # users.email is stored as-provided at signup (legacy — some records are
+    # mixed-case), so use a case-insensitive lookup to avoid creating a
+    # duplicate member when an existing user's stored email differs only in
+    # casing from the lowercase-normalized invitation email.
     already_member = db.users.find_one({
-        "email": email,
+        "email": {"$regex": f"^{_re.escape(email)}$", "$options": "i"},
         "organization_id": current_user.organization_id,
     })
     if already_member:
@@ -1621,7 +1628,14 @@ def health():
 # ─── Auth Routes ───
 @app.post("/api/auth/register", response_model=Token)
 def register(user_data: UserCreate):
-    existing = db.users.find_one({"email": user_data.email})
+    # Normalize email to lowercase at signup so downstream lookups
+    # (invitations already-member check, duplicate register, etc.) can
+    # rely on a consistent stored form. Case-insensitive existing-user
+    # check protects against duplicate accounts differing only in casing.
+    normalized_email = (user_data.email or "").strip().lower()
+    existing = db.users.find_one({
+        "email": {"$regex": f"^{re.escape(normalized_email)}$", "$options": "i"},
+    })
     if existing:
         raise HTTPException(400, "Email already registered")
 
@@ -1646,7 +1660,7 @@ def register(user_data: UserCreate):
 
     user_doc = {
         "id": user_id,
-        "email": user_data.email,
+        "email": normalized_email,
         "company_name": user_data.company_name,
         "is_active": True,
         "organization_id": org_id,
@@ -1668,7 +1682,7 @@ def register(user_data: UserCreate):
         "organization_id": org_id,
         "created_by_user_id": user_id,
         "company_name": user_data.company_name,
-        "email": user_data.email,
+        "email": normalized_email,
         "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
         "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
         "default_due_days": 30, "bn_number": "", "gst_number": "", "qst_number": "", "hst_number": "", "neq_number": ""
@@ -1681,7 +1695,14 @@ def register(user_data: UserCreate):
 
 @app.post("/api/auth/login", response_model=Token)
 def login(credentials: UserLogin):
-    user = db.users.find_one({"email": credentials.email}, {"_id": 0})
+    # Case-insensitive email lookup: new users store normalized lowercase
+    # emails, but legacy records may be mixed-case. This lets both log in
+    # regardless of the casing the user types.
+    email_input = (credentials.email or "").strip()
+    user = db.users.find_one(
+        {"email": {"$regex": f"^{re.escape(email_input)}$", "$options": "i"}},
+        {"_id": 0},
+    )
     if not user:
         raise HTTPException(401, "Incorrect email or password")
 
