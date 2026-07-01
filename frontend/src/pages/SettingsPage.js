@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Trash2, UserPlus, X as XIcon } from 'lucide-react';
+import { Trash2, UserPlus, X as XIcon, Pencil, Crown } from 'lucide-react';
 import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
@@ -28,7 +28,7 @@ const SettingsPage = () => {
   const [orgLoading, setOrgLoading] = useState(false);
   const [invitations, setInvitations] = useState([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const { hasPermission, user: currentUser } = useAuth();
+  const { hasPermission, user: currentUser, role: currentUserRole } = useAuth();
 
   const fetchOrgData = useCallback(async () => {
     setOrgLoading(true);
@@ -178,6 +178,7 @@ const SettingsPage = () => {
           onRefresh={fetchOrgData}
           onInvite={() => setShowInviteModal(true)}
           currentUserId={currentUser?.id}
+          currentUserRole={currentUserRole}
         />
       )}
       {showInviteModal && (
@@ -483,7 +484,7 @@ const SettingsPage = () => {
   );
 };
 
-function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInvite, currentUserId }) {
+function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInvite, currentUserId, currentUserRole }) {
   const [matrixEdits, setMatrixEdits] = useState({});
   const [savingRole, setSavingRole] = useState(null);
 
@@ -509,6 +510,39 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
       onRefresh();
     } catch (e) {
       alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const promptEditEmail = async (currentEmail) => {
+    const newEmail = window.prompt("Nouvelle adresse email :", currentEmail);
+    if (!newEmail || newEmail.trim().toLowerCase() === currentEmail.toLowerCase()) return;
+    try {
+      await axios.put(`${BACKEND_URL}/api/auth/me/email`, {
+        email: newEmail.trim().toLowerCase(),
+      });
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || "Erreur lors du changement d'email");
+    }
+  };
+
+  const transferOwnership = async (userId, email) => {
+    const confirmed = window.confirm(
+      `Rendre ${email} propriétaire ?\n\n` +
+      `Tu deviendras Comptable — tu gardes l'accès aux dépenses/factures/rapports ` +
+      `mais perds l'accès aux paramètres entreprise, à l'abonnement et à la gestion de l'équipe.\n\n` +
+      `Cette action est immédiate.`
+    );
+    if (!confirmed) return;
+    try {
+      await axios.post(`${BACKEND_URL}/api/org/transfer-ownership`, {
+        new_owner_user_id: userId,
+      });
+      onRefresh();
+      // Force full reload so AuthContext re-fetches role/permissions
+      window.location.reload();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur lors du transfert');
     }
   };
 
@@ -550,6 +584,7 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
   };
 
   const isOwner = (uid) => organization.owner_id === uid;
+  const isCurrentUserOwner = currentUserRole === 'owner';
 
   return (
     <div style={{ padding: 24 }} data-testid="team-management-section">
@@ -581,6 +616,17 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                   marginLeft: 8, fontSize: 11, background: '#00A08C', color: '#fff',
                   padding: '2px 6px', borderRadius: 4,
                 }}>Propriétaire</span>}
+                {m.id === currentUserId && (
+                  <button onClick={() => promptEditEmail(m.email)}
+                          title="Modifier mon email"
+                          data-testid="edit-own-email-btn"
+                          style={{
+                            marginLeft: 8, background: 'none', border: 'none',
+                            cursor: 'pointer', color: '#6b7280', verticalAlign: 'middle',
+                          }}>
+                    <Pencil size={14} />
+                  </button>
+                )}
               </td>
               <td style={{ padding: 10 }}>
                 {isOwner(m.id) ? (
@@ -595,6 +641,17 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                 )}
               </td>
               <td style={{ padding: 10 }}>
+                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && (
+                  <button onClick={() => transferOwnership(m.id, m.email)}
+                          data-testid={`transfer-ownership-btn-${m.id}`}
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: '#b45309', display: 'flex', alignItems: 'center',
+                            gap: 4, marginBottom: 4,
+                          }}>
+                    <Crown size={14} /> Transférer propriété
+                  </button>
+                )}
                 {!isOwner(m.id) && m.id !== currentUserId && (
                   <button onClick={() => removeMember(m.id, m.email)} style={{
                     background: 'none', border: 'none', cursor: 'pointer',

@@ -1497,3 +1497,363 @@ class TestMigrationIntegration:
         # gussdub's org_id should be unchanged
         r2 = client.get("/api/org/me", headers=owner_headers)
         assert r2.json()["organization"]["id"] == org_id
+
+
+# ─── T19 : owner visibility fix + change own email + transfer ownership ───
+
+
+class TestOwnerVisibleInMembers:
+    """Fix Problem 1: legacy owners (is_active missing/None) must still appear
+    in members list. Also verify is_active=False stays excluded."""
+
+    def test_owner_with_is_active_true_visible(self, client, owner_headers):
+        r = client.get("/api/org/me", headers=owner_headers)
+        assert r.status_code == 200
+        me_id = r.json()["current_user"]["id"]
+        member_ids = [m["id"] for m in r.json()["members"]]
+        assert me_id in member_ids
+
+    def test_owner_missing_is_active_visible(self, client):
+        """Legacy user (migrated by migrate_organizations_v1) has NO is_active
+        field. Must still appear in members list."""
+        db = server_module.db
+        uid = f"legacy-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        db.organizations.insert_one({
+            "id": org_id, "name": "LegacyCo", "owner_id": uid,
+            "subscription_status": "trial",
+            "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=100)).isoformat(),
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        # No is_active field on purpose (simulates legacy migrated user)
+        db.users.insert_one({
+            "id": uid, "email": f"{uid}@legacy.test",
+            "company_name": "LegacyCo",
+            "organization_id": org_id, "role": "owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            r = client.get("/api/org/me", headers=headers)
+            assert r.status_code == 200
+            member_ids = [m["id"] for m in r.json()["members"]]
+            assert uid in member_ids, "Legacy user (no is_active field) not visible in members"
+        finally:
+            db.users.delete_one({"id": uid})
+            db.organizations.delete_one({"id": org_id})
+
+    def test_is_active_false_still_excluded(self, client, owner_headers):
+        """Soft-removed users (is_active=False) must NOT appear in members list."""
+        db = server_module.db
+        r = client.get("/api/org/me", headers=owner_headers)
+        org_id = r.json()["organization"]["id"]
+        uid = f"soft-removed-{uuid.uuid4().hex[:8]}"
+        db.users.insert_one({
+            "id": uid, "email": f"{uid}@x.test",
+            "organization_id": org_id, "role": "viewer",
+            "is_active": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        try:
+            r2 = client.get("/api/org/me", headers=owner_headers)
+            member_ids = [m["id"] for m in r2.json()["members"]]
+            assert uid not in member_ids
+        finally:
+            db.users.delete_one({"id": uid})
+
+
+class TestUpdateOwnEmail:
+    """PUT /api/auth/me/email — self-service email edit."""
+
+    def _create_temp_user(self, email="temp@t19.test", password="tpass"):
+        db = server_module.db
+        uid = f"t19-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        db.organizations.insert_one({
+            "id": org_id, "name": "T19Co", "owner_id": uid,
+            "subscription_status": "trial",
+            "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=100)).isoformat(),
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.users.insert_one({
+            "id": uid, "email": email,
+            "is_active": True,
+            "organization_id": org_id, "role": "owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.user_passwords.insert_one({
+            "user_id": uid,
+            "hashed_password": server_module.hash_password(password),
+        })
+        return uid, org_id, email
+
+    def _cleanup(self, uid, org_id, *emails):
+        db = server_module.db
+        db.users.delete_one({"id": uid})
+        db.user_passwords.delete_one({"user_id": uid})
+        db.organizations.delete_one({"id": org_id})
+        for e in emails:
+            db.users.delete_many({"email": e})
+
+    def test_update_own_email_success(self, client):
+        uid, org_id, old_email = self._create_temp_user(email=f"orig-{uuid.uuid4().hex[:6]}@t19.test")
+        new_email = f"new-{uuid.uuid4().hex[:6]}@t19.test"
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            r = client.put("/api/auth/me/email", headers=headers,
+                           json={"email": new_email})
+            assert r.status_code == 200, r.text
+            assert r.json()["email"] == new_email
+            # Verify DB
+            u = server_module.db.users.find_one({"id": uid})
+            assert u["email"] == new_email
+        finally:
+            self._cleanup(uid, org_id, old_email, new_email)
+
+    def test_update_own_email_normalize_case(self, client):
+        uid, org_id, old_email = self._create_temp_user(email=f"case-{uuid.uuid4().hex[:6]}@t19.test")
+        new_email = f"UPPER-{uuid.uuid4().hex[:6]}@T19.TEST"
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            r = client.put("/api/auth/me/email", headers=headers,
+                           json={"email": new_email})
+            assert r.status_code == 200, r.text
+            assert r.json()["email"] == new_email.lower()
+            u = server_module.db.users.find_one({"id": uid})
+            assert u["email"] == new_email.lower()
+        finally:
+            self._cleanup(uid, org_id, old_email, new_email.lower())
+
+    def test_update_own_email_collision(self, client, owner_headers):
+        """Cannot change to an email already used by another user."""
+        uid, org_id, old_email = self._create_temp_user(
+            email=f"me-{uuid.uuid4().hex[:6]}@t19.test")
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            r = client.put("/api/auth/me/email", headers=headers,
+                           json={"email": "gussdub@gmail.com"})
+            assert r.status_code == 409, r.text
+        finally:
+            self._cleanup(uid, org_id, old_email)
+
+    def test_update_own_email_collision_case_insensitive(self, client):
+        """Collision check is case-insensitive."""
+        uid1, org1, email1 = self._create_temp_user(
+            email=f"first-{uuid.uuid4().hex[:6]}@t19.test")
+        uid2, org2, email2 = self._create_temp_user(
+            email=f"second-{uuid.uuid4().hex[:6]}@t19.test")
+        token = server_module.create_token(uid2)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            # Try to grab email1 in different case
+            r = client.put("/api/auth/me/email", headers=headers,
+                           json={"email": email1.upper()})
+            assert r.status_code == 409, r.text
+        finally:
+            self._cleanup(uid1, org1, email1)
+            self._cleanup(uid2, org2, email2)
+
+    def test_update_own_email_invalid_format(self, client):
+        uid, org_id, old_email = self._create_temp_user(
+            email=f"fmt-{uuid.uuid4().hex[:6]}@t19.test")
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            r = client.put("/api/auth/me/email", headers=headers,
+                           json={"email": "not-an-email"})
+            assert r.status_code == 400, r.text
+        finally:
+            self._cleanup(uid, org_id, old_email)
+
+    def test_update_own_email_noop_same_email(self, client):
+        uid, org_id, old_email = self._create_temp_user(
+            email=f"noop-{uuid.uuid4().hex[:6]}@t19.test")
+        token = server_module.create_token(uid)
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            r = client.put("/api/auth/me/email", headers=headers,
+                           json={"email": old_email})
+            assert r.status_code == 200, r.text
+            assert r.json()["email"] == old_email
+        finally:
+            self._cleanup(uid, org_id, old_email)
+
+
+class TestTransferOwnership:
+    """POST /api/org/transfer-ownership — owner-only, atomic swap."""
+
+    def _setup_owner_and_accountant(self, client, monkeypatch):
+        """Create a fresh org with an owner + an accountant member.
+        Returns (owner_uid, owner_headers, acc_uid, acc_headers, org_id)."""
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        # Reset accept-invite in-memory rate limiter to avoid 429 across tests
+        server_module._ACCEPT_INVITE_RATE.clear()
+        db = server_module.db
+        owner_uid = f"t19o-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        owner_email = f"{owner_uid}@t19.test"
+        db.organizations.insert_one({
+            "id": org_id, "name": "T19OwnershipCo", "owner_id": owner_uid,
+            "subscription_status": "trial",
+            "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=100)).isoformat(),
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.users.insert_one({
+            "id": owner_uid, "email": owner_email,
+            "is_active": True,
+            "organization_id": org_id, "role": "owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.user_passwords.insert_one({
+            "user_id": owner_uid,
+            "hashed_password": server_module.hash_password("ownpass"),
+        })
+        owner_headers = {"Authorization": f"Bearer {server_module.create_token(owner_uid)}"}
+
+        # Invite an accountant
+        acc_email = f"acc-{uuid.uuid4().hex[:6]}@t19.test"
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": acc_email, "role": "accountant"})
+        assert r.status_code == 201, r.text
+        token = db.invitations.find_one({"id": r.json()["id"]})["token"]
+        r2 = client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "accpass",
+            "pipeda_consent": True,
+        })
+        assert r2.status_code == 200, r2.text
+        acc_uid = db.users.find_one({"email": acc_email})["id"]
+        acc_headers = {"Authorization": f"Bearer {r2.json()['access_token']}"}
+
+        return owner_uid, owner_headers, acc_uid, acc_headers, org_id, owner_email, acc_email
+
+    def _cleanup(self, org_id, *emails):
+        db = server_module.db
+        for e in emails:
+            u = db.users.find_one({"email": e})
+            if u:
+                db.users.delete_one({"id": u["id"]})
+                db.user_passwords.delete_one({"user_id": u["id"]})
+        db.organizations.delete_one({"id": org_id})
+        db.invitations.delete_many({"organization_id": org_id})
+
+    def test_transfer_ownership_full_swap(self, client, monkeypatch):
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": acc_uid})
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["new_owner_id"] == acc_uid
+            assert body["old_owner_id"] == owner_uid
+            assert body["old_owner_new_role"] == "accountant"
+
+            # Verify org
+            org = server_module.db.organizations.find_one({"id": org_id})
+            assert org["owner_id"] == acc_uid
+
+            # Verify user roles
+            new_owner = server_module.db.users.find_one({"id": acc_uid})
+            old_owner = server_module.db.users.find_one({"id": owner_uid})
+            assert new_owner["role"] == "owner"
+            assert old_owner["role"] == "accountant"
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_ownership_requires_owner(self, client, monkeypatch):
+        """Accountant cannot transfer ownership (403)."""
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=acc_h,
+                            json={"new_owner_user_id": owner_uid})
+            assert r.status_code == 403, r.text
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_ownership_to_self_400(self, client, monkeypatch):
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": owner_uid})
+            assert r.status_code == 400, r.text
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_ownership_target_must_be_member(self, client, monkeypatch):
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": f"nonexistent-{uuid.uuid4().hex}"})
+            assert r.status_code == 404, r.text
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_ownership_target_inactive_400(self, client, monkeypatch):
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            server_module.db.users.update_one(
+                {"id": acc_uid}, {"$set": {"is_active": False}})
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": acc_uid})
+            assert r.status_code == 400, r.text
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_then_old_owner_loses_team_manage(self, client, monkeypatch):
+        """After transfer, old owner (now accountant) cannot manage team."""
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": acc_uid})
+            assert r.status_code == 200
+
+            # Old owner (same JWT) now tries to edit team - should be 403
+            r2 = client.put("/api/org/role-permissions", headers=owner_h,
+                            json={"role": "viewer", "permissions": []})
+            assert r2.status_code == 403
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_then_new_owner_can_remove_old(self, client, monkeypatch):
+        """After transfer, new owner CAN remove old owner (now accountant)."""
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": acc_uid})
+            assert r.status_code == 200
+
+            # New owner removes old owner (uses acc_h which is still valid)
+            r2 = client.delete(f"/api/org/members/{owner_uid}", headers=acc_h)
+            assert r2.status_code == 204
+        finally:
+            self._cleanup(org_id, oe, ae)
+
+    def test_transfer_exactly_one_owner_invariant(self, client, monkeypatch):
+        """After transfer, exactly ONE user in the org has role='owner'."""
+        owner_uid, owner_h, acc_uid, acc_h, org_id, oe, ae = \
+            self._setup_owner_and_accountant(client, monkeypatch)
+        try:
+            r = client.post("/api/org/transfer-ownership", headers=owner_h,
+                            json={"new_owner_user_id": acc_uid})
+            assert r.status_code == 200
+            owners = list(server_module.db.users.find({
+                "organization_id": org_id, "role": "owner"
+            }))
+            assert len(owners) == 1
+            assert owners[0]["id"] == acc_uid
+        finally:
+            self._cleanup(org_id, oe, ae)

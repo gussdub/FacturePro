@@ -1460,7 +1460,7 @@ def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)
         org = _synthesize_solo_org_from_user(user_doc)
 
     members_cursor = db.users.find(
-        {"organization_id": current_user.organization_id, "is_active": True},
+        {"organization_id": current_user.organization_id, "is_active": {"$ne": False}},
         {"_id": 0, "id": 1, "email": 1, "role": 1, "created_at": 1}
     )
     members = list(members_cursor)
@@ -1852,6 +1852,110 @@ def remove_member(
         {"$unset": {"organization_id": "", "role": ""}}
     )
     return
+
+
+# ─── Self-service email edit + Ownership transfer (T19) ───
+
+class UpdateEmailRequest(BaseModel):
+    email: str
+
+
+@app.put("/api/auth/me/email")
+def update_own_email(
+    body: UpdateEmailRequest,
+    current_user: CurrentUser = Depends(get_current_user_with_access)
+):
+    """Permet à un user authentifié de changer sa propre adresse email.
+    - Normalise (lowercase + strip)
+    - Valide format via _EMAIL_RE
+    - Cap 254 chars (RFC 5321)
+    - No-op si nouvel email == email courant
+    - 409 si collision case-insensitive avec un autre user (global)
+    - JWT reste valide (payload utilise user_id)
+    """
+    new_email = (body.email or "").strip().lower()
+    if not new_email:
+        raise HTTPException(400, "Email requis")
+    if len(new_email) > 254:
+        raise HTTPException(400, "Email trop long")
+    if not _EMAIL_RE.match(new_email):
+        raise HTTPException(400, "Format d'email invalide")
+    if new_email == (current_user.email or "").lower():
+        return {"email": new_email}
+    # Collision case-insensitive (excluding self)
+    existing = db.users.find_one({
+        "email": {"$regex": f"^{re.escape(new_email)}$", "$options": "i"},
+        "id": {"$ne": current_user.id},
+    })
+    if existing:
+        raise HTTPException(409, "Cette adresse est déjà utilisée")
+    db.users.update_one({"id": current_user.id}, {"$set": {"email": new_email}})
+    return {"email": new_email}
+
+
+class TransferOwnershipRequest(BaseModel):
+    new_owner_user_id: str
+
+
+@app.post("/api/org/transfer-ownership")
+def transfer_ownership(
+    body: TransferOwnershipRequest,
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    """Transfère la propriété de l'organisation à un autre membre actif.
+    - Owner devient 'accountant' (garde accès aux données métier)
+    - Nouveau membre devient 'owner' (perms owner-only résolus dynamiquement)
+    - Conditional update sur owner_id = optimistic lock (anti-race)
+    """
+    # Belt-and-suspenders: team:manage est déjà owner-only, mais on re-vérifie
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(404, "Organisation introuvable")
+    if org.get("owner_id") != current_user.id:
+        raise HTTPException(403, "Seul le propriétaire peut transférer la propriété")
+
+    if not body.new_owner_user_id or not isinstance(body.new_owner_user_id, str):
+        raise HTTPException(400, "new_owner_user_id requis")
+
+    if body.new_owner_user_id == current_user.id:
+        raise HTTPException(400, "Vous êtes déjà propriétaire")
+
+    new_owner = db.users.find_one({
+        "id": body.new_owner_user_id,
+        "organization_id": current_user.organization_id,
+    })
+    if not new_owner:
+        raise HTTPException(404, "Membre introuvable dans cette organisation")
+    if new_owner.get("is_active") is False:
+        raise HTTPException(400, "Utilisateur inactif")
+
+    # Step 1 — atomic swap via conditional match on owner_id (optimistic lock)
+    result = db.organizations.update_one(
+        {"id": current_user.organization_id, "owner_id": current_user.id},
+        {"$set": {"owner_id": body.new_owner_user_id}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(409, "Le propriétaire a changé pendant l'opération, réessayez")
+
+    # Step 2 — promote new owner
+    db.users.update_one(
+        {"id": body.new_owner_user_id},
+        {"$set": {"role": "owner"}}
+    )
+    # Step 3 — demote old owner to accountant
+    db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"role": "accountant"}}
+    )
+
+    print(f"INFO transfer_ownership org={current_user.organization_id} "
+          f"from={current_user.id} to={body.new_owner_user_id}")
+    return {
+        "organization_id": current_user.organization_id,
+        "new_owner_id": body.new_owner_user_id,
+        "old_owner_id": current_user.id,
+        "old_owner_new_role": "accountant",
+    }
 
 
 # ─── Health ───
