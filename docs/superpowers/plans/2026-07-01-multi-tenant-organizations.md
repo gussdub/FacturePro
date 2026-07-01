@@ -3628,7 +3628,7 @@ Ajouter en tête de la section "Features livrées" (avant feature #10) :
   - Plan : `docs/superpowers/plans/2026-07-01-multi-tenant-organizations.md`
 ```
 
-- [x] **Step 4: Push prod**
+- [ ] **Step 4: Push prod** *(PENDING — pas encore exécuté au 2026-07-01. Local main est ahead de origin/main de 28 commits, dont T0→T18. Commit CLAUDE.md déjà fait localement (9575d86). Reste : `git push origin main` — à faire manuellement par l'humain après revue finale.)*
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -3639,7 +3639,7 @@ git push origin main
 
 Render redéploie backend (~3-5 min — la migration `migrate_organizations_v1()` s'exécute au boot pour toute la prod). Vercel redéploie frontend (~2 min).
 
-- [x] **Step 5: Monitoring post-deploy**
+- [ ] **Step 5: Monitoring post-deploy** *(BLOQUÉ par Step 4 — pas de push = pas de redeploy Render/Vercel, donc rien à monitorer.)*
 
 Vérifier les logs Render dans les 30 min post-deploy :
 - Ligne `MIGRATION organizations_v1 : N orgs créées` doit apparaître.
@@ -3653,7 +3653,7 @@ Si tout OK → feature livrée. Sinon hotfix via git push, la migration idempote
 
 **Point de non-retour** : le script `backend/scripts/drop_legacy_user_fields.py` (§6.4 spec) **NE PAS** l'exécuter avant 4 semaines de stabilité prod. Il retirera `subscription_status`, `stripe_customer_id`, `trial_end_date`, `scan_count_this_month`, `scan_quota_reset_at` de `users` et `user_id` des collections métier une fois qu'on aura la certitude qu'aucun code legacy n'y accède.
 
-- [x] **Step 6: Commit final (si smoke tests OK)**
+- [x] **Step 6: Commit final (séquence vérifiée localement)** *(La séquence T0→T18 est correcte et complète dans l'historique git local. Le passage en prod dépend cependant du Step 4 (push) qui reste à faire.)*
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
