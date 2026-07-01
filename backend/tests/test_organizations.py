@@ -11,6 +11,9 @@ from server import (
     PERMISSIONS_OWNER_ONLY,
     DEFAULT_ROLE_PERMISSIONS,
     migrate_organizations_v1,
+    _resolve_permissions,
+    _synthesize_solo_org_from_user,
+    CurrentUser,
     db as server_db,
 )
 
@@ -131,3 +134,82 @@ class TestMigrateOrganizationsV1:
         finally:
             server_db.users.delete_one({"id": uid})
             server_db.organizations.delete_many({"owner_id": uid})
+
+
+class TestResolvePermissions:
+    def test_owner_gets_all(self):
+        org = {"role_permissions": {"accountant": ["expenses:read"]}}
+        perms = _resolve_permissions(org, "owner")
+        for code in PERMISSIONS_EDITABLE:
+            assert code in perms
+        for code in PERMISSIONS_OWNER_ONLY:
+            assert code in perms
+
+    def test_accountant_gets_matrix(self):
+        org = {"role_permissions": {"accountant": ["expenses:read", "expenses:write"]}}
+        perms = _resolve_permissions(org, "accountant")
+        assert perms == ["expenses:read", "expenses:write"]
+
+    def test_viewer_gets_matrix(self):
+        org = {"role_permissions": {"viewer": ["expenses:read", "reports:read"]}}
+        perms = _resolve_permissions(org, "viewer")
+        assert perms == ["expenses:read", "reports:read"]
+
+    def test_owner_only_codes_stripped_from_editable_matrix(self):
+        # Even if matrix pollution tries to grant owner-only codes to accountant,
+        # they must be filtered out.
+        org = {"role_permissions": {"accountant": [
+            "expenses:read", "billing:manage", "team:manage"
+        ]}}
+        perms = _resolve_permissions(org, "accountant")
+        assert "expenses:read" in perms
+        assert "billing:manage" not in perms
+        assert "team:manage" not in perms
+
+    def test_unknown_codes_ignored(self):
+        org = {"role_permissions": {"viewer": ["not:a:real:code", "expenses:read"]}}
+        perms = _resolve_permissions(org, "viewer")
+        assert perms == ["expenses:read"]
+
+    def test_missing_role_permissions_empty(self):
+        org = {}
+        perms = _resolve_permissions(org, "viewer")
+        assert perms == []
+
+    def test_missing_role_in_matrix_empty(self):
+        org = {"role_permissions": {"accountant": ["expenses:read"]}}
+        perms = _resolve_permissions(org, "viewer")
+        assert perms == []
+
+
+class TestSynthesizeSoloOrg:
+    def test_basic(self):
+        user = {
+            "id": "user-1", "email": "u@x.com", "company_name": "SoloCo",
+            "subscription_status": "trial", "trial_end_date": "2099-01-01T00:00:00Z",
+            "scan_count_this_month": 5,
+        }
+        org = _synthesize_solo_org_from_user(user)
+        assert org["id"] == "pending-user-1"
+        assert org["owner_id"] == "user-1"
+        assert org["name"] == "SoloCo"
+        assert org["subscription_status"] == "trial"
+        assert org["trial_ends_at"] == "2099-01-01T00:00:00Z"
+        assert org["scan_count_this_month"] == 5
+        assert org["role_permissions"] == DEFAULT_ROLE_PERMISSIONS
+
+    def test_no_company_name_falls_back_to_email(self):
+        user = {"id": "u2", "email": "x@y.com"}
+        org = _synthesize_solo_org_from_user(user)
+        assert org["name"] == "x@y.com"
+
+
+class TestCurrentUserModel:
+    def test_shape(self):
+        cu = CurrentUser(
+            id="u1", email="a@b.com", organization_id="org1",
+            role="accountant", permissions=["expenses:read"], is_exempt=False,
+        )
+        assert cu.id == "u1"
+        assert cu.role == "accountant"
+        assert "expenses:read" in cu.permissions

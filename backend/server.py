@@ -13,7 +13,7 @@ import resend
 import requests as http_requests
 from datetime import date, datetime, timezone, timedelta
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import uuid
 import secrets
 import io
@@ -1078,6 +1078,14 @@ class User(BaseModel):
     subscription_status: str = "trial"
     trial_end_date: Optional[str] = None
 
+class CurrentUser(BaseModel):
+    id: str
+    email: str
+    organization_id: str
+    role: str                      # "owner" | "accountant" | "viewer"
+    permissions: List[str]         # résolues à chaque requête
+    is_exempt: bool = False
+
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -1156,6 +1164,63 @@ DEFAULT_ROLE_PERMISSIONS = {
 }
 
 
+def _resolve_permissions(org: dict, role: str) -> list:
+    """Résout la liste des permissions pour un rôle donné.
+    Sécurité : owner-only codes ne peuvent JAMAIS être accordés via la matrice.
+    Codes inconnus sont ignorés (protection contre matrice polluée)."""
+    if role == "owner":
+        return list(PERMISSIONS_EDITABLE) + list(PERMISSIONS_OWNER_ONLY)
+    role_perms = (org.get("role_permissions") or {}).get(role, [])
+    return [p for p in role_perms if p in PERMISSIONS_EDITABLE]
+
+
+def _synthesize_solo_org_from_user(user: dict) -> dict:
+    """Fallback pre-migration : construit une organisation virtuelle en mémoire
+    quand un user existe encore sans organization_id (edge case course condition
+    entre boot et migration)."""
+    return {
+        "id": f"pending-{user['id']}",
+        "name": user.get("company_name") or user["email"],
+        "owner_id": user["id"],
+        "subscription_status": user.get("subscription_status", "trial"),
+        "trial_ends_at": user.get("trial_end_date"),
+        "role_permissions": DEFAULT_ROLE_PERMISSIONS,
+        "scan_count_this_month": user.get("scan_count_this_month", 0),
+        "scan_quota_reset_at": user.get("scan_quota_reset_at"),
+    }
+
+
+def _check_subscription_active(org: dict, user: dict):
+    """Vérifie l'état d'abonnement au niveau org (avec exempt email fallback).
+    Raise HTTPException(402) si l'org est expirée et le user n'est pas exempt."""
+    if user.get("email") in EXEMPT_USERS:
+        return
+    sub_status = org.get("subscription_status", "trial")
+    trial_end = org.get("trial_ends_at")
+    if sub_status == "trial" and trial_end:
+        try:
+            trial_end_dt = datetime.fromisoformat(trial_end)
+            if datetime.now(timezone.utc) > trial_end_dt:
+                sub_status = "expired"
+        except Exception:
+            pass
+    if sub_status == "expired":
+        raise HTTPException(402, "Subscription expired — please renew")
+
+
+def _get_org_for_user(user: dict) -> dict:
+    """Retourne l'organisation d'un user, avec fallback synthetic."""
+    org_id = user.get("organization_id")
+    if not org_id:
+        return _synthesize_solo_org_from_user(user)
+    org = db.organizations.find_one({"id": org_id}, {"_id": 0})
+    if not org:
+        # Org orpheline — log + fallback
+        print(f"[org] Organisation orpheline pour user {user.get('id')} → synthesize")
+        return _synthesize_solo_org_from_user(user)
+    return org
+
+
 # Collections metier scopees par organisation (utilisees par migration + queries).
 _ORG_SCOPED_COLLECTIONS = [
     "invoices", "quotes", "expenses", "clients", "products", "employees",
@@ -1229,15 +1294,42 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     except Exception:
         raise HTTPException(401, "Invalid token")
 
-def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    return get_current_user(credentials)
+def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Depends(security)) -> CurrentUser:
+    """Résout le JWT → user → organisation → rôle → permissions.
+    Vérifie l'abonnement au niveau org. Retourne un CurrentUser complet."""
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
+        user_id = payload.get("sub")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "Token expired")
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+
+    user = db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user or not user.get("is_active", True):
+        raise HTTPException(401, "User not found or inactive")
+
+    org = _get_org_for_user(user)
+    _check_subscription_active(org, user)
+
+    role = user.get("role", "owner")
+    return CurrentUser(
+        id=user["id"],
+        email=user["email"],
+        organization_id=org["id"],
+        role=role,
+        permissions=_resolve_permissions(org, role),
+        is_exempt=user["email"] in EXEMPT_USERS,
+    )
 
 @app.get("/api/auth/me")
-def get_me(current_user: User = Depends(get_current_user_with_access)):
+def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
     user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0})
-    sub_status = user_doc.get("subscription_status", "trial")
-    trial_end = user_doc.get("trial_end_date")
-    is_exempt = user_doc.get("email") in EXEMPT_USERS
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0}) \
+          or _synthesize_solo_org_from_user(user_doc)
+    is_exempt = current_user.is_exempt
+    sub_status = org.get("subscription_status", "trial")
+    trial_end = org.get("trial_ends_at")
     if sub_status == "trial" and trial_end and not is_exempt:
         try:
             trial_end_dt = datetime.fromisoformat(trial_end)
@@ -1245,19 +1337,23 @@ def get_me(current_user: User = Depends(get_current_user_with_access)):
                 sub_status = "expired"
         except Exception:
             pass
-    # Feature #8 — expose scan quota + consent (T10)
-    result = {
+    # Feature #11 — expose org/role/permissions ; garde legacy pour compat frontend
+    return {
         "id": current_user.id,
         "email": current_user.email,
-        "company_name": current_user.company_name,
+        "company_name": user_doc.get("company_name"),
+        # Nouveaux champs (feature #11)
+        "organization_id": current_user.organization_id,
+        "role": current_user.role,
+        "permissions": current_user.permissions,
+        # Legacy (transition — 4 semaines)
         "subscription_status": "active" if is_exempt else sub_status,
         "trial_end_date": trial_end,
         "is_exempt": is_exempt,
-        "scan_count_this_month": user_doc.get("scan_count_this_month", 0),
+        "scan_count_this_month": org.get("scan_count_this_month", 0),
         "scan_quota_limit": SCAN_QUOTA_LIMIT,
         "receipt_ocr_consent_at": user_doc.get("receipt_ocr_consent_at"),
     }
-    return result
 
 
 @app.post("/api/auth/me/receipt-ocr-consent")
@@ -1292,16 +1388,35 @@ def register(user_data: UserCreate):
         raise HTTPException(400, "Email already registered")
 
     user_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
     trial_end = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+
+    # Feature #11 — crée l'organisation en même temps que le user
+    org_doc = {
+        "id": org_id,
+        "name": user_data.company_name,
+        "owner_id": user_id,
+        "subscription_status": "trial",
+        "stripe_customer_id": None,
+        "trial_ends_at": trial_end,
+        "role_permissions": DEFAULT_ROLE_PERMISSIONS,
+        "scan_count_this_month": 0,
+        "scan_quota_reset_at": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.organizations.insert_one(org_doc)
 
     user_doc = {
         "id": user_id,
         "email": user_data.email,
         "company_name": user_data.company_name,
         "is_active": True,
+        "organization_id": org_id,
+        "role": "owner",
+        # Legacy fields (transition — 4 semaines)
         "subscription_status": "trial",
         "trial_end_date": trial_end,
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     db.users.insert_one(user_doc)
     db.user_passwords.insert_one({
@@ -1312,6 +1427,8 @@ def register(user_data: UserCreate):
     settings_doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
+        "organization_id": org_id,
+        "created_by_user_id": user_id,
         "company_name": user_data.company_name,
         "email": user_data.email,
         "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
@@ -1321,7 +1438,7 @@ def register(user_data: UserCreate):
     db.company_settings.insert_one(settings_doc)
 
     token = create_token(user_id)
-    user_response = {k: v for k, v in user_doc.items() if k not in ("created_at", "_id")}
+    user_response = {k: v for k, v in user_doc.items() if k not in ("created_at", "_id", "organization_id", "role")}
     return Token(access_token=token, user=User(**user_response))
 
 @app.post("/api/auth/login", response_model=Token)
@@ -2885,9 +3002,10 @@ def get_exchange_rates():
 def get_settings(current_user: User = Depends(get_current_user_with_access)):
     settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0})
     if not settings:
+        _user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0}) or {}
         default = {
             "id": str(uuid.uuid4()), "user_id": current_user.id,
-            "company_name": current_user.company_name, "email": current_user.email,
+            "company_name": _user_doc.get("company_name", ""), "email": current_user.email,
             "phone": "", "address": "", "city": "", "postal_code": "", "country": "",
             "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
             "default_due_days": 30, "bn_number": "", "gst_number": "", "qst_number": "", "hst_number": "", "neq_number": "",
