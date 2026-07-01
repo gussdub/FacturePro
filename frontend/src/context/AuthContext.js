@@ -7,18 +7,30 @@ export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [organization, setOrganization] = useState(null);
+  const [permissions, setPermissions] = useState([]);
+  const [role, setRole] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
 
-  const fetchUser = useCallback(async (authToken) => {
+  const fetchUserAndOrg = useCallback(async (authToken) => {
     try {
       axios.defaults.headers.common['Authorization'] = `Bearer ${authToken}`;
-      const res = await axios.get(`${BACKEND_URL}/api/auth/me`);
-      setUser(res.data);
+      const [meRes, orgRes] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/auth/me`),
+        axios.get(`${BACKEND_URL}/api/org/me`),
+      ]);
+      setUser(meRes.data);
+      setOrganization(orgRes.data.organization);
+      setPermissions(orgRes.data.current_user.permissions || []);
+      setRole(orgRes.data.current_user.role || null);
     } catch (error) {
       localStorage.removeItem('token');
       setToken(null);
       setUser(null);
+      setOrganization(null);
+      setPermissions([]);
+      setRole(null);
       delete axios.defaults.headers.common['Authorization'];
     }
   }, []);
@@ -26,15 +38,14 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initAuth = async () => {
       if (token) {
-        await fetchUser(token);
+        await fetchUserAndOrg(token);
       }
       setLoading(false);
     };
     initAuth();
-  }, [token, fetchUser]);
+  }, [token, fetchUserAndOrg]);
 
   useEffect(() => {
-    // Auto-logout on 401 from any axios call (token expired or invalidated server-side)
     const id = axios.interceptors.response.use(
       (res) => res,
       (err) => {
@@ -42,6 +53,9 @@ export const AuthProvider = ({ children }) => {
           localStorage.removeItem('token');
           setToken(null);
           setUser(null);
+          setOrganization(null);
+          setPermissions([]);
+          setRole(null);
           delete axios.defaults.headers.common['Authorization'];
         }
         return Promise.reject(err);
@@ -52,18 +66,18 @@ export const AuthProvider = ({ children }) => {
 
   const refreshUser = useCallback(async () => {
     if (token) {
-      await fetchUser(token);
+      await fetchUserAndOrg(token);
     }
-  }, [token, fetchUser]);
+  }, [token, fetchUserAndOrg]);
 
   const login = async (email, password) => {
     try {
       const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
-      const { access_token, user: userData } = response.data;
+      const { access_token } = response.data;
       setToken(access_token);
-      setUser(userData);
       localStorage.setItem('token', access_token);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      await fetchUserAndOrg(access_token);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.response?.data?.detail || 'Email ou mot de passe incorrect' };
@@ -73,23 +87,44 @@ export const AuthProvider = ({ children }) => {
   const register = async (email, password, company_name) => {
     try {
       const response = await axios.post(`${BACKEND_URL}/api/auth/register`, { email, password, company_name });
-      const { access_token, user: userData } = response.data;
+      const { access_token } = response.data;
       setToken(access_token);
-      setUser(userData);
       localStorage.setItem('token', access_token);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      await fetchUserAndOrg(access_token);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.response?.data?.detail || "Erreur d'inscription" };
     }
   };
 
+  const acceptInvite = async ({ token: inviteToken, password, pipeda_consent }) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/accept-invite`, {
+        token: inviteToken, password, pipeda_consent,
+      });
+      const { access_token } = response.data;
+      setToken(access_token);
+      localStorage.setItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      await fetchUserAndOrg(access_token);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.detail || "Erreur lors de l'acceptation" };
+    }
+  };
+
   const logout = () => {
     setToken(null);
     setUser(null);
+    setOrganization(null);
+    setPermissions([]);
+    setRole(null);
     localStorage.removeItem('token');
     delete axios.defaults.headers.common['Authorization'];
   };
+
+  const hasPermission = useCallback((code) => permissions.includes(code), [permissions]);
 
   if (loading) {
     return (
@@ -100,7 +135,12 @@ export const AuthProvider = ({ children }) => {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, refreshUser, isAuthenticated: !!token }}>
+    <AuthContext.Provider value={{
+      user, organization, permissions, role,
+      token, login, register, acceptInvite, logout, refreshUser,
+      hasPermission,
+      isAuthenticated: !!token,
+    }}>
       {children}
     </AuthContext.Provider>
   );
