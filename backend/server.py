@@ -1288,7 +1288,17 @@ def migrate_organizations_v1():
     - Cree une organisation pour chaque user sans organization_id.
     - Backfill organization_id + created_by_user_id sur toutes les collections metier.
     - Cree les indexes necessaires."""
-    users_without_org = list(db.users.find({"organization_id": {"$exists": False}}))
+    # Belt-and-suspenders : backfill is_active=True sur les users deja migres
+    # qui n'ont pas le champ (pre-fix owner-visibility). Idempotent.
+    db.users.update_many(
+        {"is_active": {"$exists": False}},
+        {"$set": {"is_active": True}}
+    )
+    # Idem pour organization_id: null → considere comme absent, migration a re-executer.
+    users_without_org = list(db.users.find({"$or": [
+        {"organization_id": {"$exists": False}},
+        {"organization_id": None},
+    ]}))
     for user in users_without_org:
         org_id = str(uuid.uuid4())
         org_doc = {
