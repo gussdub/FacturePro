@@ -3806,11 +3806,20 @@ def check_subscription_status(session_id: str, request: Request, current_user: U
                 "paid_at": datetime.now(timezone.utc).isoformat()
             }}
         )
+        now_iso = datetime.now(timezone.utc).isoformat()
         db.users.update_one(
             {"id": current_user.id},
             {"$set": {
                 "subscription_status": "active",
-                "subscription_started_at": datetime.now(timezone.utc).isoformat()
+                "subscription_started_at": now_iso
+            }}
+        )
+        # Feature #11 — miroir sur l'organisation (source de vérité multi-tenant)
+        db.organizations.update_one(
+            {"owner_id": current_user.id},
+            {"$set": {
+                "subscription_status": "active",
+                "subscription_started_at": now_iso
             }}
         )
     return {
@@ -3846,9 +3855,15 @@ async def stripe_webhook(request: Request):
                     )
                     user_id = tx.get("user_id") or (session_data.get("metadata") or {}).get("user_id")
                     if user_id:
+                        now_iso = datetime.now(timezone.utc).isoformat()
                         db.users.update_one(
                             {"id": user_id},
-                            {"$set": {"subscription_status": "active", "subscription_started_at": datetime.now(timezone.utc).isoformat()}}
+                            {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
+                        )
+                        # Feature #11 — miroir sur l'organisation (source de vérité multi-tenant)
+                        db.organizations.update_one(
+                            {"owner_id": user_id},
+                            {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
                         )
         return {"status": "ok"}
     except Exception as e:

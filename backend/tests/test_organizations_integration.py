@@ -111,3 +111,80 @@ class TestExpiredUserNotHardGated:
         finally:
             server_module.STRIPE_API_KEY = original_key
             self._cleanup(uid, org_id)
+
+
+class TestStripeWebhookMirrorsOrg:
+    """Fix 2 (regression): Stripe webhook writes subscription_status='active' only
+    to db.users. Because _check_subscription_active reads from org, the user
+    would stay 'trial' on the org side. Webhook must also mirror onto the org."""
+
+    def test_webhook_updates_both_user_and_org(self, client):
+        db = server_module.db
+        uid = f"test-webhook-{uuid.uuid4().hex[:8]}"
+        email = f"{uid}@test.local"
+        org_id = str(uuid.uuid4())
+        past_iso = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        session_id = f"cs_test_{uuid.uuid4().hex}"
+        tx_id = str(uuid.uuid4())
+        db.organizations.insert_one({
+            "id": org_id,
+            "name": "Webhook Test Co",
+            "owner_id": uid,
+            "subscription_status": "trial",
+            "trial_ends_at": past_iso,
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.users.insert_one({
+            "id": uid,
+            "email": email,
+            "company_name": "Webhook Test Co",
+            "is_active": True,
+            "organization_id": org_id,
+            "role": "owner",
+            "subscription_status": "trial",
+            "trial_end_date": past_iso,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        db.payment_transactions.insert_one({
+            "id": tx_id,
+            "user_id": uid,
+            "session_id": session_id,
+            "amount": 15.0,
+            "currency": "cad",
+            "payment_status": "pending",
+            "status": "initiated",
+            "metadata": {"plan": "facturepro_monthly", "email": email},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        # Force json path (STRIPE_WEBHOOK_SECRET vide) + STRIPE_API_KEY set pour
+        # passer le gate initial du endpoint
+        original_key = server_module.STRIPE_API_KEY
+        server_module.STRIPE_API_KEY = "sk_test_dummy"
+        original_secret = server_module.STRIPE_WEBHOOK_SECRET
+        server_module.STRIPE_WEBHOOK_SECRET = ""
+        try:
+            payload = {
+                "type": "checkout.session.completed",
+                "data": {"object": {
+                    "id": session_id,
+                    "payment_status": "paid",
+                    "metadata": {"user_id": uid},
+                }},
+            }
+            resp = client.post("/api/webhook/stripe", json=payload)
+            assert resp.status_code == 200, resp.text
+            # Both user AND org must be flipped to active
+            user_after = db.users.find_one({"id": uid})
+            org_after = db.organizations.find_one({"id": org_id})
+            assert user_after["subscription_status"] == "active"
+            assert org_after["subscription_status"] == "active", (
+                "Fix 2 regression: webhook must mirror subscription_status onto "
+                "the organization, not only onto db.users"
+            )
+        finally:
+            server_module.STRIPE_API_KEY = original_key
+            server_module.STRIPE_WEBHOOK_SECRET = original_secret
+            db.users.delete_one({"id": uid})
+            db.organizations.delete_one({"id": org_id})
+            db.payment_transactions.delete_one({"id": tx_id})
