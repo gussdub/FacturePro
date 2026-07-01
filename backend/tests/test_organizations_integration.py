@@ -864,3 +864,401 @@ class TestSubscriptionOnOrg:
             db.users.delete_one({"id": uid})
             db.organizations.delete_one({"id": org_id})
             db.payment_transactions.delete_one({"id": tx_id})
+
+
+# ─── Task 10 FIX-PASS : Multi-member internal-helper regression tests ──────
+#
+# These tests specifically prove that the four internal helpers (_apply_match,
+# _release_bank_transaction, _auto_match_transactions, _build_tax_registrations)
+# use an ORG-SCOPED filter instead of `{"user_id": current_user.id}`. Before
+# the fix, a non-owner accountant would :
+#   (1) get an EMPTY tax_registrations snapshot on invoices/quotes they create,
+#   (2) get 404 when matching a bank tx to an owner-created invoice,
+#   (3) leave orphaned matched bank_transactions when deleting owner docs,
+#   (4) get zero auto-matches on CSV import.
+# All four scenarios below would have caught the reviewer-identified bugs.
+
+class TestTask10MultiMemberHelpers:
+    """FIX-PASS T10: prove internal helpers scope by org, not user_id."""
+
+    def _make_accountant_in_gussdub_org(self):
+        """Create an accountant member inside gussdub's org, return token+id.
+
+        Returns (uid, email, headers). Cleanup by caller via _cleanup_user."""
+        db = server_module.db
+        owner = db.users.find_one({"email": "gussdub@gmail.com"})
+        org_id = owner["organization_id"]
+        uid = f"test-t10-acc-{uuid.uuid4().hex[:8]}"
+        email = f"{uid}@test.local"
+        db.users.insert_one({
+            "id": uid,
+            "email": email,
+            "company_name": owner.get("company_name", ""),
+            "is_active": True,
+            "organization_id": org_id,
+            "role": "accountant",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        token = server_module.create_token(uid)
+        return uid, email, {"Authorization": f"Bearer {token}"}
+
+    def _cleanup_user(self, uid):
+        server_module.db.users.delete_one({"id": uid})
+        server_module.db.user_passwords.delete_one({"user_id": uid})
+
+    # ── Scenario 1 : tax_registrations snapshot uses OWNER's company_settings ──
+    def test_accountant_creating_invoice_gets_owner_tax_registrations_snapshot(
+        self, client, owner_headers
+    ):
+        """T10 FIX-PASS #4: _build_tax_registrations must use org scope so that
+        a non-owner member's invoice inherits the OWNER's company_settings +
+        client tax numbers, not an empty snapshot."""
+        db = server_module.db
+        owner = db.users.find_one({"email": "gussdub@gmail.com"})
+        org_id = owner["organization_id"]
+
+        # Seed / upsert company_settings with a distinctive BN so we can prove
+        # snapshot came from the org, not the accountant's user_id.
+        settings_marker = f"111111{uuid.uuid4().hex[:3].upper()}"[:9]
+        original_settings = db.company_settings.find_one({"organization_id": org_id})
+        settings_id = None
+        if not original_settings:
+            settings_id = str(uuid.uuid4())
+            db.company_settings.insert_one({
+                "id": settings_id,
+                "organization_id": org_id,
+                "user_id": owner["id"],
+                "bn_number": settings_marker,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        else:
+            db.company_settings.update_one(
+                {"id": original_settings["id"]},
+                {"$set": {"bn_number": settings_marker}},
+            )
+
+        uid, email, acc_headers = self._make_accountant_in_gussdub_org()
+        created_client_id = None
+        created_invoice_id = None
+        try:
+            # Owner creates a client with a distinctive GST number
+            client_gst = f"222222{uuid.uuid4().hex[:3].upper()}"[:9] + "RT0001"
+            r = client.post(
+                "/api/clients",
+                headers=owner_headers,
+                json={"name": "T10 Client", "email": "t10@example.com",
+                      "gst_number": client_gst},
+            )
+            assert r.status_code == 200, r.text
+            created_client_id = r.json()["id"]
+
+            # Accountant (non-owner) creates an invoice for the owner's client.
+            r = client.post(
+                "/api/invoices",
+                headers=acc_headers,
+                json={"client_id": created_client_id,
+                      "items": [{"description": "Test", "quantity": 1,
+                                 "unit_price": 100.0}]},
+            )
+            assert r.status_code == 200, r.text
+            body = r.json()
+            created_invoice_id = body["id"]
+
+            regs = body.get("tax_registrations") or {}
+            company = regs.get("company") or {}
+            client_regs = regs.get("client") or {}
+
+            # THE bug: pre-fix, both company & client would be EMPTY because
+            # _build_tax_registrations filtered by accountant's user_id.
+            assert company.get("bn") == settings_marker, (
+                "T10 FIX-PASS #4: accountant-created invoice must snapshot the "
+                "OWNER's company_settings.bn_number (org scope). "
+                f"Got: {company!r}"
+            )
+            assert client_regs.get("gst") == client_gst, (
+                "T10 FIX-PASS #4: accountant-created invoice must snapshot the "
+                "OWNER's client tax fields (org scope). "
+                f"Got: {client_regs!r}"
+            )
+        finally:
+            if created_invoice_id:
+                db.invoices.delete_one({"id": created_invoice_id})
+            if created_client_id:
+                db.clients.delete_one({"id": created_client_id})
+            if settings_id:
+                db.company_settings.delete_one({"id": settings_id})
+            self._cleanup_user(uid)
+
+    # ── Scenario 2 : accountant matches bank tx to owner-created invoice ──
+    def test_accountant_can_match_bank_tx_to_owner_created_invoice(
+        self, client, owner_headers
+    ):
+        """T10 FIX-PASS #1: _apply_match must use org scope so an accountant
+        can match a bank_transaction to an invoice created by the owner."""
+        db = server_module.db
+        owner = db.users.find_one({"email": "gussdub@gmail.com"})
+        org_id = owner["organization_id"]
+
+        uid, email, acc_headers = self._make_accountant_in_gussdub_org()
+        created_invoice_id = None
+        tx_id = str(uuid.uuid4())
+        import_id = str(uuid.uuid4())
+        try:
+            # OWNER creates an unpaid invoice.
+            r = client.post(
+                "/api/invoices",
+                headers=owner_headers,
+                json={"items": [{"description": "T10", "quantity": 1,
+                                 "unit_price": 100.0}]},
+            )
+            assert r.status_code == 200, r.text
+            inv = r.json()
+            created_invoice_id = inv["id"]
+            # Bump to `sent` so the invoice is matchable.
+            client.put(
+                f"/api/invoices/{created_invoice_id}/status",
+                headers=owner_headers,
+                json={"status": "sent"},
+            )
+            total = float(inv["total"])
+
+            # Seed a bank_transaction (org-scoped) matching that invoice amount.
+            now = datetime.now(timezone.utc).isoformat()
+            db.bank_imports.insert_one({
+                "id": import_id,
+                "organization_id": org_id,
+                "user_id": owner["id"],
+                "file_hash": f"h-{uuid.uuid4().hex}",
+                "imported_at": now,
+                "closed_at": None,
+            })
+            db.bank_transactions.insert_one({
+                "id": tx_id,
+                "organization_id": org_id,
+                # Note: created_by_user_id = owner, not accountant.
+                "created_by_user_id": owner["id"],
+                "user_id": owner["id"],
+                "import_id": import_id,
+                "date": now[:10],
+                "description": "T10 payment",
+                "amount_cad": total,
+                "parse_error": False,
+                "status": "unmatched",
+                "match_kind": None,
+                "match_id": None,
+                "invoice_id": None,
+                "matched_at": None,
+            })
+
+            # ACCOUNTANT (non-owner) matches the tx to the owner's invoice.
+            r = client.post(
+                f"/api/bank/transactions/{tx_id}/match",
+                headers=acc_headers,
+                json={"kind": "invoice_payment", "target_id": created_invoice_id},
+            )
+            # Pre-fix: 404 (invoice lookup filtered by accountant's user_id).
+            assert r.status_code == 200, (
+                f"T10 FIX-PASS #1: accountant must be able to match a bank tx "
+                f"to an owner-created invoice. Got {r.status_code}: {r.text}"
+            )
+            body = r.json()
+            assert body["status"] == "matched"
+            assert body["match_kind"] == "invoice_payment"
+
+            # Confirm payment appears on the owner's invoice.
+            fresh = db.invoices.find_one({"id": created_invoice_id})
+            assert any(p.get("bank_transaction_id") == tx_id
+                       for p in (fresh.get("payments") or []))
+        finally:
+            db.bank_transactions.delete_one({"id": tx_id})
+            db.bank_imports.delete_one({"id": import_id})
+            if created_invoice_id:
+                db.invoices.delete_one({"id": created_invoice_id})
+            self._cleanup_user(uid)
+
+    # ── Scenario 3 : accountant deletes owner-created invoice → tx released ──
+    def test_accountant_deleting_invoice_releases_matched_bank_transaction(
+        self, client, owner_headers
+    ):
+        """T10 FIX-PASS #2: _release_bank_transaction must use org scope so
+        cascades from non-owner DELETE reset the bank_transaction. Otherwise
+        the tx stays `status=matched` with a dangling invoice_id — an
+        orphaned reference that violates the invariant."""
+        db = server_module.db
+        owner = db.users.find_one({"email": "gussdub@gmail.com"})
+        org_id = owner["organization_id"]
+
+        uid, email, acc_headers = self._make_accountant_in_gussdub_org()
+        created_invoice_id = None
+        tx_id = str(uuid.uuid4())
+        import_id = str(uuid.uuid4())
+        try:
+            # OWNER creates invoice + adds payment referencing a bank tx.
+            r = client.post(
+                "/api/invoices",
+                headers=owner_headers,
+                json={"items": [{"description": "T10", "quantity": 1,
+                                 "unit_price": 50.0}]},
+            )
+            assert r.status_code == 200, r.text
+            inv = r.json()
+            created_invoice_id = inv["id"]
+            client.put(
+                f"/api/invoices/{created_invoice_id}/status",
+                headers=owner_headers,
+                json={"status": "sent"},
+            )
+
+            now = datetime.now(timezone.utc).isoformat()
+            db.bank_imports.insert_one({
+                "id": import_id,
+                "organization_id": org_id,
+                "user_id": owner["id"],
+                "file_hash": f"h-{uuid.uuid4().hex}",
+                "imported_at": now,
+                "closed_at": None,
+            })
+            db.bank_transactions.insert_one({
+                "id": tx_id,
+                "organization_id": org_id,
+                "created_by_user_id": owner["id"],
+                "user_id": owner["id"],
+                "import_id": import_id,
+                "date": now[:10],
+                "description": "T10 tx",
+                "amount_cad": float(inv["total"]),
+                "parse_error": False,
+                "status": "matched",
+                "match_kind": "invoice_payment",
+                "match_id": "pay-abc",
+                "invoice_id": created_invoice_id,
+                "matched_at": now,
+            })
+            # Add a payment referencing the bank tx directly on the invoice.
+            db.invoices.update_one(
+                {"id": created_invoice_id},
+                {"$push": {"payments": {
+                    "id": "pay-abc",
+                    "amount_cad": float(inv["total"]),
+                    "method": "transfer",
+                    "date": now[:10],
+                    "reference": "T10",
+                    "bank_transaction_id": tx_id,
+                    "created_at": now,
+                }}},
+            )
+
+            # ACCOUNTANT (non-owner) DELETES the owner-created invoice.
+            r = client.delete(
+                f"/api/invoices/{created_invoice_id}",
+                headers=acc_headers,
+            )
+            assert r.status_code == 200, r.text
+            created_invoice_id = None  # deleted
+
+            # Bank tx must be released back to unmatched — no orphan.
+            tx_after = db.bank_transactions.find_one({"id": tx_id})
+            assert tx_after["status"] == "unmatched", (
+                "T10 FIX-PASS #2: cascade from non-owner DELETE must release "
+                "the bank_transaction (org scope). "
+                f"Actual status: {tx_after['status']!r}"
+            )
+            assert tx_after["match_kind"] is None
+            assert tx_after["match_id"] is None
+            assert tx_after["invoice_id"] is None
+        finally:
+            db.bank_transactions.delete_one({"id": tx_id})
+            db.bank_imports.delete_one({"id": import_id})
+            if created_invoice_id:
+                db.invoices.delete_one({"id": created_invoice_id})
+            self._cleanup_user(uid)
+
+    # ── Scenario 4 : accountant CSV import auto-matches owner's invoices ──
+    def test_accountant_csv_import_auto_matches_owner_created_invoice(
+        self, client, owner_headers
+    ):
+        """T10 FIX-PASS #3: _auto_match_transactions must use org scope so
+        an accountant importing a CSV can auto-match against the OWNER's
+        open invoices."""
+        db = server_module.db
+        owner = db.users.find_one({"email": "gussdub@gmail.com"})
+        org_id = owner["organization_id"]
+
+        uid, email, acc_headers = self._make_accountant_in_gussdub_org()
+        created_invoice_id = None
+        created_client_id = None
+        try:
+            # OWNER creates a distinctively-named client (auto-match score +1
+            # if the client name appears in the tx description).
+            client_name = f"T10AutoClient{uuid.uuid4().hex[:6]}"
+            r = client.post(
+                "/api/clients",
+                headers=owner_headers,
+                json={"name": client_name},
+            )
+            assert r.status_code == 200, r.text
+            created_client_id = r.json()["id"]
+
+            # OWNER creates + sends an invoice; capture actual TOTAL (incl. tax).
+            r = client.post(
+                "/api/invoices",
+                headers=owner_headers,
+                json={"client_id": created_client_id,
+                      "province": "AB",
+                      "items": [{"description": "T10auto", "quantity": 1,
+                                 "unit_price": 200.0}]},
+            )
+            assert r.status_code == 200, r.text
+            inv = r.json()
+            created_invoice_id = inv["id"]
+            client.put(
+                f"/api/invoices/{created_invoice_id}/status",
+                headers=owner_headers,
+                json={"status": "sent"},
+            )
+            amount = float(inv["total"])
+            issue_date = (inv.get("issue_date") or "")[:10]
+            assert issue_date
+
+            # ACCOUNTANT imports a CSV with a single credit matching the invoice.
+            # Description contains client name → score 3 → auto-match.
+            # unique payload → unique file_hash → skip duplicate-detect (409)
+            csv_body = (
+                "Date,Description,Amount\n"
+                f"{issue_date},Payment from {client_name} {uuid.uuid4().hex},{amount}\n"
+            )
+            mapping = {
+                "delimiter": ",",
+                "has_header": True,
+                "date_column": 0,
+                "description_column": 1,
+                "date_format": "YYYY-MM-DD",
+                "amount_mode": "single",
+                "amount_column": 2,
+                "sign_convention": "positive_is_credit",
+            }
+            import json as _json
+            files = {"file": ("t10.csv", csv_body.encode(), "text/csv")}
+            data = {"mapping": _json.dumps(mapping), "bank_label": "T10 Bank"}
+            r = client.post("/api/bank/imports", headers=acc_headers,
+                            files=files, data=data)
+            assert r.status_code == 201, r.text
+            body = r.json()
+            # Pre-fix: auto_matched = 0 (open_invoices lookup filtered by
+            # accountant's user_id, so nothing found).
+            assert body["auto_matched"] == 1, (
+                "T10 FIX-PASS #3: accountant CSV import must auto-match "
+                "against OWNER's open invoices (org scope). "
+                f"Got auto_matched={body['auto_matched']}, transactions="
+                f"{body.get('transactions')!r}"
+            )
+            # Cleanup: delete the import + txs.
+            import_id = body["import"]["id"]
+            db.bank_transactions.delete_many({"import_id": import_id})
+            db.bank_imports.delete_one({"id": import_id})
+        finally:
+            if created_invoice_id:
+                db.invoices.delete_one({"id": created_invoice_id})
+            if created_client_id:
+                db.clients.delete_one({"id": created_client_id})
+            self._cleanup_user(uid)

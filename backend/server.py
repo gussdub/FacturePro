@@ -120,13 +120,20 @@ def _reg_label_parts(regs):
     Utilisé par le PDF pour afficher la ligne client et l'encadré entreprise."""
     return [f"{_TAX_LABELS[k]} {regs[k]}" for k in _TAX_LABELS if regs.get(k)]
 
-def _build_tax_registrations(user_id, client_id):
+def _build_tax_registrations(scope, client_id):
     """Snapshot des 10 numéros (5 entreprise + 5 client). Champs vides si absents.
-    Si client_id est vide/None (facture B2C sans client), client section reste vide."""
-    settings = db.company_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    Si client_id est vide/None (facture B2C sans client), client section reste vide.
+
+    `scope` est un filtre Mongo (typiquement `_org_scope(current_user)`). Sans ça,
+    un non-owner créant une facture obtient un snapshot VIDE parce que
+    `company_settings` et `clients` sont keyés sur le `user_id` du owner — les
+    numéros BN/TPS/TVQ/TVH/NEQ disparaissent des PDF (compliance / immutabilité
+    d'audit).
+    """
+    settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
     client_doc = {}
     if client_id:
-        client_doc = db.clients.find_one({"id": client_id, "user_id": user_id}, {"_id": 0}) or {}
+        client_doc = db.clients.find_one({"id": client_id, **scope}, {"_id": 0}) or {}
     return {"company": _take_regs(settings), "client": _take_regs(client_doc)}
 
 # ─── Expense categories ARC (feature #3 du spec expense-categories) ───
@@ -619,10 +626,17 @@ def _get_invoice_outstanding(invoice):
     return max(0.0, round(float(invoice.get("total", 0) or 0) - paid, 2))
 
 
-def _release_bank_transaction(tx_id, user_id):
-    """Repasse une bank_transaction en unmatched. Utilisé par les cascades DELETE."""
+def _release_bank_transaction(tx_id, scope):
+    """Repasse une bank_transaction en unmatched. Utilisé par les cascades DELETE.
+
+    `scope` est un filtre Mongo (typiquement `_org_scope(current_user)`) afin que
+    les cascades fonctionnent quel que soit le membre (owner ou accountant) qui
+    déclenche le DELETE. Sans ça, un non-owner supprimant une facture laisse la
+    bank_transaction bloquée en `status=matched` pointant sur une facture morte
+    (référence orpheline + violation de l'invariant "matched ⇒ target vivante").
+    """
     db.bank_transactions.update_one(
-        {"id": tx_id, "user_id": user_id},
+        {"id": tx_id, **scope},
         {"$set": {
             "status": "unmatched", "match_kind": None,
             "match_id": None, "invoice_id": None, "matched_at": None,
@@ -630,11 +644,16 @@ def _release_bank_transaction(tx_id, user_id):
     )
 
 
-def _apply_match(tx, kind, target_id, user_id):
+def _apply_match(tx, kind, target_id, scope):
     """Effectue le match entre une bank_transaction et une cible (invoice ou expense).
     Retourne la bank_transaction mise à jour ou lève HTTPException.
     - kind="invoice_payment" : crée un payment dans invoice.payments[]
     - kind="expense" : set expense.bank_transaction_id
+
+    `scope` est un filtre Mongo (typiquement `_org_scope(current_user)`). Sans ça,
+    un non-owner (ex: accountant avec `bank:write`) qui matche une transaction à
+    une facture créée par le owner obtient 404 alors que `_get_tx_or_404` a déjà
+    validé l'accès org.
     """
     if tx.get("status") != "unmatched":
         raise HTTPException(409, "Transaction already matched or ignored")
@@ -642,7 +661,7 @@ def _apply_match(tx, kind, target_id, user_id):
     tx_amount = abs(float(tx.get("amount_cad", 0) or 0))
 
     if kind == "invoice_payment":
-        invoice = db.invoices.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+        invoice = db.invoices.find_one({"id": target_id, **scope}, {"_id": 0})
         if not invoice:
             raise HTTPException(404, "Invoice not found")
         if invoice.get("status") == "paid":
@@ -657,22 +676,22 @@ def _apply_match(tx, kind, target_id, user_id):
             "created_at": now,
         }
         db.invoices.update_one(
-            {"id": target_id, "user_id": user_id},
+            {"id": target_id, **scope},
             {"$push": {"payments": payment}})
-        updated = db.invoices.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+        updated = db.invoices.find_one({"id": target_id, **scope}, {"_id": 0})
         new_status = _recompute_invoice_status(updated)
-        db.invoices.update_one({"id": target_id, "user_id": user_id},
+        db.invoices.update_one({"id": target_id, **scope},
                                {"$set": {"status": new_status}})
         match_kind = "invoice_payment"
         match_id = payment["id"]
         invoice_id = target_id
 
     elif kind == "expense":
-        expense = db.expenses.find_one({"id": target_id, "user_id": user_id}, {"_id": 0})
+        expense = db.expenses.find_one({"id": target_id, **scope}, {"_id": 0})
         if not expense:
             raise HTTPException(404, "Expense not found")
         db.expenses.update_one(
-            {"id": target_id, "user_id": user_id},
+            {"id": target_id, **scope},
             {"$set": {"bank_transaction_id": tx["id"]}})
         match_kind = "expense"
         match_id = target_id
@@ -682,12 +701,12 @@ def _apply_match(tx, kind, target_id, user_id):
         raise HTTPException(422, "Invalid kind")
 
     db.bank_transactions.update_one(
-        {"id": tx["id"], "user_id": user_id},
+        {"id": tx["id"], **scope},
         {"$set": {"status": "matched", "match_kind": match_kind,
                   "match_id": match_id, "invoice_id": invoice_id,
                   "matched_at": now}},
     )
-    return db.bank_transactions.find_one({"id": tx["id"], "user_id": user_id}, {"_id": 0})
+    return db.bank_transactions.find_one({"id": tx["id"], **scope}, {"_id": 0})
 
 
 def _parse_iso_date(s):
@@ -735,19 +754,24 @@ def _score_expense_candidate(tx_date, target, exp, desc_lower):
     return score, date_diff, amount_diff
 
 
-def _auto_match_transactions(import_id, user_id):
+def _auto_match_transactions(import_id, scope):
     """Pour chaque transaction unmatched de l'import, tente un match auto.
-    Retourne nombre de matches appliqués."""
+    Retourne nombre de matches appliqués.
+
+    `scope` est un filtre Mongo (typiquement `_org_scope(current_user)`). Sans ça,
+    un non-owner important un CSV n'obtient AUCUN auto-match car les lookups
+    d'invoices/expenses/clients sont keyés sur le `user_id` legacy du membre.
+    """
     open_invoices = list(db.invoices.find(
-        {"user_id": user_id, "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}))
+        {**scope, "status": {"$in": ["sent", "partial", "overdue"]}}, {"_id": 0}))
     open_expenses = list(db.expenses.find(
-        {"user_id": user_id, "bank_transaction_id": None}, {"_id": 0}))
+        {**scope, "bank_transaction_id": None}, {"_id": 0}))
     clients_by_id = {c["id"]: (c.get("name") or "")
-                     for c in db.clients.find({"user_id": user_id},
+                     for c in db.clients.find(scope,
                                               {"_id": 0, "id": 1, "name": 1})}
 
     txs = list(db.bank_transactions.find(
-        {"import_id": import_id, "user_id": user_id, "status": "unmatched",
+        {"import_id": import_id, **scope, "status": "unmatched",
          "parse_error": False}, {"_id": 0}))
     applied = 0
     for tx in txs:
@@ -795,7 +819,7 @@ def _auto_match_transactions(import_id, user_id):
         # auto-match seulement si UNIQUE candidat score 3 (ou si second a score < 3)
         if top[0] == 3 and (len(candidates) == 1 or candidates[1][0] < 3):
             try:
-                _apply_match(tx, top[3]["kind"], top[3]["id"], user_id)
+                _apply_match(tx, top[3]["kind"], top[3]["id"], scope)
                 applied += 1
                 if top[3]["kind"] == "expense":
                     open_expenses = [e for e in open_expenses if e["id"] != top[3]["id"]]
@@ -2118,7 +2142,7 @@ def create_invoice(invoice_data: dict, current_user: CurrentUser = Depends(requi
         "recurrence_active": invoice_data.get("recurrence", "none") != "none",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
-    doc["tax_registrations"] = _build_tax_registrations(current_user.id, doc.get("client_id"))
+    doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
     db.invoices.insert_one(doc)
     return clean_doc(doc)
 
@@ -2145,7 +2169,7 @@ def update_invoice(invoice_id: str, invoice_data: dict, current_user: CurrentUse
         raise HTTPException(404, "Invoice not found")
     if existing.get("status", "draft") == "draft":
         client_id_for_snapshot = invoice_data.get("client_id", existing.get("client_id"))
-        invoice_data["tax_registrations"] = _build_tax_registrations(current_user.id, client_id_for_snapshot)
+        invoice_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
     db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": invoice_data})
     return clean_doc(db.invoices.find_one({"id": invoice_id}, {"_id": 0}))
 
@@ -2191,7 +2215,7 @@ def delete_invoice_payment(invoice_id: str, payment_id: str,
         payment_to_remove = next((p for p in existing_inv.get("payments", [])
                                   if p.get("id") == payment_id), None)
         if payment_to_remove and payment_to_remove.get("bank_transaction_id"):
-            _release_bank_transaction(payment_to_remove["bank_transaction_id"], current_user.id)
+            _release_bank_transaction(payment_to_remove["bank_transaction_id"], _org_scope(current_user))
     invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
@@ -2217,7 +2241,7 @@ def delete_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_
         for payment in inv.get("payments", []) or []:
             btx_id = payment.get("bank_transaction_id")
             if btx_id:
-                _release_bank_transaction(btx_id, current_user.id)
+                _release_bank_transaction(btx_id, _org_scope(current_user))
     result = db.invoices.delete_one({"id": invoice_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Invoice not found")
@@ -2440,7 +2464,7 @@ async def create_bank_import(
     if mapping_id:
         db.bank_mappings.update_one({"id": mapping_id, **_org_scope(current_user)},
                                     {"$set": {"last_used_at": now}})
-    matched_n = _auto_match_transactions(import_id, current_user.id)
+    matched_n = _auto_match_transactions(import_id, _org_scope(current_user))
     final_txs = list(db.bank_transactions.find({"import_id": import_id, **_org_scope(current_user)}, {"_id": 0}))
     return {"import": clean_doc(import_doc),
             "transactions": [clean_doc(t) for t in final_txs],
@@ -2530,7 +2554,7 @@ def match_bank_transaction(tx_id: str, body: dict,
     target_id = body.get("target_id")
     if not target_id:
         raise HTTPException(422, "target_id required")
-    return clean_doc(_apply_match(tx, kind, target_id, current_user.id))
+    return clean_doc(_apply_match(tx, kind, target_id, _org_scope(current_user)))
 
 
 @app.post("/api/bank/transactions/{tx_id}/unmatch")
@@ -2557,7 +2581,7 @@ def unmatch_bank_transaction(tx_id: str,
         db.expenses.update_one(
             {"id": tx.get("match_id"), **_org_scope(current_user)},
             {"$set": {"bank_transaction_id": None}})
-    _release_bank_transaction(tx_id, current_user.id)
+    _release_bank_transaction(tx_id, _org_scope(current_user))
     return clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))
 
 
@@ -2731,7 +2755,7 @@ def create_invoice_from_tx(tx_id: str, body: dict,
         }],
         "created_at": now,
     }
-    invoice_doc["tax_registrations"] = _build_tax_registrations(current_user.id, client_id)
+    invoice_doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id)
     db.invoices.insert_one(invoice_doc)
     db.bank_transactions.update_one(
         {"id": tx_id, **_org_scope(current_user)},
@@ -3156,7 +3180,7 @@ def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_p
         "status": "pending", "notes": quote_data.get("notes", ""),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
-    doc["tax_registrations"] = _build_tax_registrations(current_user.id, doc.get("client_id"))
+    doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
     db.quotes.insert_one(doc)
     return clean_doc(doc)
 
@@ -3182,7 +3206,7 @@ def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = De
     if not existing:
         raise HTTPException(404, "Quote not found")
     client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
-    quote_data["tax_registrations"] = _build_tax_registrations(current_user.id, client_id_for_snapshot)
+    quote_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
     db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
@@ -3212,7 +3236,7 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
     # Preserve the quote's original tax_registrations snapshot (audit immutability).
     # Fallback for old quotes pre-snapshot: rebuild from current state.
     invoice_doc["tax_registrations"] = quote.get("tax_registrations") or \
-        _build_tax_registrations(current_user.id, quote.get("client_id"))
+        _build_tax_registrations(_org_scope(current_user), quote.get("client_id"))
     db.invoices.insert_one(invoice_doc)
     db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "converted"}})
     return clean_doc(invoice_doc)
@@ -3375,7 +3399,7 @@ def update_expense_status(expense_id: str, status_data: dict, current_user: Curr
 def delete_expense(expense_id: str, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     exp = db.expenses.find_one({"id": expense_id, **_org_scope(current_user)}, {"_id": 0})
     if exp and exp.get("bank_transaction_id"):
-        _release_bank_transaction(exp["bank_transaction_id"], current_user.id)
+        _release_bank_transaction(exp["bank_transaction_id"], _org_scope(current_user))
     # Feature #8 — cascade soft-delete du receipt file
     if exp and exp.get("receipt_file_id"):
         db.files.update_one(
