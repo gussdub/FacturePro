@@ -1959,7 +1959,7 @@ git commit -m "feat(organizations): move Stripe subscription + scan quota users 
 **Files:**
 - Modify: `backend/server.py`
 
-- [ ] **Step 1: Générer la liste des endpoints GET actuels**
+- [x] **Step 1: Générer la liste des endpoints GET actuels**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -1982,7 +1982,7 @@ Faire correspondre chaque path à sa permission (cf. spec §4.4 tableau) :
 | `/api/receipts/{id}` GET | `expenses:read` |
 | `/api/files/{id}` GET | `expenses:read` (contient logos aussi — check permission-neutre si logo) |
 
-- [ ] **Step 2: Remplacer la dépendance sur chaque endpoint GET**
+- [x] **Step 2: Remplacer la dépendance sur chaque endpoint GET**
 
 Pour chaque endpoint GET listé ci-dessus, remplacer :
 
@@ -2010,7 +2010,7 @@ Faire la même transformation pour :
 
 **Note importante** : le type annotation `User` reste tolérant à `CurrentUser` (subclass Pydantic BaseModel), mais on le change pour clarté.
 
-- [ ] **Step 3: Adapter les queries dans le corps des endpoints**
+- [x] **Step 3: Adapter les queries dans le corps des endpoints**
 
 Pour chaque endpoint listé ci-dessus, dans le corps du handler, remplacer :
 - `{"user_id": current_user.id}` → `{"organization_id": current_user.organization_id}`
@@ -2049,7 +2049,7 @@ Utiliser ce pattern **uniquement** sur les endpoints qui pourraient rencontrer d
 
 Pour ce plan, utiliser le fallback sur les endpoints GET critiques (`expenses`, `invoices`, `quotes`, `clients`, `products`, `employees`) pour être défensif.
 
-- [ ] **Step 4: Sanity test — vérifier qu'un GET encore fonctionnel**
+- [x] **Step 4: Sanity test — vérifier qu'un GET encore fonctionnel**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro/backend"
@@ -2061,7 +2061,7 @@ pytest tests/ -k "get or list" -v 2>&1 | tail -20
 ```
 Expected : aucune régression.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
