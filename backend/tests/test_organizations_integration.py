@@ -651,3 +651,85 @@ class TestInvitationPreview:
     def test_preview_unknown_token_returns_404(self, client):
         r = client.get("/api/org/invitations/preview?token=unknown-abcdef")
         assert r.status_code == 404
+
+
+class TestMembers:
+    def _accept_invite_setup(self, client, owner_headers, monkeypatch, role):
+        """Helper : crée + accepte une invitation, retourne le user_id créé."""
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                             lambda *a, **kw: True)
+        email = f"member-{uuid.uuid4().hex[:8]}@example.com"
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": role})
+        inv_id = r.json()["id"]
+        token = server_module.db.invitations.find_one({"id": inv_id})["token"]
+        client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "memberpass123",
+            "pipeda_consent": True,
+        })
+        user = server_module.db.users.find_one({"email": email})
+        return user["id"], email
+
+    def _cleanup_user(self, email):
+        user = server_module.db.users.find_one({"email": email.lower()})
+        if user:
+            server_module.db.users.delete_one({"id": user["id"]})
+            server_module.db.user_passwords.delete_one({"user_id": user["id"]})
+
+    def test_change_role_happy_path(self, client, owner_headers, monkeypatch):
+        uid, email = self._accept_invite_setup(client, owner_headers,
+                                                 monkeypatch, "accountant")
+        try:
+            r = client.put(f"/api/org/members/{uid}/role", headers=owner_headers,
+                           json={"role": "viewer"})
+            assert r.status_code == 200, r.text
+            assert r.json()["role"] == "viewer"
+            assert server_module.db.users.find_one({"id": uid})["role"] == "viewer"
+        finally:
+            self._cleanup_user(email)
+
+    def test_cannot_change_owner_role(self, client, owner_headers):
+        # gussdub is owner
+        owner = server_module.db.users.find_one({"email": "gussdub@gmail.com"})
+        r = client.put(f"/api/org/members/{owner['id']}/role",
+                       headers=owner_headers, json={"role": "viewer"})
+        assert r.status_code == 400
+
+    def test_change_role_invalid_role_rejected(self, client, owner_headers,
+                                                 monkeypatch):
+        uid, email = self._accept_invite_setup(client, owner_headers,
+                                                 monkeypatch, "accountant")
+        try:
+            r = client.put(f"/api/org/members/{uid}/role", headers=owner_headers,
+                           json={"role": "owner"})
+            assert r.status_code == 400
+        finally:
+            self._cleanup_user(email)
+
+    def test_change_role_unknown_user_returns_404(self, client, owner_headers):
+        r = client.put(f"/api/org/members/{uuid.uuid4()}/role",
+                       headers=owner_headers, json={"role": "viewer"})
+        assert r.status_code == 404
+
+    def test_remove_member_happy_path(self, client, owner_headers, monkeypatch):
+        uid, email = self._accept_invite_setup(client, owner_headers,
+                                                 monkeypatch, "viewer")
+        try:
+            r = client.delete(f"/api/org/members/{uid}", headers=owner_headers)
+            assert r.status_code == 204
+            user = server_module.db.users.find_one({"id": uid})
+            assert user.get("organization_id") is None
+            assert user.get("role") is None
+        finally:
+            self._cleanup_user(email)
+
+    def test_cannot_remove_owner(self, client, owner_headers):
+        owner = server_module.db.users.find_one({"email": "gussdub@gmail.com"})
+        r = client.delete(f"/api/org/members/{owner['id']}", headers=owner_headers)
+        assert r.status_code == 400
+
+    def test_cannot_remove_self_if_owner(self, client, owner_headers):
+        # gussdub is BOTH owner AND the current_user — 400
+        owner = server_module.db.users.find_one({"email": "gussdub@gmail.com"})
+        r = client.delete(f"/api/org/members/{owner['id']}", headers=owner_headers)
+        assert r.status_code == 400

@@ -1761,6 +1761,55 @@ def accept_invite(body: dict, request: Request):
     }
 
 
+# ─── Members management (owner/admin only via team:manage) ───
+
+@app.put("/api/org/members/{user_id}/role")
+def update_member_role(
+    user_id: str,
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    role = body.get("role")
+    if role not in ("accountant", "viewer"):
+        raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
+    target = db.users.find_one({
+        "id": user_id,
+        "organization_id": current_user.organization_id,
+    })
+    if not target:
+        raise HTTPException(404, "Membre introuvable")
+    # Owner cannot have their role changed
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    if org and org.get("owner_id") == user_id:
+        raise HTTPException(400, "Impossible de modifier le rôle du propriétaire")
+    db.users.update_one({"id": user_id}, {"$set": {"role": role}})
+    return {"user_id": user_id, "role": role}
+
+
+@app.delete("/api/org/members/{user_id}", status_code=204)
+def remove_member(
+    user_id: str,
+    current_user: CurrentUser = Depends(require_permission("team:manage"))
+):
+    target = db.users.find_one({
+        "id": user_id,
+        "organization_id": current_user.organization_id,
+    })
+    if not target:
+        raise HTTPException(404, "Membre introuvable")
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    if org and org.get("owner_id") == user_id:
+        raise HTTPException(400, "Le propriétaire ne peut pas être retiré")
+    if user_id == current_user.id:
+        raise HTTPException(400, "Vous ne pouvez pas vous retirer vous-même")
+    # Soft removal : unset org+role. Documents créés restent (created_by_user_id conservé).
+    db.users.update_one(
+        {"id": user_id},
+        {"$unset": {"organization_id": "", "role": ""}}
+    )
+    return
+
+
 # ─── Health ───
 @app.get("/")
 def root():
