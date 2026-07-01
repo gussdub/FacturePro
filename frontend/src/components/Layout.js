@@ -18,7 +18,7 @@ const getImageUrl = (url) => {
 };
 
 const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settings, setSettings] = useState(null);
 
@@ -34,20 +34,24 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
     fetchSettings();
   }, []);
 
-  const navigation = [
-    { name: 'Tableau de bord', href: '/dashboard', icon: LayoutDashboard, current: currentRoute === '/dashboard' },
-    { name: 'Clients', href: '/clients', icon: Users, current: currentRoute === '/clients' },
-    { name: 'Produits', href: '/products', icon: Package, current: currentRoute === '/products' },
-    { name: 'Factures', href: '/invoices', icon: FileText, current: currentRoute === '/invoices' },
-    { name: 'Soumissions', href: '/quotes', icon: FilePen, current: currentRoute === '/quotes' },
-    { name: 'Employes', href: '/employees', icon: UserCheck, current: currentRoute === '/employees' },
-    { name: 'Depenses', href: '/expenses', icon: Receipt, current: currentRoute === '/expenses' },
-    { name: 'Exports', href: '/export', icon: Download, current: currentRoute === '/export' },
-    { name: 'Rapports', href: '/reports', icon: BarChart2, current: currentRoute === '/reports' },
-    { name: 'Rapprochement', href: '/bank', icon: GitMerge, current: currentRoute === '/bank' },
-    { name: 'Parametres', href: '/settings', icon: Settings, current: currentRoute === '/settings' },
-    { name: 'Abonnement', href: '/subscription', icon: Gem, current: currentRoute === '/subscription' },
+  const allNavigation = [
+    { name: 'Tableau de bord', href: '/dashboard', icon: LayoutDashboard, permission: null, current: currentRoute === '/dashboard' },
+    { name: 'Clients', href: '/clients', icon: Users, permission: 'clients:read', current: currentRoute === '/clients' },
+    { name: 'Produits', href: '/products', icon: Package, permission: 'products:read', current: currentRoute === '/products' },
+    { name: 'Factures', href: '/invoices', icon: FileText, permission: 'invoices:read', current: currentRoute === '/invoices' },
+    { name: 'Soumissions', href: '/quotes', icon: FilePen, permission: 'quotes:read', current: currentRoute === '/quotes' },
+    { name: 'Employes', href: '/employees', icon: UserCheck, permission: 'employees:read', current: currentRoute === '/employees' },
+    { name: 'Depenses', href: '/expenses', icon: Receipt, permission: 'expenses:read', current: currentRoute === '/expenses' },
+    { name: 'Exports', href: '/export', icon: Download, permission: 'reports:read', current: currentRoute === '/export' },
+    { name: 'Rapports', href: '/reports', icon: BarChart2, permission: 'reports:read', current: currentRoute === '/reports' },
+    { name: 'Rapprochement', href: '/bank', icon: GitMerge, permission: 'bank:read', current: currentRoute === '/bank' },
+    { name: 'Parametres', href: '/settings', icon: Settings, permission: null, current: currentRoute === '/settings' },
+    { name: 'Abonnement', href: '/subscription', icon: Gem, permission: 'billing:manage', current: currentRoute === '/subscription' },
   ];
+
+  const navigation = allNavigation.filter(item =>
+    item.permission === null || hasPermission(item.permission)
+  );
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc' }}>

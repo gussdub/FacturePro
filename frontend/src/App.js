@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
+import RouteGuard from './components/RouteGuard';
 import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
 import ClientsPage from './pages/ClientsPage';
@@ -56,17 +57,17 @@ function App() {
       return <SubscriptionPage />;
     }
     switch (currentRoute) {
-      case '/clients': return <ClientsPage />;
-      case '/products': return <ProductsPage />;
-      case '/invoices': return <InvoicesPage />;
-      case '/quotes': return <QuotesPage />;
-      case '/employees': return <EmployeesPage />;
-      case '/expenses': return <ExpensesPage />;
-      case '/export': return <ExportPage />;
-      case '/reports': return <ReportsPage />;
-      case '/bank': return <BankReconciliationPage />;
+      case '/clients': return <RouteGuard permission="clients:read"><ClientsPage /></RouteGuard>;
+      case '/products': return <RouteGuard permission="products:read"><ProductsPage /></RouteGuard>;
+      case '/invoices': return <RouteGuard permission="invoices:read"><InvoicesPage /></RouteGuard>;
+      case '/quotes': return <RouteGuard permission="quotes:read"><QuotesPage /></RouteGuard>;
+      case '/employees': return <RouteGuard permission="employees:read"><EmployeesPage /></RouteGuard>;
+      case '/expenses': return <RouteGuard permission="expenses:read"><ExpensesPage /></RouteGuard>;
+      case '/export': return <RouteGuard permission="reports:read"><ExportPage /></RouteGuard>;
+      case '/reports': return <RouteGuard permission="reports:read"><ReportsPage /></RouteGuard>;
+      case '/bank': return <RouteGuard permission="bank:read"><BankReconciliationPage /></RouteGuard>;
       case '/settings': return <SettingsPage />;
-      case '/subscription': return <SubscriptionPage />;
+      case '/subscription': return <RouteGuard permission="billing:manage"><SubscriptionPage /></RouteGuard>;
       default: return <Dashboard navigate={navigate} />;
     }
   };
