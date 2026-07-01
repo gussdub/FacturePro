@@ -2076,7 +2076,7 @@ git commit -m "feat(organizations): apply require_permission on all business REA
 **Files:**
 - Modify: `backend/server.py`
 
-- [ ] **Step 1: Générer la liste des endpoints POST/PUT/DELETE actuels**
+- [x] **Step 1: Générer la liste des endpoints POST/PUT/DELETE actuels**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"
@@ -2097,7 +2097,7 @@ Mapping :
 | POST/PUT/DELETE `/api/bank/*` | `bank:write` |
 | DELETE `/api/files/{id}` | `expenses:write` (utilisé pour cleanup orphan receipt) |
 
-- [ ] **Step 2: Substituer la dépendance sur chaque endpoint write**
+- [x] **Step 2: Substituer la dépendance sur chaque endpoint write**
 
 Même pattern que Task 9 : remplacer `Depends(get_current_user_with_access)` par `Depends(require_permission("<code>"))`.
 
@@ -2112,7 +2112,7 @@ Endpoints à modifier :
 - `create_bank_mapping`, `create_bank_import`, `match_transaction`, `unmatch_transaction`, `ignore_transaction`, `unignore_transaction`, `create_expense_from_bank`, `create_invoice_from_bank`, `close_bank_import`, `delete_bank_import`
 - `delete_file` (feature #8)
 
-- [ ] **Step 3: Adapter les queries + créations (organization_id sur insert)**
+- [x] **Step 3: Adapter les queries + créations (organization_id sur insert)**
 
 Sur chaque endpoint write, dans le corps :
 
@@ -2144,7 +2144,7 @@ def create_expense(expense_data: dict,
     return {k: v for k, v in expense_data.items() if k != "_id"}
 ```
 
-- [ ] **Step 4: Sanity check + tests**
+- [x] **Step 4: Sanity check + tests**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro/backend"
@@ -2157,7 +2157,7 @@ pytest tests/ -k "create or update or delete" -v 2>&1 | tail -20
 ```
 Expected : aucune régression significative.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd "/Users/guillaumedubeau/Documents/Claude code/FacturePro"

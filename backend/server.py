@@ -1979,10 +1979,13 @@ def get_clients(current_user: CurrentUser = Depends(require_permission("clients:
     ))
 
 @app.post("/api/clients")
-def create_client(client_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def create_client(client_data: dict, current_user: CurrentUser = Depends(require_permission("clients:write"))):
     normalize_tax_fields(client_data)
     doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy, sera retiré via drop_legacy_user_fields
         "name": client_data.get("name", ""), "email": client_data.get("email", ""),
         "phone": client_data.get("phone", ""), "address": client_data.get("address", ""),
         "city": client_data.get("city", ""), "postal_code": client_data.get("postal_code", ""),
@@ -1998,18 +2001,18 @@ def create_client(client_data: dict, current_user: User = Depends(get_current_us
     return clean_doc(doc)
 
 @app.put("/api/clients/{client_id}")
-def update_client(client_id: str, client_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    for k in ("id", "user_id", "_id"):
+def update_client(client_id: str, client_data: dict, current_user: CurrentUser = Depends(require_permission("clients:write"))):
+    for k in ("id", "user_id", "organization_id", "_id"):
         client_data.pop(k, None)
     normalize_tax_fields(client_data)
-    result = db.clients.update_one({"id": client_id, "user_id": current_user.id}, {"$set": client_data})
+    result = db.clients.update_one({"id": client_id, **_org_scope(current_user)}, {"$set": client_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Client not found")
     return clean_doc(db.clients.find_one({"id": client_id}, {"_id": 0}))
 
 @app.delete("/api/clients/{client_id}")
-def delete_client(client_id: str, current_user: User = Depends(get_current_user_with_access)):
-    result = db.clients.delete_one({"id": client_id, "user_id": current_user.id})
+def delete_client(client_id: str, current_user: CurrentUser = Depends(require_permission("clients:write"))):
+    result = db.clients.delete_one({"id": client_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Client not found")
     return {"message": "Client deleted"}
@@ -2029,9 +2032,12 @@ def get_products(current_user: CurrentUser = Depends(require_permission("product
     ))
 
 @app.post("/api/products")
-def create_product(product_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def create_product(product_data: dict, current_user: CurrentUser = Depends(require_permission("products:write"))):
     doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "name": product_data.get("name", ""), "description": product_data.get("description", ""),
         "unit_price": float(product_data.get("unit_price", 0)),
         "unit": product_data.get("unit", "unite"), "category": product_data.get("category", ""),
@@ -2041,17 +2047,17 @@ def create_product(product_data: dict, current_user: User = Depends(get_current_
     return clean_doc(doc)
 
 @app.put("/api/products/{product_id}")
-def update_product(product_id: str, product_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    for k in ("id", "user_id", "_id"):
+def update_product(product_id: str, product_data: dict, current_user: CurrentUser = Depends(require_permission("products:write"))):
+    for k in ("id", "user_id", "organization_id", "_id"):
         product_data.pop(k, None)
-    result = db.products.update_one({"id": product_id, "user_id": current_user.id}, {"$set": product_data})
+    result = db.products.update_one({"id": product_id, **_org_scope(current_user)}, {"$set": product_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Product not found")
     return clean_doc(db.products.find_one({"id": product_id}, {"_id": 0}))
 
 @app.delete("/api/products/{product_id}")
-def delete_product(product_id: str, current_user: User = Depends(get_current_user_with_access)):
-    result = db.products.update_one({"id": product_id, "user_id": current_user.id}, {"$set": {"is_active": False}})
+def delete_product(product_id: str, current_user: CurrentUser = Depends(require_permission("products:write"))):
+    result = db.products.update_one({"id": product_id, **_org_scope(current_user)}, {"$set": {"is_active": False}})
     if result.matched_count == 0:
         raise HTTPException(404, "Product not found")
     return {"message": "Product deleted"}
@@ -2082,7 +2088,7 @@ def get_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_per
     return _enrich_invoice(clean_doc(doc))
 
 @app.post("/api/invoices")
-def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def create_invoice(invoice_data: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     items = invoice_data.get("items", [])
     subtotal = sum(float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) for item in items)
     province = invoice_data.get("province", "QC")
@@ -2091,9 +2097,12 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
     currency = invoice_data.get("currency", "CAD")
     exchange_rate = invoice_data.get("exchange_rate_to_cad", 1.0)
     total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
-    count = db.invoices.count_documents({"user_id": current_user.id})
+    count = db.invoices.count_documents(_org_scope(current_user))
     doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "client_id": invoice_data.get("client_id", ""),
         "invoice_number": invoice_data.get("invoice_number") or f"INV-{count + 1:04d}",
         "issue_date": invoice_data.get("issue_date") or datetime.now(timezone.utc).isoformat(),
@@ -2114,8 +2123,8 @@ def create_invoice(invoice_data: dict, current_user: User = Depends(get_current_
     return clean_doc(doc)
 
 @app.put("/api/invoices/{invoice_id}")
-def update_invoice(invoice_id: str, invoice_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    for k in ("id", "user_id", "_id"):
+def update_invoice(invoice_id: str, invoice_data: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
+    for k in ("id", "user_id", "organization_id", "_id"):
         invoice_data.pop(k, None)
     if "items" in invoice_data:
         items = invoice_data["items"]
@@ -2131,27 +2140,27 @@ def update_invoice(invoice_id: str, invoice_data: dict, current_user: User = Dep
             "total_tax": total_tax, "total": total, "currency": currency,
             "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
         })
-    existing = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    existing = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Invoice not found")
     if existing.get("status", "draft") == "draft":
         client_id_for_snapshot = invoice_data.get("client_id", existing.get("client_id"))
         invoice_data["tax_registrations"] = _build_tax_registrations(current_user.id, client_id_for_snapshot)
-    db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": invoice_data})
+    db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": invoice_data})
     return clean_doc(db.invoices.find_one({"id": invoice_id}, {"_id": 0}))
 
 @app.put("/api/invoices/{invoice_id}/status")
-def update_invoice_status(invoice_id: str, status_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    result = db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": {"status": status_data.get("status", "draft")}})
+def update_invoice_status(invoice_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
+    result = db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": status_data.get("status", "draft")}})
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
     return {"message": "Status updated"}
 
 @app.post("/api/invoices/{invoice_id}/payments")
 def add_invoice_payment(invoice_id: str, body: dict,
-                         current_user: User = Depends(get_current_user_with_access)):
+                         current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     """Enregistre un paiement partiel ou complet. Recalcule le statut automatiquement."""
-    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
     payment = {
@@ -2166,24 +2175,24 @@ def add_invoice_payment(invoice_id: str, body: dict,
     invoice.setdefault("payments", []).append(payment)
     new_status = _recompute_invoice_status(invoice)
     db.invoices.update_one(
-        {"id": invoice_id, "user_id": current_user.id},
+        {"id": invoice_id, **_org_scope(current_user)},
         {"$push": {"payments": payment}, "$set": {"status": new_status}}
     )
-    fresh = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     return _enrich_invoice(fresh)
 
 @app.delete("/api/invoices/{invoice_id}/payments/{payment_id}")
 def delete_invoice_payment(invoice_id: str, payment_id: str,
-                            current_user: User = Depends(get_current_user_with_access)):
+                            current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     """Supprime un paiement. Recalcule le statut."""
     # Feature #7 — libérer la bank_transaction liée si applicable
-    existing_inv = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    existing_inv = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if existing_inv:
         payment_to_remove = next((p for p in existing_inv.get("payments", [])
                                   if p.get("id") == payment_id), None)
         if payment_to_remove and payment_to_remove.get("bank_transaction_id"):
             _release_bank_transaction(payment_to_remove["bank_transaction_id"], current_user.id)
-    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
     payments = [p for p in invoice.get("payments", []) if p.get("id") != payment_id]
@@ -2195,33 +2204,33 @@ def delete_invoice_payment(invoice_id: str, payment_id: str,
         invoice["status"] = "sent"
     new_status = _recompute_invoice_status(invoice)
     db.invoices.update_one(
-        {"id": invoice_id, "user_id": current_user.id},
+        {"id": invoice_id, **_org_scope(current_user)},
         {"$set": {"payments": payments, "status": new_status}}
     )
-    fresh = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     return _enrich_invoice(fresh)
 
 @app.delete("/api/invoices/{invoice_id}")
-def delete_invoice(invoice_id: str, current_user: User = Depends(get_current_user_with_access)):
-    inv = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+def delete_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
+    inv = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if inv:
         for payment in inv.get("payments", []) or []:
             btx_id = payment.get("bank_transaction_id")
             if btx_id:
                 _release_bank_transaction(btx_id, current_user.id)
-    result = db.invoices.delete_one({"id": invoice_id, "user_id": current_user.id})
+    result = db.invoices.delete_one({"id": invoice_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Invoice not found")
     return {"message": "deleted"}
 
 @app.put("/api/invoices/{invoice_id}/recurrence")
-def toggle_recurrence(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+def toggle_recurrence(invoice_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     active = body.get("recurrence_active", False)
     update = {"recurrence_active": active}
     if not active:
         update["recurrence"] = "none"
         update["next_send_date"] = ""
-    result = db.invoices.update_one({"id": invoice_id, "user_id": current_user.id}, {"$set": update})
+    result = db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": update})
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
     return {"message": "Recurrence updated"}
@@ -2240,22 +2249,22 @@ def _advance_date(date_str, recurrence):
     return d.strftime("%Y-%m-%d")
 
 @app.post("/api/invoices/process-recurring")
-def process_recurring_invoices(current_user: User = Depends(get_current_user_with_access)):
+def process_recurring_invoices(current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     invoices = list(db.invoices.find({
-        "user_id": current_user.id,
+        **_org_scope(current_user),
         "recurrence_active": True,
         "recurrence": {"$ne": "none"},
         "next_send_date": {"$lte": today, "$ne": ""}
     }, {"_id": 0}))
     sent_count = 0
     errors = []
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
-    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
+    products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
     for inv in invoices:
-        client = db.clients.find_one({"id": inv.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+        client = db.clients.find_one({"id": inv.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
         to_email = (client or {}).get("email", "")
         if not to_email:
             errors.append(f"{inv.get('invoice_number')}: pas d'email client")
@@ -2304,14 +2313,16 @@ def list_bank_mappings(current_user: CurrentUser = Depends(require_permission("b
 
 
 @app.post("/api/bank/mappings", status_code=201)
-def create_bank_mapping(body: dict, current_user: User = Depends(get_current_user_with_access)):
-    count = db.bank_mappings.count_documents({"user_id": current_user.id})
+def create_bank_mapping(body: dict, current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    count = db.bank_mappings.count_documents(_org_scope(current_user))
     if count >= BANK_MAPPING_LIMIT:
         raise HTTPException(409, f"Limite de {BANK_MAPPING_LIMIT} mappings atteinte")
     now = datetime.now(timezone.utc).isoformat()
     doc = {
         "id": str(uuid.uuid4()),
-        "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "bank_label": (body.get("bank_label") or "").strip()[:60] or "Sans nom",
         "delimiter": body.get("delimiter", ","),
         "has_header": bool(body.get("has_header", True)),
@@ -2342,7 +2353,7 @@ async def create_bank_import(
     bank_label: str = Form(None),
     dry_run: bool = False,
     response: Response = None,
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("bank:write")),
 ):
     # ── 1. size validation BEFORE hash/parse ──
     raw = await file.read()
@@ -2352,7 +2363,7 @@ async def create_bank_import(
     # ── 2. résoudre mapping ──
     if mapping_id:
         mapping_doc = db.bank_mappings.find_one(
-            {"id": mapping_id, "user_id": current_user.id}, {"_id": 0})
+            {"id": mapping_id, **_org_scope(current_user)}, {"_id": 0})
         if not mapping_doc:
             raise HTTPException(404, "Mapping not found")
     elif mapping:
@@ -2380,7 +2391,7 @@ async def create_bank_import(
     # ── 5. file_hash + check duplicate ──
     file_hash = _compute_file_hash(raw)
     existing = db.bank_imports.find_one(
-        {"user_id": current_user.id, "file_hash": file_hash}, {"_id": 0})
+        {**_org_scope(current_user), "file_hash": file_hash}, {"_id": 0})
     if existing:
         raise HTTPException(409, f"Duplicate import (existing import_id: {existing['id']})")
 
@@ -2390,7 +2401,9 @@ async def create_bank_import(
     label = (bank_label or mapping_doc.get("bank_label") or "Banque").strip()[:60]
     import_doc = {
         "id": import_id,
-        "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "mapping_id": mapping_id,
         "bank_label": label,
         "filename": file.filename or "import.csv",
@@ -2405,7 +2418,9 @@ async def create_bank_import(
     for row in parsed:
         tx = {
             "id": str(uuid.uuid4()),
-            "user_id": current_user.id,
+            "organization_id": current_user.organization_id,
+            "created_by_user_id": current_user.id,
+            "user_id": current_user.id,  # legacy
             "import_id": import_id,
             "row_index": row["row_index"],
             "date": row["date"],
@@ -2423,10 +2438,10 @@ async def create_bank_import(
     if tx_docs:
         db.bank_transactions.insert_many(tx_docs)
     if mapping_id:
-        db.bank_mappings.update_one({"id": mapping_id, "user_id": current_user.id},
+        db.bank_mappings.update_one({"id": mapping_id, **_org_scope(current_user)},
                                     {"$set": {"last_used_at": now}})
     matched_n = _auto_match_transactions(import_id, current_user.id)
-    final_txs = list(db.bank_transactions.find({"import_id": import_id, "user_id": current_user.id}, {"_id": 0}))
+    final_txs = list(db.bank_transactions.find({"import_id": import_id, **_org_scope(current_user)}, {"_id": 0}))
     return {"import": clean_doc(import_doc),
             "transactions": [clean_doc(t) for t in final_txs],
             "auto_matched": matched_n}
@@ -2509,8 +2524,8 @@ def _get_tx_or_404(tx_id, scope):
 
 @app.post("/api/bank/transactions/{tx_id}/match")
 def match_bank_transaction(tx_id: str, body: dict,
-                            current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
+                            current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     kind = body.get("kind")
     target_id = body.get("target_id")
     if not target_id:
@@ -2520,54 +2535,54 @@ def match_bank_transaction(tx_id: str, body: dict,
 
 @app.post("/api/bank/transactions/{tx_id}/unmatch")
 def unmatch_bank_transaction(tx_id: str,
-                              current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
+                              current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     if tx.get("status") != "matched":
         raise HTTPException(409, "Transaction is not matched")
     if tx.get("match_kind") == "invoice_payment":
         invoice = db.invoices.find_one(
-            {"id": tx.get("invoice_id"), "user_id": current_user.id}, {"_id": 0})
+            {"id": tx.get("invoice_id"), **_org_scope(current_user)}, {"_id": 0})
         if invoice:
             new_payments = [p for p in invoice.get("payments", [])
                             if p.get("id") != tx.get("match_id")]
             db.invoices.update_one(
-                {"id": invoice["id"], "user_id": current_user.id},
+                {"id": invoice["id"], **_org_scope(current_user)},
                 {"$set": {"payments": new_payments, "status": "sent"}})
             updated = db.invoices.find_one(
-                {"id": invoice["id"], "user_id": current_user.id}, {"_id": 0})
+                {"id": invoice["id"], **_org_scope(current_user)}, {"_id": 0})
             new_status = _recompute_invoice_status(updated)
-            db.invoices.update_one({"id": invoice["id"], "user_id": current_user.id},
+            db.invoices.update_one({"id": invoice["id"], **_org_scope(current_user)},
                                    {"$set": {"status": new_status}})
     elif tx.get("match_kind") == "expense":
         db.expenses.update_one(
-            {"id": tx.get("match_id"), "user_id": current_user.id},
+            {"id": tx.get("match_id"), **_org_scope(current_user)},
             {"$set": {"bank_transaction_id": None}})
     _release_bank_transaction(tx_id, current_user.id)
-    return clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))
+    return clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))
 
 
 @app.post("/api/bank/transactions/{tx_id}/ignore")
 def ignore_bank_transaction(tx_id: str,
-                             current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
+                             current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     if tx.get("status") == "matched":
         raise HTTPException(409, "Cannot ignore a matched transaction; unmatch first")
     db.bank_transactions.update_one(
-        {"id": tx_id, "user_id": current_user.id},
+        {"id": tx_id, **_org_scope(current_user)},
         {"$set": {"status": "ignored"}})
-    return clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))
+    return clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))
 
 
 @app.post("/api/bank/transactions/{tx_id}/unignore")
 def unignore_bank_transaction(tx_id: str,
-                               current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
+                               current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     if tx.get("status") != "ignored":
         raise HTTPException(409, "Transaction is not ignored")
     db.bank_transactions.update_one(
-        {"id": tx_id, "user_id": current_user.id},
+        {"id": tx_id, **_org_scope(current_user)},
         {"$set": {"status": "unmatched"}})
-    return clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))
+    return clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))
 
 
 @app.get("/api/bank/transactions/{tx_id}/suggestions")
@@ -2623,8 +2638,8 @@ def get_bank_suggestions(tx_id: str,
 
 @app.post("/api/bank/transactions/{tx_id}/create-expense", status_code=201)
 def create_expense_from_tx(tx_id: str, body: dict,
-                            current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
+                            current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     if tx.get("status") != "unmatched":
         raise HTTPException(409, "Transaction already matched or ignored")
     if tx.get("amount_cad") is None or tx.get("date") is None:
@@ -2636,7 +2651,9 @@ def create_expense_from_tx(tx_id: str, body: dict,
     vendor = (body.get("vendor") or tx.get("description") or "")[:60]
     expense_doc = {
         "id": str(uuid.uuid4()),
-        "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "date": tx["date"],
         "amount_cad": round(amount, 2),
         "currency": "CAD",
@@ -2659,17 +2676,17 @@ def create_expense_from_tx(tx_id: str, body: dict,
     db.expenses.insert_one(expense_doc)
     now = datetime.now(timezone.utc).isoformat()
     db.bank_transactions.update_one(
-        {"id": tx_id, "user_id": current_user.id},
+        {"id": tx_id, **_org_scope(current_user)},
         {"$set": {"status": "matched", "match_kind": "expense",
                   "match_id": expense_doc["id"], "matched_at": now}})
     return {"expense": clean_doc(expense_doc),
-            "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))}
+            "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))}
 
 
 @app.post("/api/bank/transactions/{tx_id}/create-invoice", status_code=201)
 def create_invoice_from_tx(tx_id: str, body: dict,
-                            current_user: User = Depends(get_current_user_with_access)):
-    tx = _get_tx_or_404(tx_id, {"user_id": current_user.id})
+                            current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     if tx.get("status") != "unmatched":
         raise HTTPException(409, "Transaction already matched or ignored")
     if tx.get("amount_cad") is None or tx.get("date") is None:
@@ -2679,17 +2696,19 @@ def create_invoice_from_tx(tx_id: str, body: dict,
     client_id = body.get("client_id")
     if not client_id:
         raise HTTPException(422, "client_id required")
-    client = db.clients.find_one({"id": client_id, "user_id": current_user.id}, {"_id": 0})
+    client = db.clients.find_one({"id": client_id, **_org_scope(current_user)}, {"_id": 0})
     if not client:
         raise HTTPException(404, "Client not found")
     total = round(abs(float(tx["amount_cad"])), 2)
     item_desc = (body.get("item_description") or
                  f"Encaissement bancaire — {(tx.get('description') or '')[:60]}")
     now = datetime.now(timezone.utc).isoformat()
-    count = db.invoices.count_documents({"user_id": current_user.id})
+    count = db.invoices.count_documents(_org_scope(current_user))
     invoice_doc = {
         "id": str(uuid.uuid4()),
-        "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "client_id": client_id,
         "invoice_number": f"INV-{count + 1:04d}",
         "issue_date": tx["date"],
@@ -2715,19 +2734,19 @@ def create_invoice_from_tx(tx_id: str, body: dict,
     invoice_doc["tax_registrations"] = _build_tax_registrations(current_user.id, client_id)
     db.invoices.insert_one(invoice_doc)
     db.bank_transactions.update_one(
-        {"id": tx_id, "user_id": current_user.id},
+        {"id": tx_id, **_org_scope(current_user)},
         {"$set": {"status": "matched", "match_kind": "invoice_payment",
                   "match_id": invoice_doc["payments"][0]["id"],
                   "invoice_id": invoice_doc["id"], "matched_at": now}})
     return {"invoice": clean_doc(invoice_doc),
-            "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, "user_id": current_user.id}, {"_id": 0}))}
+            "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))}
 
 
 @app.post("/api/bank/imports/{import_id}/close")
 def close_bank_import(import_id: str,
-                       current_user: User = Depends(get_current_user_with_access)):
+                       current_user: CurrentUser = Depends(require_permission("bank:write"))):
     res = db.bank_imports.update_one(
-        {"id": import_id, "user_id": current_user.id},
+        {"id": import_id, **_org_scope(current_user)},
         {"$set": {"closed_at": datetime.now(timezone.utc).isoformat()}})
     if res.matched_count == 0:
         raise HTTPException(404, "Import not found")
@@ -2736,37 +2755,37 @@ def close_bank_import(import_id: str,
 
 @app.delete("/api/bank/imports/{import_id}")
 def delete_bank_import(import_id: str, force: bool = False,
-                       current_user: User = Depends(get_current_user_with_access)):
-    imp = db.bank_imports.find_one({"id": import_id, "user_id": current_user.id}, {"_id": 0})
+                       current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    imp = db.bank_imports.find_one({"id": import_id, **_org_scope(current_user)}, {"_id": 0})
     if not imp:
         raise HTTPException(404, "Import not found")
     if imp.get("closed_at") and not force:
         raise HTTPException(409, "Import is closed; use force=true to confirm")
     # cascade : libérer chaque transaction matchée
     for tx in db.bank_transactions.find(
-            {"import_id": import_id, "user_id": current_user.id, "status": "matched"},
+            {"import_id": import_id, **_org_scope(current_user), "status": "matched"},
             {"_id": 0}):
         if tx.get("match_kind") == "invoice_payment":
             inv = db.invoices.find_one(
-                {"id": tx.get("invoice_id"), "user_id": current_user.id}, {"_id": 0})
+                {"id": tx.get("invoice_id"), **_org_scope(current_user)}, {"_id": 0})
             if inv:
                 new_payments = [p for p in inv.get("payments", [])
                                 if p.get("id") != tx.get("match_id")]
                 db.invoices.update_one(
-                    {"id": inv["id"], "user_id": current_user.id},
+                    {"id": inv["id"], **_org_scope(current_user)},
                     {"$set": {"payments": new_payments, "status": "sent"}})
                 updated = db.invoices.find_one(
-                    {"id": inv["id"], "user_id": current_user.id}, {"_id": 0})
+                    {"id": inv["id"], **_org_scope(current_user)}, {"_id": 0})
                 new_status = _recompute_invoice_status(updated)
-                db.invoices.update_one({"id": inv["id"], "user_id": current_user.id},
+                db.invoices.update_one({"id": inv["id"], **_org_scope(current_user)},
                                        {"$set": {"status": new_status}})
         elif tx.get("match_kind") == "expense":
             db.expenses.update_one(
-                {"id": tx.get("match_id"), "user_id": current_user.id},
+                {"id": tx.get("match_id"), **_org_scope(current_user)},
                 {"$set": {"bank_transaction_id": None}})
     db.bank_transactions.delete_many(
-        {"import_id": import_id, "user_id": current_user.id})
-    db.bank_imports.delete_one({"id": import_id, "user_id": current_user.id})
+        {"import_id": import_id, **_org_scope(current_user)})
+    db.bank_imports.delete_one({"id": import_id, **_org_scope(current_user)})
     return Response(status_code=204)
 
 
@@ -2777,7 +2796,7 @@ MAX_RECEIPT_BYTES = 5 * 1024 * 1024
 @app.post("/api/expenses/scan-receipt")
 async def scan_receipt(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user_with_access),
+    current_user: CurrentUser = Depends(require_permission("receipts:scan")),
 ):
     # 1. Lecture + size cap
     raw = await file.read()
@@ -2817,7 +2836,9 @@ async def scan_receipt(
     file_id = str(uuid.uuid4())
     db.files.insert_one({
         "id": file_id,
-        "user_id": current_user.id,
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "data": raw,
         "mime_type": mime,
         "original_filename": file.filename or "receipt.jpg",
@@ -2863,11 +2884,11 @@ def get_receipt_file(file_id: str,
 
 @app.delete("/api/files/{file_id}")
 def delete_file_endpoint(file_id: str,
-                          current_user: User = Depends(get_current_user_with_access)):
+                          current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     """Soft-delete d'un fichier. Utilisé pour cleanup orphelins côté frontend
     si l'utilisateur ferme le modal sans sauver."""
     res = db.files.update_one(
-        {"id": file_id, "user_id": current_user.id, "is_deleted": False},
+        {"id": file_id, "is_deleted": False, **_org_scope(current_user)},
         {"$set": {"is_deleted": True}},
     )
     if res.matched_count == 0:
@@ -3109,7 +3130,7 @@ def get_quotes(current_user: CurrentUser = Depends(require_permission("quotes:re
     ))
 
 @app.post("/api/quotes")
-def create_quote(quote_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     items = quote_data.get("items", [])
     subtotal = sum(float(item.get("quantity", 1)) * float(item.get("unit_price", 0)) for item in items)
     province = quote_data.get("province", "QC")
@@ -3118,9 +3139,12 @@ def create_quote(quote_data: dict, current_user: User = Depends(get_current_user
     currency = quote_data.get("currency", "CAD")
     exchange_rate = quote_data.get("exchange_rate_to_cad", 1.0)
     total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
-    count = db.quotes.count_documents({"user_id": current_user.id})
+    count = db.quotes.count_documents(_org_scope(current_user))
     doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "client_id": quote_data.get("client_id", ""),
         "quote_number": f"QUO-{count + 1:04d}",
         "issue_date": quote_data.get("issue_date") or datetime.now(timezone.utc).isoformat(),
@@ -3137,8 +3161,8 @@ def create_quote(quote_data: dict, current_user: User = Depends(get_current_user
     return clean_doc(doc)
 
 @app.put("/api/quotes/{quote_id}")
-def update_quote(quote_id: str, quote_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    for k in ("id", "user_id", "_id"):
+def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
+    for k in ("id", "user_id", "organization_id", "_id"):
         quote_data.pop(k, None)
     if "items" in quote_data:
         items = quote_data["items"]
@@ -3154,22 +3178,25 @@ def update_quote(quote_id: str, quote_data: dict, current_user: User = Depends(g
             "total_tax": total_tax, "total": total, "currency": currency,
             "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
         })
-    existing = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+    existing = db.quotes.find_one({"id": quote_id, **_org_scope(current_user)}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Quote not found")
     client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
     quote_data["tax_registrations"] = _build_tax_registrations(current_user.id, client_id_for_snapshot)
-    db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": quote_data})
+    db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
 @app.post("/api/quotes/{quote_id}/convert")
-def convert_quote_to_invoice(quote_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
-    quote = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
+    quote = db.quotes.find_one({"id": quote_id, **_org_scope(current_user)}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
-    count = db.invoices.count_documents({"user_id": current_user.id})
+    count = db.invoices.count_documents(_org_scope(current_user))
     invoice_doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "client_id": quote["client_id"], "invoice_number": f"INV-{count + 1:04d}",
         "issue_date": datetime.now(timezone.utc).isoformat(),
         "due_date": body.get("due_date", ""), "items": quote.get("items", []),
@@ -3187,20 +3214,20 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: User = Dep
     invoice_doc["tax_registrations"] = quote.get("tax_registrations") or \
         _build_tax_registrations(current_user.id, quote.get("client_id"))
     db.invoices.insert_one(invoice_doc)
-    db.quotes.update_one({"id": quote_id}, {"$set": {"status": "converted"}})
+    db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "converted"}})
     return clean_doc(invoice_doc)
 
 @app.put("/api/quotes/{quote_id}/status")
-def update_quote_status(quote_id: str, status_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     new_status = status_data.get("status", "pending")
-    result = db.quotes.update_one({"id": quote_id, "user_id": current_user.id}, {"$set": {"status": new_status}})
+    result = db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
     if result.matched_count == 0:
         raise HTTPException(404, "Quote not found")
     return {"message": "Status updated"}
 
 @app.delete("/api/quotes/{quote_id}")
-def delete_quote(quote_id: str, current_user: User = Depends(get_current_user_with_access)):
-    result = db.quotes.delete_one({"id": quote_id, "user_id": current_user.id})
+def delete_quote(quote_id: str, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
+    result = db.quotes.delete_one({"id": quote_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Quote not found")
     return {"message": "Quote deleted"}
@@ -3220,9 +3247,12 @@ def get_employees(current_user: CurrentUser = Depends(require_permission("employ
     ))
 
 @app.post("/api/employees")
-def create_employee(employee_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def create_employee(employee_data: dict, current_user: CurrentUser = Depends(require_permission("employees:write"))):
     doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "name": employee_data.get("name", ""), "email": employee_data.get("email", ""),
         "phone": employee_data.get("phone", ""), "employee_number": employee_data.get("employee_number", ""),
         "department": employee_data.get("department", ""), "is_active": True,
@@ -3232,17 +3262,17 @@ def create_employee(employee_data: dict, current_user: User = Depends(get_curren
     return clean_doc(doc)
 
 @app.put("/api/employees/{employee_id}")
-def update_employee(employee_id: str, employee_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    for k in ("id", "user_id", "_id"):
+def update_employee(employee_id: str, employee_data: dict, current_user: CurrentUser = Depends(require_permission("employees:write"))):
+    for k in ("id", "user_id", "organization_id", "_id"):
         employee_data.pop(k, None)
-    result = db.employees.update_one({"id": employee_id, "user_id": current_user.id}, {"$set": employee_data})
+    result = db.employees.update_one({"id": employee_id, **_org_scope(current_user)}, {"$set": employee_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Employee not found")
     return clean_doc(db.employees.find_one({"id": employee_id}, {"_id": 0}))
 
 @app.delete("/api/employees/{employee_id}")
-def delete_employee(employee_id: str, current_user: User = Depends(get_current_user_with_access)):
-    result = db.employees.update_one({"id": employee_id, "user_id": current_user.id}, {"$set": {"is_active": False}})
+def delete_employee(employee_id: str, current_user: CurrentUser = Depends(require_permission("employees:write"))):
+    result = db.employees.update_one({"id": employee_id, **_org_scope(current_user)}, {"$set": {"is_active": False}})
     if result.matched_count == 0:
         raise HTTPException(404, "Employee not found")
     return {"message": "Employee deleted"}
@@ -3264,14 +3294,17 @@ def get_expenses(current_user: CurrentUser = Depends(require_permission("expense
     ))
 
 @app.post("/api/expenses")
-def create_expense(expense_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def create_expense(expense_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     amount = float(expense_data.get("amount", 0))
     currency = expense_data.get("currency", "CAD")
     exchange_rate = expense_data.get("exchange_rate_to_cad", 1.0)
     amount_cad = round(amount / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else amount
     cat_snapshot = _build_expense_category_snapshot(expense_data, amount_cad)
     doc = {
-        "id": str(uuid.uuid4()), "user_id": current_user.id,
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy
         "employee_id": expense_data.get("employee_id", ""),
         "description": expense_data.get("description", ""),
         "amount": amount, "currency": currency,
@@ -3290,8 +3323,8 @@ def create_expense(expense_data: dict, current_user: User = Depends(get_current_
     return clean_doc(doc)
 
 @app.put("/api/expenses/{expense_id}")
-def update_expense(expense_id: str, expense_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    for k in ("id", "user_id", "_id"):
+def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    for k in ("id", "user_id", "organization_id", "_id"):
         expense_data.pop(k, None)
     # Cast des champs taxes payées si présents (le frontend peut envoyer des strings)
     for k in ("gst_paid_cad", "qst_paid_cad", "hst_paid_cad"):
@@ -3300,7 +3333,7 @@ def update_expense(expense_id: str, expense_data: dict, current_user: User = Dep
     if "taxes_auto_computed" in expense_data:
         expense_data["taxes_auto_computed"] = bool(expense_data["taxes_auto_computed"])
     # Charger l'état actuel pour décider si on doit re-snapshot la catégorie ou recalculer deductible_amount.
-    current = db.expenses.find_one({"id": expense_id, "user_id": current_user.id}, {"_id": 0})
+    current = db.expenses.find_one({"id": expense_id, **_org_scope(current_user)}, {"_id": 0})
     if current is None:
         raise HTTPException(404, "Expense not found")
     # Calculer le nouveau amount_cad si amount/currency/exchange_rate change
@@ -3325,31 +3358,31 @@ def update_expense(expense_id: str, expense_data: dict, current_user: User = Dep
         new_fid = expense_data.get("receipt_file_id")
         if old_fid and old_fid != new_fid:
             db.files.update_one(
-                {"id": old_fid, "user_id": current_user.id},
+                {"id": old_fid, **_org_scope(current_user)},
                 {"$set": {"is_deleted": True}},
             )
-    db.expenses.update_one({"id": expense_id, "user_id": current_user.id}, {"$set": expense_data})
+    db.expenses.update_one({"id": expense_id, **_org_scope(current_user)}, {"$set": expense_data})
     return clean_doc(db.expenses.find_one({"id": expense_id}, {"_id": 0}))
 
 @app.put("/api/expenses/{expense_id}/status")
-def update_expense_status(expense_id: str, status_data: dict, current_user: User = Depends(get_current_user_with_access)):
-    result = db.expenses.update_one({"id": expense_id, "user_id": current_user.id}, {"$set": {"status": status_data.get("status", "pending")}})
+def update_expense_status(expense_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    result = db.expenses.update_one({"id": expense_id, **_org_scope(current_user)}, {"$set": {"status": status_data.get("status", "pending")}})
     if result.matched_count == 0:
         raise HTTPException(404, "Expense not found")
     return {"message": "Status updated"}
 
 @app.delete("/api/expenses/{expense_id}")
-def delete_expense(expense_id: str, current_user: User = Depends(get_current_user_with_access)):
-    exp = db.expenses.find_one({"id": expense_id, "user_id": current_user.id}, {"_id": 0})
+def delete_expense(expense_id: str, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    exp = db.expenses.find_one({"id": expense_id, **_org_scope(current_user)}, {"_id": 0})
     if exp and exp.get("bank_transaction_id"):
         _release_bank_transaction(exp["bank_transaction_id"], current_user.id)
     # Feature #8 — cascade soft-delete du receipt file
     if exp and exp.get("receipt_file_id"):
         db.files.update_one(
-            {"id": exp["receipt_file_id"], "user_id": current_user.id},
+            {"id": exp["receipt_file_id"], **_org_scope(current_user)},
             {"$set": {"is_deleted": True}},
         )
-    result = db.expenses.delete_one({"id": expense_id, "user_id": current_user.id})
+    result = db.expenses.delete_one({"id": expense_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Expense not found")
     return {"message": "deleted"}
@@ -3413,7 +3446,7 @@ def parse_date(val):
     return val[:10]
 
 @app.post("/api/expenses/import-csv")
-def import_csv_preview(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
+def import_csv_preview(file: UploadFile = File(...), current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     content = file.file.read()
     for encoding in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
         try:
@@ -3463,7 +3496,7 @@ def import_csv_preview(file: UploadFile = File(...), current_user: User = Depend
     }
 
 @app.post("/api/expenses/import-confirm")
-def import_csv_confirm(import_data: dict, current_user: User = Depends(get_current_user_with_access)):
+def import_csv_confirm(import_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     rows = import_data.get("rows", [])
     if not rows:
         raise HTTPException(400, "Aucune donnee a importer")
@@ -3473,7 +3506,10 @@ def import_csv_confirm(import_data: dict, current_user: User = Depends(get_curre
         if amt == 0 and not row.get("description"):
             continue
         doc = {
-            "id": str(uuid.uuid4()), "user_id": current_user.id,
+            "id": str(uuid.uuid4()),
+            "organization_id": current_user.organization_id,
+            "created_by_user_id": current_user.id,
+            "user_id": current_user.id,  # legacy
             "employee_id": row.get("employee_id", ""),
             "description": row.get("description", "Import CSV"),
             "amount": abs(amt),
@@ -3775,18 +3811,18 @@ def get_dashboard_outstanding(current_user: CurrentUser = Depends(require_permis
     return {"total_outstanding_cad": round(total, 2), "invoice_count": len(invoices)}
 
 @app.post("/api/invoices/{invoice_id}/remind")
-def send_invoice_reminder(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+def send_invoice_reminder(invoice_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
-    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": invoice.get("client_id"), "user_id": current_user.id}, {"_id": 0})
+    settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": invoice.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
     to_email = body.get("to_email") or (client_info or {}).get("email")
     if not to_email:
         raise HTTPException(400, "Adresse email du destinataire requise")
-    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
     pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
     pdf_bytes = pdf_buffer.read()
     pdf_b64 = base64.b64encode(pdf_bytes).decode()
@@ -3810,7 +3846,7 @@ def send_invoice_reminder(invoice_id: str, body: dict, current_user: User = Depe
     }
     try:
         r = resend.Emails.send(params)
-        db.invoices.update_one({"id": invoice_id}, {"$set": {"last_reminded": datetime.now(timezone.utc).isoformat()}})
+        db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"last_reminded": datetime.now(timezone.utc).isoformat()}})
         return {"message": f"Rappel envoye a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi rappel: {str(e)}")
@@ -4209,16 +4245,16 @@ def get_invoice_pdf(invoice_id: str, current_user: CurrentUser = Depends(require
 
 # ─── Email Sending ───
 @app.post("/api/quotes/{quote_id}/send")
-def send_quote_email(quote_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
 
-    quote = db.quotes.find_one({"id": quote_id, "user_id": current_user.id}, {"_id": 0})
+    quote = db.quotes.find_one({"id": quote_id, **_org_scope(current_user)}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": quote.get("client_id"), "user_id": current_user.id}, {"_id": 0})
-    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": quote.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
+    products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
 
     to_email = body.get("to_email") or (client_info or {}).get("email")
     if not to_email:
@@ -4242,22 +4278,22 @@ def send_quote_email(quote_id: str, body: dict, current_user: User = Depends(get
     }
     try:
         r = resend.Emails.send(params)
-        db.quotes.update_one({"id": quote_id}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
+        db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
         return {"message": f"Soumission envoyee a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
 
 @app.post("/api/invoices/{invoice_id}/send")
-def send_invoice_email(invoice_id: str, body: dict, current_user: User = Depends(get_current_user_with_access)):
+def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
 
-    invoice = db.invoices.find_one({"id": invoice_id, "user_id": current_user.id}, {"_id": 0})
+    invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     if not invoice:
         raise HTTPException(404, "Invoice not found")
-    settings = db.company_settings.find_one({"user_id": current_user.id}, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": invoice.get("client_id"), "user_id": current_user.id}, {"_id": 0})
-    products = list(db.products.find({"user_id": current_user.id}, {"_id": 0}))
+    settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
+    client_info = db.clients.find_one({"id": invoice.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
+    products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
 
     to_email = body.get("to_email") or (client_info or {}).get("email")
     if not to_email:
@@ -4281,7 +4317,7 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: User = Depends
     }
     try:
         r = resend.Emails.send(params)
-        db.invoices.update_one({"id": invoice_id}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
+        db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
         return {"message": f"Facture envoyee a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
