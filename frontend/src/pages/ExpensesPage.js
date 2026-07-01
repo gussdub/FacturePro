@@ -315,18 +315,21 @@ const ExpensesPage = () => {
     setScanError(null);
     setScanLoading(true);
     try {
-      const compressed = await compressImage(file);
-      if (compressed.size > 5 * 1024 * 1024) {
-        setScanError("Photo trop volumineuse même après compression.");
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const uploaded = isPdf ? file : await compressImage(file);
+      if (uploaded.size > 5 * 1024 * 1024) {
+        setScanError(isPdf
+          ? "PDF trop volumineux (max 5 MB)."
+          : "Photo trop volumineuse même après compression.");
         return;
       }
       const fd = new FormData();
-      fd.append("file", compressed, file.name);
+      fd.append("file", uploaded, file.name);
       const r = await axios.post(`${BACKEND_URL}/api/expenses/scan-receipt`,
         fd, { headers: { "Content-Type": "multipart/form-data" } });
       const ex = r.data.extraction;
-      const blobUrl = URL.createObjectURL(compressed);
-      setReceiptScan({ fileId: r.data.file_id, extraction: ex, blobUrl });
+      const blobUrl = URL.createObjectURL(uploaded);
+      setReceiptScan({ fileId: r.data.file_id, extraction: ex, blobUrl, isPdf });
       // Pré-remplir formData et ouvrir le modal
       setFormData({
         employee_id: '', description: '', category: '', notes: '', receipt_url: '',
@@ -388,7 +391,7 @@ const ExpensesPage = () => {
           <input
             ref={scanInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif"
+            accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
             style={{ display: "none" }}
             onChange={handleReceiptScan}
           />
@@ -487,11 +490,24 @@ const ExpensesPage = () => {
                 <div style={{ background: '#dbeafe', color: '#1e40af', padding: 10,
                                borderRadius: 6, marginBottom: 12, display: 'flex',
                                alignItems: 'center', gap: 12 }}>
-                  <img src={receiptScan.blobUrl} alt="recu"
-                       style={{ maxHeight: 80, maxWidth: 80, borderRadius: 4,
-                                border: '1px solid #93c5fd', cursor: 'pointer',
-                                objectFit: 'cover' }}
-                       onClick={() => window.open(receiptScan.blobUrl, '_blank')} />
+                  {receiptScan.isPdf ? (
+                    <div onClick={() => window.open(receiptScan.blobUrl, '_blank')}
+                         style={{ width: 60, height: 80, borderRadius: 4,
+                                  border: '1px solid #93c5fd', cursor: 'pointer',
+                                  background: '#fff', display: 'flex',
+                                  flexDirection: 'column', alignItems: 'center',
+                                  justifyContent: 'center', gap: 4,
+                                  fontSize: 10, color: '#1e40af', fontWeight: 600 }}>
+                      <div style={{ fontSize: 24 }}>📄</div>
+                      <div>PDF</div>
+                    </div>
+                  ) : (
+                    <img src={receiptScan.blobUrl} alt="recu"
+                         style={{ maxHeight: 80, maxWidth: 80, borderRadius: 4,
+                                  border: '1px solid #93c5fd', cursor: 'pointer',
+                                  objectFit: 'cover' }}
+                         onClick={() => window.open(receiptScan.blobUrl, '_blank')} />
+                  )}
                   <div style={{ flex: 1, fontSize: 13 }}>
                     ✨ Données extraites automatiquement — vérifie avant d'enregistrer.
                   </div>

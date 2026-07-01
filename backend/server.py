@@ -812,12 +812,14 @@ _IMAGE_MAGIC_BYTES = [
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
+    (b"%PDF-", "application/pdf"),
 ]
 
 
 def _detect_image_mime(data):
-    """Détecte le mime réel d'une image depuis ses premiers bytes.
-    Retourne 'image/jpeg', 'image/png', 'image/webp', 'image/gif' ou None.
+    """Détecte le mime réel d'un fichier depuis ses premiers bytes.
+    Retourne 'image/jpeg', 'image/png', 'image/webp', 'image/gif',
+    'application/pdf' ou None.
     Ne fait JAMAIS confiance au Content-Type client."""
     if not data or len(data) < 12:
         return None
@@ -993,6 +995,8 @@ Réponds via l'outil extract_receipt."""
 
 def _call_anthropic_extract(image_bytes, mime_type):
     """Appelle Claude Haiku 4.5 et retourne le dict extraction brut.
+    Supporte les images (JPEG/PNG/WEBP/GIF) via bloc 'image' et les PDFs
+    via bloc 'document'.
     Lève HTTPException 502 en cas d'erreur API ou réponse invalide.
     NE LOG JAMAIS str(e) (peut leaker la clé API)."""
     # Test mock injection (jamais set en prod ; pas exposé via API)
@@ -1000,6 +1004,24 @@ def _call_anthropic_extract(image_bytes, mime_type):
     if mock is not None:
         return mock
     client = _get_anthropic_client()
+    if mime_type == "application/pdf":
+        content_block = {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            },
+        }
+    else:
+        content_block = {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mime_type,
+                "data": base64.b64encode(image_bytes).decode("ascii"),
+            },
+        }
     try:
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -1007,17 +1029,7 @@ def _call_anthropic_extract(image_bytes, mime_type):
             system=_build_system_prompt(),
             tools=[_build_extract_tool()],
             tool_choice={"type": "tool", "name": "extract_receipt"},
-            messages=[{
-                "role": "user",
-                "content": [{
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": base64.b64encode(image_bytes).decode("ascii"),
-                    },
-                }],
-            }],
+            messages=[{"role": "user", "content": [content_block]}],
         )
     except (anthropic.APIStatusError, anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
         status = getattr(e, "status_code", None)
@@ -2031,13 +2043,14 @@ async def scan_receipt(
     # 2. Magic-bytes validation
     mime = _detect_image_mime(raw)
     if mime is None:
-        raise HTTPException(422, "Format non supporté. Utilise JPG, PNG, WEBP ou GIF.")
+        raise HTTPException(422, "Format non supporté. Utilise JPG, PNG, WEBP, GIF ou PDF.")
 
-    # 3. Décompression bomb check
-    try:
-        _check_image_decompression(raw)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
+    # 3. Décompression bomb check (images seulement — PIL ne gère pas les PDF)
+    if mime.startswith("image/"):
+        try:
+            _check_image_decompression(raw)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
 
     # 4. Quota check + bill (atomique)
     scan_count = _check_and_bill_scan(current_user.id)
