@@ -585,6 +585,52 @@ class TestAcceptInvite:
             self._cleanup_user(email)
             server_module.db.organizations.delete_one({"id": other_org_id})
 
+    def test_existing_user_mixed_case_email_reuses_account(
+            self, client, owner_headers, monkeypatch):
+        # Regression: a legacy standalone user with a mixed-case stored email
+        # must be matched by accept-invite (which normalizes the invitation
+        # email to lowercase). Without the case-insensitive lookup, the code
+        # falls through to the New-user path and creates a duplicate user
+        # (email unique index is case-sensitive), orphaning the original
+        # user's invoices/clients/expenses.
+        suffix = uuid.uuid4().hex[:8]
+        stored_email = f"John.{suffix}@Example.COM"
+        invite_email = stored_email.lower()
+        uid = str(uuid.uuid4())
+        server_module.db.users.insert_one({
+            "id": uid, "email": stored_email, "company_name": "Legacy",
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.user_passwords.insert_one({
+            "user_id": uid,
+            "hashed_password": server_module.hash_password("legacy-pass"),
+        })
+        try:
+            _, token = self._create_pending_invitation(
+                client, owner_headers, invite_email, "accountant", monkeypatch)
+            r = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "legacy-pass",
+                "pipeda_consent": True,
+            })
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # Existing-user path must reuse the legacy user id (no duplicate).
+            assert body["user"]["id"] == uid
+            # Confirm exactly one user row exists for that email (any casing).
+            matches = list(server_module.db.users.find({
+                "email": {"$regex": f"^{invite_email}$", "$options": "i"}
+            }))
+            assert len(matches) == 1
+            assert matches[0]["id"] == uid
+            assert matches[0].get("organization_id") is not None
+            assert matches[0].get("role") == "accountant"
+        finally:
+            # Cleanup by id (case-insensitive email cleanup helper would work
+            # too, but be explicit).
+            server_module.db.users.delete_one({"id": uid})
+            server_module.db.user_passwords.delete_one({"user_id": uid})
+
 
 class TestInvitationPreview:
     def test_preview_valid_token(self, client, owner_headers, monkeypatch):

@@ -1695,7 +1695,16 @@ def accept_invite(body: dict, request: Request):
 
     email = inv["email"].lower()
     now = datetime.now(timezone.utc).isoformat()
-    user = db.users.find_one({"email": email})
+    # Case-insensitive lookup: legacy users may have mixed-case emails stored
+    # (users.email is stored as-provided at signup — see create_invitation and
+    # login for the same pattern). An exact-match on the lowercased invitation
+    # email would miss them and fall through to the New-user path, creating a
+    # DUPLICATE account that orphans the original user's invoices/clients/
+    # expenses (the email unique index is case-sensitive) and silently breaks
+    # multi-tenancy.
+    user = db.users.find_one({
+        "email": {"$regex": f"^{_re.escape(email)}$", "$options": "i"}
+    })
 
     if user:
         # Existing user path
