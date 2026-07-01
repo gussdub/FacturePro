@@ -106,7 +106,7 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
-- **2026-07-01 — Organisations multi-tenant (feature #11)** *(implémenté et testé localement ; push origin main + monitoring post-deploy encore à faire — cf. Task 18 Steps 4-5 du plan)*
+- **2026-07-01 — Organisations multi-tenant (feature #11)** *(implémenté et testé localement ; T0→T18 tous committés en local. NON DÉPLOYÉ EN PROD : `git push origin main` (Task 18 Step 4) et la vérification post-deploy (Task 18 Step 5 + 6b) restent à faire manuellement par l'humain. Origin/main tip = `985eeca` ; local main est ahead de 30 commits.)*
   - Nouvelles collections : `organizations` (subscription Stripe + role_permissions + scan quota) et `invitations` (link signé Resend TTL 7j single-use)
   - Nouveau modèle Pydantic `CurrentUser` (id + email + organization_id + role + permissions) résolu à chaque requête via `get_current_user_with_access` refactoré
   - Dependency `require_permission("code")` appliquée sur ~60 endpoints métier ; toutes les queries filtrent par `organization_id` au lieu de `user_id` (avec fallback transitoire `$or` pendant 4 semaines)
