@@ -47,6 +47,8 @@ const ExpensesPage = () => {
   const [exchangeRates, setExchangeRates] = useState(null); // { CAD:1, USD:0.73, ... } | null (unités étrangères par 1 CAD)
   const [companyProvince, setCompanyProvince] = useState('QC');
   const scanInputRef = useRef(null);
+  // Cache des taux historiques par date (figés) — évite les fetch redondants
+  const historicalRatesRef = useRef({});
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
@@ -402,9 +404,6 @@ const ExpensesPage = () => {
       exchange_rate_to_cad: _rateFor(currency),
     };
   };
-
-  // Cache des taux historiques par date (figés) — évite les fetch redondants
-  const historicalRatesRef = useRef({});
 
   const _ensureHistoricalRate = async (date) => {
     if (!date) return null;
