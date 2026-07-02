@@ -403,6 +403,39 @@ const ExpensesPage = () => {
     };
   };
 
+  // Cache des taux historiques par date (figés) — évite les fetch redondants
+  const historicalRatesRef = useRef({});
+
+  const _ensureHistoricalRate = async (date) => {
+    if (!date) return null;
+    if (historicalRatesRef.current[date]) return historicalRatesRef.current[date];
+    try {
+      const res = await axios.get(`${BACKEND_URL}/api/exchange-rates?date=${date}`);
+      const rates = res.data.rates || {};
+      historicalRatesRef.current[date] = rates;
+      return rates;
+    } catch {
+      return null;
+    }
+  };
+
+  // Récupère le taux à la date de la facture et patch la ligne (async, en arrière-plan)
+  const _applyHistoricalRate = async (rowId, date, currency) => {
+    if (!date || !currency || currency === 'CAD') return;
+    const rates = await _ensureHistoricalRate(date);
+    if (!rates || !rates[currency]) return;
+    const rate = rates[currency];
+    setBatchScan(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        rows: prev.rows.map(r => r.id === rowId
+          ? { ...r, rates, edits: { ...r.edits, exchange_rate_to_cad: rate } }
+          : r),
+      };
+    });
+  };
+
   const _scanOneFile = async (file) => {
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     const uploaded = isPdf ? file : await compressImage(file);
@@ -461,13 +494,16 @@ const ExpensesPage = () => {
     await Promise.allSettled(rows.map(async (row) => {
       try {
         const { file_id, extraction } = await _scanOneFile(row._file);
+        const edits = _prefillEditsFromExtraction(extraction);
         _updateRow(row.id, {
           status: 'done',
           file_id,
           extraction,
-          edits: _prefillEditsFromExtraction(extraction),
+          edits,
           error: null,
         });
+        // Taux à la date de la facture (async, patch la ligne quand prêt)
+        _applyHistoricalRate(row.id, edits.expense_date, edits.currency);
       } catch (err) {
         const msg = err._msg || _scanErrorMessage(err);
         _updateRow(row.id, { status: 'error', error: msg });
@@ -481,13 +517,15 @@ const ExpensesPage = () => {
     _updateRow(rowId, { status: 'scanning', error: null });
     try {
       const { file_id, extraction } = await _scanOneFile(row._file);
+      const edits = _prefillEditsFromExtraction(extraction);
       _updateRow(rowId, {
         status: 'done',
         file_id,
         extraction,
-        edits: _prefillEditsFromExtraction(extraction),
+        edits,
         error: null,
       });
+      _applyHistoricalRate(rowId, edits.expense_date, edits.currency);
     } catch (err) {
       const msg = err._msg || _scanErrorMessage(err);
       _updateRow(rowId, { status: 'error', error: msg });
@@ -508,6 +546,8 @@ const ExpensesPage = () => {
   };
 
   const updateRowEdit = (rowId, field, value) => {
+    let recomputeDate = null;
+    let recomputeCurrency = null;
     setBatchScan(prev => {
       if (!prev) return prev;
       return {
@@ -515,14 +555,29 @@ const ExpensesPage = () => {
         rows: prev.rows.map(r => {
           if (r.id !== rowId) return r;
           const edits = { ...r.edits, [field]: value };
-          // Changer la devise recalcule automatiquement le taux vers CAD
+          // Changer la devise : utilise les taux historiques déjà chargés (row.rates)
+          // sinon les taux du jour, en attendant le re-fetch pour la date.
           if (field === 'currency') {
-            edits.exchange_rate_to_cad = _rateFor(value);
+            const rowRates = r.rates || exchangeRates;
+            edits.exchange_rate_to_cad = (value === 'CAD')
+              ? 1.0
+              : ((rowRates && rowRates[value]) || _rateFor(value));
+            recomputeCurrency = value;
+            recomputeDate = edits.expense_date;
+          }
+          // Changer la date : re-fetch le taux historique à la nouvelle date
+          if (field === 'expense_date') {
+            recomputeDate = value;
+            recomputeCurrency = edits.currency;
           }
           return { ...r, edits };
         }),
       };
     });
+    // Re-fetch async du taux historique si date/devise a changé
+    if (recomputeDate && recomputeCurrency && recomputeCurrency !== 'CAD') {
+      _applyHistoricalRate(rowId, recomputeDate, recomputeCurrency);
+    }
   };
 
   const toggleRowSelected = (rowId) => {

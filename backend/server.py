@@ -3765,9 +3765,41 @@ def get_expense_analytics(current_user: CurrentUser = Depends(require_permission
     return {"by_category": categories_chart, "by_month": monthly_chart, "categories": all_cats, "total": total}
 
 # ─── Exchange Rates ───
-def _get_exchange_rates():
-    """Fetch and cache exchange rates from frankfurter.dev (1h cache)."""
+_historical_rate_cache = {}  # {date_str: {rates}} — taux historiques figés, cache permanent
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _get_exchange_rates(date=None):
+    """Fetch and cache exchange rates from frankfurter.dev.
+    date=None → taux du jour (cache 1h). date='YYYY-MM-DD' → taux historique
+    à cette date (cache permanent car figé). Frankfurter renvoie le dernier jour
+    ouvrable si la date tombe un weekend/férié."""
     now = datetime.now(timezone.utc)
+
+    # Taux historique
+    if date and _DATE_RE.match(date):
+        # Date future → pas de taux historique, on utilise le taux courant
+        if date > now.strftime("%Y-%m-%d"):
+            return _get_exchange_rates()
+        if date in _historical_rate_cache:
+            return _historical_rate_cache[date]
+        try:
+            resp = httpx.get(f"https://api.frankfurter.dev/v1/{date}?from=CAD&to=USD,EUR,GBP", timeout=10)
+            data = resp.json()
+            rates = data.get("rates", {})
+            result = {"CAD": 1.0}
+            for cur, rate in rates.items():
+                if rate > 0:
+                    result[cur] = round(rate, 6)
+            if len(result) > 1:
+                _historical_rate_cache[date] = result
+                return result
+        except Exception as e:
+            print(f"Historical exchange rate fetch error for {date}: {e}")
+        # Fallback : taux courant
+        return _get_exchange_rates()
+
+    # Taux du jour (cache 1h)
     if _exchange_rate_cache["fetched_at"] and (now - _exchange_rate_cache["fetched_at"]).total_seconds() < 3600:
         return _exchange_rate_cache["rates"]
     try:
@@ -3800,9 +3832,12 @@ def _convert_to_cad(amount, currency):
 
 
 @app.get("/api/exchange-rates")
-def get_exchange_rates():
-    rates = _get_exchange_rates()
-    return {"base": "CAD", "rates": rates, "supported": SUPPORTED_CURRENCIES}
+def get_exchange_rates(date: str = None):
+    """Taux de change base CAD. Param optionnel `date` (YYYY-MM-DD) pour le
+    taux historique à cette date (ex: date de la facture)."""
+    rates = _get_exchange_rates(date)
+    return {"base": "CAD", "rates": rates, "supported": SUPPORTED_CURRENCIES,
+            "date": date if (date and _DATE_RE.match(date)) else "latest"}
 
 
 # ─── Settings ───
