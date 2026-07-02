@@ -1378,7 +1378,7 @@ const BatchReviewTable = ({
                               onChange={e => onUpdateEdit(row.id, 'category_code', e.target.value)}
                               style={inputMini}>
                         {(categoryCatalog.categories || []).map(c => (
-                          <option key={c.code} value={c.code}>{c.label}</option>
+                          <option key={c.code} value={c.code}>{c.label_fr}</option>
                         ))}
                       </select>
                     </td>
