@@ -417,6 +417,11 @@ const ExpensesPage = () => {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (files.length === 0) return;
+    if (batchScan) {
+      // Batch review deja ouvert — evite d'ecraser les rows en cours (orphelin des file_id deja uploades)
+      setScanError('Termine ou annule le lot en cours avant d\'en lancer un nouveau.');
+      return;
+    }
     setScanError(null);
     if (files.length > 20) {
       setScanError('Max 20 fichiers par lot');
