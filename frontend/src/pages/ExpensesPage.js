@@ -77,7 +77,7 @@ const ExpensesPage = () => {
       if (min !== null && !isNaN(min) && amt < min) return false;
       if (max !== null && !isNaN(max) && amt > max) return false;
       return true;
-    });
+    }).sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || ''));
   }, [expenses, filters]);
 
   useEffect(() => { fetchData(); }, []);
