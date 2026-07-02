@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import axios from 'axios';
-import { BACKEND_URL, formatCurrency } from '../config';
+import { BACKEND_URL, formatCurrency, CURRENCY_LABELS } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
 import { ScanLine, Paperclip, Edit } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
@@ -378,7 +378,7 @@ const ExpensesPage = () => {
     vendor: ex.vendor || '',
     description: ex.vendor || '',
     expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
-    amount: ex.total_cad ?? '',
+    amount: ex.total_amount ?? ex.total_cad ?? '',
     category_code: ex.category_code || 'other',
     gst_paid_cad: ex.gst_paid_cad ?? 0,
     qst_paid_cad: ex.qst_paid_cad ?? 0,
@@ -816,7 +816,7 @@ const ExpensesPage = () => {
                   </button>
                 </div>
               )}
-              {receiptScan && (!receiptScan.extraction.vendor || !receiptScan.extraction.total_cad) && (
+              {receiptScan && (!receiptScan.extraction.vendor || !(receiptScan.extraction.total_amount ?? receiptScan.extraction.total_cad)) && (
                 <div style={{ background: '#fef3c7', color: '#92400e', padding: 8,
                                borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
                   ⚠ Extraction partielle — remplis les champs manquants.
@@ -1322,7 +1322,8 @@ const BatchReviewTable = ({
                 <th style={th}>Vendeur</th>
                 <th style={th}>Description</th>
                 <th style={{ ...th, width: 130 }}>Date</th>
-                <th style={{ ...th, width: 110 }}>Montant CAD</th>
+                <th style={{ ...th, width: 100 }}>Montant</th>
+                <th style={{ ...th, width: 80 }}>Devise</th>
                 <th style={{ ...th, width: 180 }}>Catégorie</th>
                 <th style={{ ...th, width: 90 }}>Statut</th>
                 <th style={{ ...th, width: 110 }}>Actions</th>
@@ -1371,6 +1372,19 @@ const BatchReviewTable = ({
                              disabled={!isDone}
                              onChange={e => onUpdateEdit(row.id, 'amount', e.target.value)}
                              style={inputMini} />
+                    </td>
+                    <td style={cell}>
+                      <select value={row.edits?.currency || 'CAD'}
+                              disabled={!isDone}
+                              onChange={e => onUpdateEdit(row.id, 'currency', e.target.value)}
+                              style={inputMini}>
+                        {Object.keys(CURRENCY_LABELS).map(code => (
+                          <option key={code} value={code}>{code}</option>
+                        ))}
+                        {row.edits?.currency && !CURRENCY_LABELS[row.edits.currency] && (
+                          <option value={row.edits.currency}>{row.edits.currency}</option>
+                        )}
+                      </select>
                     </td>
                     <td style={cell}>
                       <select value={row.edits?.category_code || 'other'}

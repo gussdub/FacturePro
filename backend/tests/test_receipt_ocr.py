@@ -64,12 +64,17 @@ class TestNormalizeExtraction:
         assert out["category_code"] == "other"
 
     def test_negative_amount_clamped_to_zero(self):
-        out = _normalize_extraction({"category_code": "other", "total_cad": -50.0})
-        assert out["total_cad"] == 0.0
+        out = _normalize_extraction({"category_code": "other", "total_amount": -50.0})
+        assert out["total_amount"] == 0.0
 
     def test_amounts_rounded_2_decimals(self):
-        out = _normalize_extraction({"category_code": "other", "total_cad": 12.34567})
-        assert out["total_cad"] == 12.35
+        out = _normalize_extraction({"category_code": "other", "total_amount": 12.34567})
+        assert out["total_amount"] == 12.35
+
+    def test_legacy_total_cad_falls_back_to_total_amount(self):
+        # Compat : ancien champ total_cad en entree → total_amount en sortie
+        out = _normalize_extraction({"category_code": "other", "total_cad": 99.99})
+        assert out["total_amount"] == 99.99
 
     def test_vendor_html_stripped(self):
         out = _normalize_extraction({"category_code": "other",
@@ -88,8 +93,8 @@ class TestNormalizeExtraction:
 
     def test_invalid_amount_becomes_none(self):
         out = _normalize_extraction({"category_code": "other",
-                                      "total_cad": "not a number"})
-        assert out["total_cad"] is None
+                                      "total_amount": "not a number"})
+        assert out["total_amount"] is None
 
     def test_empty_vendor_string_becomes_none(self):
         out = _normalize_extraction({"category_code": "other", "vendor": ""})
@@ -216,7 +221,7 @@ class TestCallAnthropicExtract:
         mock_tool_use.input = {
             "vendor": "Costco",
             "expense_date": "2099-06-15",
-            "total_cad": 127.05,
+            "total_amount": 127.05,
             "category_code": "office_supplies",
         }
         mock_message = MagicMock()

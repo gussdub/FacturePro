@@ -79,7 +79,7 @@ class TestScanReceiptEndpoint:
         mock_extraction({
             "vendor": "Costco",
             "expense_date": "2099-06-15",
-            "total_cad": 127.05,
+            "total_amount": 127.05,
             "gst_paid_cad": 5.53,
             "qst_paid_cad": 11.02,
             "category_code": "office_supplies",
