@@ -49,6 +49,8 @@ const ExpensesPage = () => {
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
+  const [batchScan, setBatchScan] = useState(null); // { rows: [...] } | null
+  const [batchCreating, setBatchCreating] = useState(false);
   const [needsConsent, setNeedsConsent] = useState(false);
   const [consentAt, setConsentAt] = useState(null);
   const [editingExpenseId, setEditingExpenseId] = useState(null);
@@ -362,60 +364,232 @@ const ExpensesPage = () => {
     }
   };
 
-  const handleReceiptScan = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    setScanError(null);
-    setScanLoading(true);
-    try {
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      const uploaded = isPdf ? file : await compressImage(file);
-      if (uploaded.size > 5 * 1024 * 1024) {
-        setScanError(isPdf
-          ? "PDF trop volumineux (max 5 MB)."
-          : "Photo trop volumineuse même après compression.");
-        return;
-      }
-      const fd = new FormData();
-      fd.append("file", uploaded, file.name);
-      const r = await axios.post(`${BACKEND_URL}/api/expenses/scan-receipt`,
-        fd, { headers: { "Content-Type": "multipart/form-data" } });
-      const ex = r.data.extraction;
-      const blobUrl = URL.createObjectURL(uploaded);
-      setReceiptScan({ fileId: r.data.file_id, extraction: ex, blobUrl, isPdf });
-      // Pré-remplir formData et ouvrir le modal
-      setFormData({
-        employee_id: '', description: '', category: '', notes: '', receipt_url: '',
-        currency: ex.currency_detected || 'CAD', exchange_rate_to_cad: 1.0,
-        category_custom_label: '', taxes_auto_computed: false,
-        vendor: ex.vendor || '',
-        expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
-        amount: ex.total_cad ?? '',
-        gst_paid_cad: ex.gst_paid_cad ?? 0,
-        qst_paid_cad: ex.qst_paid_cad ?? 0,
-        hst_paid_cad: ex.hst_paid_cad ?? 0,
-        category_code: ex.category_code || 'other',
-        receipt_file_id: r.data.file_id,
-      });
-      setShowForm(true);
-    } catch (err) {
-      const status = err.response?.status;
-      const detail = err.response?.data?.detail;
-      if (status === 413) {
-        setScanError("Fichier trop volumineux (max 5 MB).");
-      } else if (status === 422) {
-        setScanError(detail || "Format non supporté.");
-      } else if (status === 429) {
-        setScanError("Limite mensuelle atteinte (200 scans).");
-      } else if (status === 502) {
-        setScanError(detail || "Service temporairement indisponible.");
-      } else {
-        setScanError(`Erreur d'extraction${status ? ` (${status})` : ""}${detail ? " : " + detail : ""}. Réessaye.`);
-      }
-    } finally {
-      setScanLoading(false);
+  const _scanErrorMessage = (err) => {
+    const status = err.response?.status;
+    const detail = err.response?.data?.detail;
+    if (status === 413) return "Fichier trop volumineux (max 5 MB).";
+    if (status === 422) return detail || "Format non supporté.";
+    if (status === 429) return "Limite mensuelle atteinte (400 scans).";
+    if (status === 502) return detail || "Service temporairement indisponible.";
+    return `Erreur d'extraction${status ? ` (${status})` : ""}${detail ? " : " + detail : ""}. Réessaye.`;
+  };
+
+  const _prefillEditsFromExtraction = (ex) => ({
+    vendor: ex.vendor || '',
+    description: ex.vendor || '',
+    expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
+    amount: ex.total_cad ?? '',
+    category_code: ex.category_code || 'other',
+    gst_paid_cad: ex.gst_paid_cad ?? 0,
+    qst_paid_cad: ex.qst_paid_cad ?? 0,
+    hst_paid_cad: ex.hst_paid_cad ?? 0,
+    currency: ex.currency_detected || 'CAD',
+  });
+
+  const _scanOneFile = async (file) => {
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    const uploaded = isPdf ? file : await compressImage(file);
+    if (uploaded.size > 5 * 1024 * 1024) {
+      const msg = isPdf ? "PDF trop volumineux (max 5 MB)." : "Photo trop volumineuse même après compression.";
+      const e = new Error(msg);
+      e._msg = msg;
+      throw e;
     }
+    const fd = new FormData();
+    fd.append("file", uploaded, file.name);
+    const r = await axios.post(`${BACKEND_URL}/api/expenses/scan-receipt`,
+      fd, { headers: { "Content-Type": "multipart/form-data" } });
+    return { file_id: r.data.file_id, extraction: r.data.extraction };
+  };
+
+  const _uuid = () => (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `row-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  const _updateRow = (rowId, patch) => {
+    setBatchScan(prev => {
+      if (!prev) return prev;
+      return { ...prev, rows: prev.rows.map(r => r.id === rowId ? { ...r, ...patch } : r) };
+    });
+  };
+
+  const handleReceiptBatchScan = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setScanError(null);
+    if (files.length > 20) {
+      setScanError('Max 20 fichiers par lot');
+      return;
+    }
+    // Init rows in scanning state
+    const rows = files.map(f => ({
+      id: _uuid(),
+      filename: f.name,
+      status: 'scanning',
+      file_id: null,
+      extraction: null,
+      error: null,
+      selected: true,
+      edits: {},
+      _file: f,
+    }));
+    setBatchScan({ rows });
+    // Launch scans in parallel
+    await Promise.allSettled(rows.map(async (row) => {
+      try {
+        const { file_id, extraction } = await _scanOneFile(row._file);
+        _updateRow(row.id, {
+          status: 'done',
+          file_id,
+          extraction,
+          edits: _prefillEditsFromExtraction(extraction),
+          error: null,
+        });
+      } catch (err) {
+        const msg = err._msg || _scanErrorMessage(err);
+        _updateRow(row.id, { status: 'error', error: msg });
+      }
+    }));
+  };
+
+  const retryRow = async (rowId) => {
+    const row = batchScan?.rows.find(r => r.id === rowId);
+    if (!row) return;
+    _updateRow(rowId, { status: 'scanning', error: null });
+    try {
+      const { file_id, extraction } = await _scanOneFile(row._file);
+      _updateRow(rowId, {
+        status: 'done',
+        file_id,
+        extraction,
+        edits: _prefillEditsFromExtraction(extraction),
+        error: null,
+      });
+    } catch (err) {
+      const msg = err._msg || _scanErrorMessage(err);
+      _updateRow(rowId, { status: 'error', error: msg });
+    }
+  };
+
+  const rejectRow = async (rowId) => {
+    const row = batchScan?.rows.find(r => r.id === rowId);
+    if (!row) return;
+    if (row.file_id) {
+      try { await axios.delete(`${BACKEND_URL}/api/files/${row.file_id}`); } catch { /* best-effort */ }
+    }
+    setBatchScan(prev => {
+      if (!prev) return prev;
+      const rows = prev.rows.filter(r => r.id !== rowId);
+      return rows.length === 0 ? null : { ...prev, rows };
+    });
+  };
+
+  const updateRowEdit = (rowId, field, value) => {
+    setBatchScan(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        rows: prev.rows.map(r => r.id === rowId
+          ? { ...r, edits: { ...r.edits, [field]: value } }
+          : r),
+      };
+    });
+  };
+
+  const toggleRowSelected = (rowId) => {
+    setBatchScan(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        rows: prev.rows.map(r => r.id === rowId ? { ...r, selected: !r.selected } : r),
+      };
+    });
+  };
+
+  const cancelBatchScan = async () => {
+    if (!batchScan) return;
+    // Clean up all uploaded file_ids
+    const toDelete = batchScan.rows.filter(r => r.file_id).map(r => r.file_id);
+    await Promise.allSettled(toDelete.map(fid =>
+      axios.delete(`${BACKEND_URL}/api/files/${fid}`)));
+    setBatchScan(null);
+  };
+
+  const createBatch = async () => {
+    if (!batchScan) return;
+    const toCreate = batchScan.rows.filter(r => r.status === 'done' && r.selected);
+    if (toCreate.length === 0) return;
+    setBatchCreating(true);
+    // Files to delete: unselected (status=done) rows that won't be turned into expenses
+    const unselected = batchScan.rows.filter(r => r.status === 'done' && !r.selected && r.file_id);
+    // Create expenses
+    const results = await Promise.allSettled(toCreate.map(async (row) => {
+      const edits = row.edits || {};
+      const description = (edits.description && edits.description.trim())
+        || (edits.vendor && edits.vendor.trim())
+        || 'Reçu scanné';
+      const payload = {
+        employee_id: '',
+        description,
+        vendor: edits.vendor || '',
+        expense_date: edits.expense_date,
+        amount: parseFloat(edits.amount),
+        category_code: edits.category_code || 'other',
+        category_custom_label: '',
+        notes: '',
+        receipt_url: '',
+        currency: edits.currency || 'CAD',
+        exchange_rate_to_cad: 1.0,
+        gst_paid_cad: parseFloat(edits.gst_paid_cad) || 0,
+        qst_paid_cad: parseFloat(edits.qst_paid_cad) || 0,
+        hst_paid_cad: parseFloat(edits.hst_paid_cad) || 0,
+        taxes_auto_computed: false,
+        receipt_file_id: row.file_id,
+      };
+      try {
+        await axios.post(`${BACKEND_URL}/api/expenses`, payload);
+        return { rowId: row.id, ok: true };
+      } catch (err) {
+        return {
+          rowId: row.id,
+          ok: false,
+          error: err.response?.data?.detail || 'Erreur création dépense',
+        };
+      }
+    }));
+    // Cleanup unselected uploaded files
+    await Promise.allSettled(unselected.map(r =>
+      axios.delete(`${BACKEND_URL}/api/files/${r.file_id}`)));
+    const failed = results
+      .map(r => r.status === 'fulfilled' ? r.value : { ok: false, error: 'Erreur inconnue' })
+      .filter(r => !r.ok);
+    const successCount = toCreate.length - failed.length;
+    if (failed.length === 0) {
+      setBatchScan(null);
+      setSuccess(`${successCount} dépense${successCount > 1 ? 's' : ''} créée${successCount > 1 ? 's' : ''}`);
+      fetchData();
+    } else {
+      // Keep only failed rows, mark them error
+      const failedIds = new Set(failed.map(f => f.rowId));
+      setBatchScan(prev => {
+        if (!prev) return prev;
+        const rows = prev.rows
+          .filter(r => failedIds.has(r.id))
+          .map(r => {
+            const info = failed.find(f => f.rowId === r.id);
+            return { ...r, status: 'error', error: info?.error || 'Erreur' };
+          });
+        return { ...prev, rows };
+      });
+      if (successCount > 0) {
+        setSuccess(`${successCount} dépense${successCount > 1 ? 's' : ''} créée${successCount > 1 ? 's' : ''}, ${failed.length} en erreur`);
+        fetchData();
+      } else {
+        setError(`Échec de la création (${failed.length})`);
+      }
+    }
+    setBatchCreating(false);
   };
 
   return (
@@ -447,9 +621,10 @@ const ExpensesPage = () => {
           <input
             ref={scanInputRef}
             type="file"
+            multiple
             accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
             style={{ display: "none" }}
-            onChange={handleReceiptScan}
+            onChange={handleReceiptBatchScan}
           />
           <button onClick={() => { resetForm(); setShowForm(true); }} data-testid="add-expense-btn" style={btnPrimary}>
             + Nouvelle Depense
@@ -1045,11 +1220,199 @@ const ExpensesPage = () => {
           onCancel={() => setNeedsConsent(false)} />
       )}
 
+      {batchScan && (
+        <BatchReviewTable
+          batchScan={batchScan}
+          categoryCatalog={categoryCatalog}
+          onToggleSelected={toggleRowSelected}
+          onUpdateEdit={updateRowEdit}
+          onRetry={retryRow}
+          onReject={rejectRow}
+          onCancel={cancelBatchScan}
+          onCreate={createBatch}
+          creating={batchCreating}
+        />
+      )}
+
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
       `}</style>
+    </div>
+  );
+};
+
+// ─── Batch Review Table (feature: batch scan) ───
+const BatchReviewTable = ({
+  batchScan, categoryCatalog, onToggleSelected, onUpdateEdit,
+  onRetry, onReject, onCancel, onCreate, creating,
+}) => {
+  const rows = batchScan.rows || [];
+  const scanningCount = rows.filter(r => r.status === 'scanning').length;
+  const doneCount = rows.filter(r => r.status === 'done').length;
+  const errorCount = rows.filter(r => r.status === 'error').length;
+  const selectedDoneCount = rows.filter(r => r.status === 'done' && r.selected).length;
+  const total = rows.length;
+
+  const cell = { padding: '6px 8px', borderBottom: '1px solid #e5e7eb', fontSize: 13, verticalAlign: 'middle' };
+  const th = { padding: '8px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#374151', background: '#f9fafb', borderBottom: '1px solid #e5e7eb' };
+  const inputMini = { width: '100%', padding: '6px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 13, boxSizing: 'border-box' };
+  const btnSecondary = { background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', padding: '8px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 500, fontSize: 13 };
+  const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 };
+  const btnDanger = { background: '#fff', color: '#b91c1c', border: '1px solid #fecaca', padding: '4px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 12 };
+
+  const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n - 1) + '…' : (s || '');
+
+  const statusBadge = (row) => {
+    if (row.status === 'scanning') return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>
+        <span style={{ display: 'inline-block', width: 10, height: 10, border: '2px solid #92400e', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        Analyse...
+      </span>
+    );
+    if (row.status === 'done') return (
+      <span style={{ background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>Prêt</span>
+    );
+    return (
+      <span style={{ background: '#fee2e2', color: '#991b1b', padding: '2px 8px', borderRadius: 4, fontSize: 12 }} title={row.error || ''}>Erreur</span>
+    );
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1250 }}>
+      <div style={{ background: '#fff', borderRadius: 10, maxWidth: 1200, width: '95%', maxHeight: '92vh', display: 'flex', flexDirection: 'column', padding: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#1f2937' }}>
+              Revue de {total} reçu{total > 1 ? 's' : ''}
+            </h2>
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 13 }}>
+              {scanningCount} en cours, {doneCount} prêt{doneCount > 1 ? 's' : ''}, {errorCount} erreur{errorCount > 1 ? 's' : ''}
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} disabled={creating}
+                  style={{ background: 'transparent', border: 'none', fontSize: 24, color: '#6b7280', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+
+        {scanningCount > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ height: 6, background: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{
+                width: `${Math.round(((total - scanningCount) / total) * 100)}%`,
+                height: '100%',
+                background: 'linear-gradient(90deg, #00A08C, #008F7A)',
+                transition: 'width 0.3s',
+              }} />
+            </div>
+          </div>
+        )}
+
+        <div style={{ flex: 1, overflow: 'auto', border: '1px solid #e5e7eb', borderRadius: 6 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={{ ...th, width: 40 }}></th>
+                <th style={{ ...th, width: 160 }}>Fichier</th>
+                <th style={th}>Vendeur</th>
+                <th style={th}>Description</th>
+                <th style={{ ...th, width: 130 }}>Date</th>
+                <th style={{ ...th, width: 110 }}>Montant CAD</th>
+                <th style={{ ...th, width: 180 }}>Catégorie</th>
+                <th style={{ ...th, width: 90 }}>Statut</th>
+                <th style={{ ...th, width: 110 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => {
+                const isDone = row.status === 'done';
+                const isScanning = row.status === 'scanning';
+                const isError = row.status === 'error';
+                return (
+                  <tr key={row.id} style={{ background: isScanning ? '#fafafa' : (isError ? '#fef2f2' : '#fff') }}>
+                    <td style={cell}>
+                      <input type="checkbox"
+                             checked={!!row.selected}
+                             disabled={!isDone}
+                             onChange={() => onToggleSelected(row.id)} />
+                    </td>
+                    <td style={{ ...cell, fontSize: 12, color: '#4b5563' }} title={row.filename}>
+                      {truncate(row.filename, 25)}
+                    </td>
+                    <td style={cell}>
+                      <input type="text"
+                             value={row.edits?.vendor || ''}
+                             disabled={!isDone}
+                             onChange={e => onUpdateEdit(row.id, 'vendor', e.target.value)}
+                             style={inputMini} />
+                    </td>
+                    <td style={cell}>
+                      <input type="text"
+                             value={row.edits?.description || ''}
+                             disabled={!isDone}
+                             onChange={e => onUpdateEdit(row.id, 'description', e.target.value)}
+                             style={inputMini} />
+                    </td>
+                    <td style={cell}>
+                      <input type="date"
+                             value={row.edits?.expense_date || ''}
+                             disabled={!isDone}
+                             onChange={e => onUpdateEdit(row.id, 'expense_date', e.target.value)}
+                             style={inputMini} />
+                    </td>
+                    <td style={cell}>
+                      <input type="number" step="0.01"
+                             value={row.edits?.amount ?? ''}
+                             disabled={!isDone}
+                             onChange={e => onUpdateEdit(row.id, 'amount', e.target.value)}
+                             style={inputMini} />
+                    </td>
+                    <td style={cell}>
+                      <select value={row.edits?.category_code || 'other'}
+                              disabled={!isDone}
+                              onChange={e => onUpdateEdit(row.id, 'category_code', e.target.value)}
+                              style={inputMini}>
+                        {(categoryCatalog.categories || []).map(c => (
+                          <option key={c.code} value={c.code}>{c.label}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={cell}>{statusBadge(row)}</td>
+                    <td style={cell}>
+                      {isError && (
+                        <button type="button" onClick={() => onRetry(row.id)} style={btnDanger}>
+                          Réessayer
+                        </button>
+                      )}
+                      {isDone && (
+                        <button type="button" onClick={() => onReject(row.id)} style={btnDanger}>
+                          Retirer
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button type="button" onClick={onCancel} disabled={creating} style={btnSecondary}>
+            Annuler
+          </button>
+          <button type="button"
+                  onClick={onCreate}
+                  disabled={creating || selectedDoneCount === 0}
+                  style={{
+                    ...btnPrimary,
+                    opacity: (creating || selectedDoneCount === 0) ? 0.5 : 1,
+                    cursor: (creating || selectedDoneCount === 0) ? 'not-allowed' : 'pointer',
+                  }}>
+            {creating ? 'Création…' : `Créer ${selectedDoneCount} dépense${selectedDoneCount > 1 ? 's' : ''}`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

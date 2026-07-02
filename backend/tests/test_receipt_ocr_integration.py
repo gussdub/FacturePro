@@ -260,7 +260,7 @@ class TestAuthMeQuota:
         body = r.json()
         assert "scan_count_this_month" in body
         assert "scan_quota_limit" in body
-        assert body["scan_quota_limit"] == 200
+        assert body["scan_quota_limit"] == 400
         assert "receipt_ocr_consent_at" in body
 
     def test_grant_consent_endpoint(self, client, auth_headers):

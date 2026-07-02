@@ -910,7 +910,7 @@ def _normalize_extraction(payload):
     return out
 
 
-SCAN_QUOTA_LIMIT = 200
+SCAN_QUOTA_LIMIT = 400
 
 
 import anthropic
@@ -918,7 +918,7 @@ import anthropic
 
 def _check_and_bill_scan(organization_id):
     """Atomique : reset le compteur si mois changé, puis l'incrémente.
-    Retourne le nouveau count (1..200). Lève HTTPException 429 si > 200
+    Retourne le nouveau count (1..400). Lève HTTPException 429 si > 400
     avec rollback decrement.
 
     Feature #11 — le quota est partagé entre tous les membres d'une même

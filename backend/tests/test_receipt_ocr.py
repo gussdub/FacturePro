@@ -156,24 +156,24 @@ class TestCheckAndBillScan:
         finally:
             self._cleanup(oid)
 
-    def test_over_200_raises_429(self):
+    def test_over_400_raises_429(self):
         now_iso = datetime.now(timezone.utc).isoformat()
-        oid = self._setup_org(scan_count=200, reset_at=now_iso)
+        oid = self._setup_org(scan_count=400, reset_at=now_iso)
         try:
             with pytest.raises(HTTPException) as exc:
                 _check_and_bill_scan(oid)
             assert exc.value.status_code == 429
             org = server_db.organizations.find_one({"id": oid})
-            assert org["scan_count_this_month"] == 200
+            assert org["scan_count_this_month"] == 400
         finally:
             self._cleanup(oid)
 
-    def test_at_limit_199_then_bill_passes(self):
+    def test_at_limit_399_then_bill_passes(self):
         now_iso = datetime.now(timezone.utc).isoformat()
-        oid = self._setup_org(scan_count=199, reset_at=now_iso)
+        oid = self._setup_org(scan_count=399, reset_at=now_iso)
         try:
             count = _check_and_bill_scan(oid)
-            assert count == 200
+            assert count == 400
         finally:
             self._cleanup(oid)
 
