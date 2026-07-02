@@ -44,6 +44,7 @@ const ExpensesPage = () => {
     gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false,
   });
   const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
+  const [exchangeRates, setExchangeRates] = useState(null); // { CAD:1, USD:0.73, ... } | null (unités étrangères par 1 CAD)
   const [companyProvince, setCompanyProvince] = useState('QC');
   const scanInputRef = useRef(null);
   const [scanLoading, setScanLoading] = useState(false);
@@ -83,6 +84,12 @@ const ExpensesPage = () => {
     axios.get(`${BACKEND_URL}/api/expense-categories`)
       .then(resp => setCategoryCatalog(resp.data))
       .catch(err => console.error('Failed to fetch expense categories:', err));
+  }, []);
+
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/exchange-rates`)
+      .then(resp => setExchangeRates(resp.data.rates || {}))
+      .catch(() => setExchangeRates({ CAD: 1.0, USD: 0.73, EUR: 0.67, GBP: 0.57 }));
   }, []);
 
   useEffect(() => {
@@ -374,17 +381,27 @@ const ExpensesPage = () => {
     return `Erreur d'extraction${status ? ` (${status})` : ""}${detail ? " : " + detail : ""}. Réessaye.`;
   };
 
-  const _prefillEditsFromExtraction = (ex) => ({
-    vendor: ex.vendor || '',
-    description: ex.vendor || '',
-    expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
-    amount: ex.total_amount ?? ex.total_cad ?? '',
-    category_code: ex.category_code || 'other',
-    gst_paid_cad: ex.gst_paid_cad ?? 0,
-    qst_paid_cad: ex.qst_paid_cad ?? 0,
-    hst_paid_cad: ex.hst_paid_cad ?? 0,
-    currency: ex.currency_detected || 'CAD',
-  });
+  // Taux "unités étrangères par 1 CAD" (ex: USD ~0.73). total_cad = montant / taux.
+  const _rateFor = (currency) => {
+    if (!currency || currency === 'CAD') return 1.0;
+    return (exchangeRates && exchangeRates[currency]) || 1.0;
+  };
+
+  const _prefillEditsFromExtraction = (ex) => {
+    const currency = ex.currency_detected || 'CAD';
+    return {
+      vendor: ex.vendor || '',
+      description: ex.vendor || '',
+      expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
+      amount: ex.total_amount ?? ex.total_cad ?? '',
+      category_code: ex.category_code || 'other',
+      gst_paid_cad: ex.gst_paid_cad ?? 0,
+      qst_paid_cad: ex.qst_paid_cad ?? 0,
+      hst_paid_cad: ex.hst_paid_cad ?? 0,
+      currency,
+      exchange_rate_to_cad: _rateFor(currency),
+    };
+  };
 
   const _scanOneFile = async (file) => {
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -495,9 +512,15 @@ const ExpensesPage = () => {
       if (!prev) return prev;
       return {
         ...prev,
-        rows: prev.rows.map(r => r.id === rowId
-          ? { ...r, edits: { ...r.edits, [field]: value } }
-          : r),
+        rows: prev.rows.map(r => {
+          if (r.id !== rowId) return r;
+          const edits = { ...r.edits, [field]: value };
+          // Changer la devise recalcule automatiquement le taux vers CAD
+          if (field === 'currency') {
+            edits.exchange_rate_to_cad = _rateFor(value);
+          }
+          return { ...r, edits };
+        }),
       };
     });
   };
@@ -545,7 +568,7 @@ const ExpensesPage = () => {
         notes: '',
         receipt_url: '',
         currency: edits.currency || 'CAD',
-        exchange_rate_to_cad: 1.0,
+        exchange_rate_to_cad: parseFloat(edits.exchange_rate_to_cad) || _rateFor(edits.currency || 'CAD'),
         gst_paid_cad: parseFloat(edits.gst_paid_cad) || 0,
         qst_paid_cad: parseFloat(edits.qst_paid_cad) || 0,
         hst_paid_cad: parseFloat(edits.hst_paid_cad) || 0,
@@ -1372,6 +1395,12 @@ const BatchReviewTable = ({
                              disabled={!isDone}
                              onChange={e => onUpdateEdit(row.id, 'amount', e.target.value)}
                              style={inputMini} />
+                      {isDone && row.edits?.currency && row.edits.currency !== 'CAD'
+                        && row.edits?.amount && row.edits?.exchange_rate_to_cad > 0 && (
+                        <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                          = {(parseFloat(row.edits.amount) / row.edits.exchange_rate_to_cad).toFixed(2)} CAD
+                        </div>
+                      )}
                     </td>
                     <td style={cell}>
                       <select value={row.edits?.currency || 'CAD'}
