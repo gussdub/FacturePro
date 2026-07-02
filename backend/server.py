@@ -1237,16 +1237,54 @@ def _check_subscription_active(org: dict, user: dict):
         raise HTTPException(402, "Subscription expired — please renew")
 
 
+def _persist_solo_org_for_user(user: dict) -> dict:
+    """Cree et persiste une organisation solo pour un user sans org.
+    Idempotent : re-cherche apres insert au cas ou une requete concurrente
+    aurait deja cree l'org. Auto-heal des users mal migres."""
+    org_id = str(uuid.uuid4())
+    org_doc = {
+        "id": org_id,
+        "name": user.get("company_name") or user["email"],
+        "owner_id": user["id"],
+        "subscription_status": user.get("subscription_status", "trial"),
+        "stripe_customer_id": user.get("stripe_customer_id"),
+        "trial_ends_at": user.get("trial_end_date"),
+        "role_permissions": DEFAULT_ROLE_PERMISSIONS,
+        "scan_count_this_month": user.get("scan_count_this_month", 0),
+        "scan_quota_reset_at": user.get("scan_quota_reset_at"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        db.organizations.insert_one(dict(org_doc))
+    except Exception:
+        # Race : une autre requete a deja cree l'org — on la relit
+        existing = db.organizations.find_one({"owner_id": user["id"]}, {"_id": 0})
+        if existing:
+            org_doc = existing
+            org_id = existing["id"]
+    db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"organization_id": org_id, "role": "owner", "is_active": True}}
+    )
+    # Backfill des collections metier existantes
+    for coll_name in _ORG_SCOPED_COLLECTIONS:
+        db[coll_name].update_many(
+            {"user_id": user["id"], "organization_id": {"$exists": False}},
+            [{"$set": {"organization_id": org_id, "created_by_user_id": "$user_id"}}]
+        )
+    print(f"[org] Auto-heal: cree org {org_id} pour user {user.get('id')}")
+    return {k: v for k, v in org_doc.items() if k != "_id"}
+
+
 def _get_org_for_user(user: dict) -> dict:
-    """Retourne l'organisation d'un user, avec fallback synthetic."""
+    """Retourne l'organisation d'un user. Auto-heal : cree l'org en DB si absente."""
     org_id = user.get("organization_id")
     if not org_id:
-        return _synthesize_solo_org_from_user(user)
+        return _persist_solo_org_for_user(user)
     org = db.organizations.find_one({"id": org_id}, {"_id": 0})
     if not org:
-        # Org orpheline — log + fallback
-        print(f"[org] Organisation orpheline pour user {user.get('id')} → synthesize")
-        return _synthesize_solo_org_from_user(user)
+        print(f"[org] Organisation orpheline pour user {user.get('id')} → auto-heal")
+        return _persist_solo_org_for_user(user)
     return org
 
 
