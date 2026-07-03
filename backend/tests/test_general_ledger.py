@@ -335,3 +335,223 @@ class TestValidateEntryBalance:
             {"debit": 100.004, "credit": 0.0},
             {"debit": 0.0, "credit": 100.0},
         ])
+
+
+class TestAccountBalance:
+    """Garde-fou de régression pour _account_balance — la fonction qui alimente
+    bilan, balance de vérification et grand livre (§5.2 / §5.3).
+
+    Chaque test insère de vraies écritures `journal_entries` dans la DB, scopées
+    sur un org_id de test unique, et nettoie en `finally`. On couvre :
+      - orientation par normal_balance (débiteur Dr-Cr, créditeur Cr-Dr) ;
+      - exclusion des brouillons (draft) ;
+      - INVARIANT §5.3 : origine + miroir tous deux `posted` → net = 0 (la
+        contre-passation ne doit JAMAIS être exclue du solde) ;
+      - garde anti-régression : une écriture reste comptée même si
+        reverses_entry_id / reversed_by_entry_id sont posés (champs d'audit) ;
+      - bornes as_of_date / start_date (dates ISO incluses) ;
+      - non-fuite cross-org.
+    """
+
+    def _org(self):
+        return f"gl-bal-{uuid.uuid4().hex[:8]}"
+
+    def _line(self, account_id, debit=0.0, credit=0.0):
+        return {
+            "line_id": str(uuid.uuid4()),
+            "account_id": account_id,
+            "account_number": "0000",
+            "account_name": "Test",
+            "debit": debit,
+            "credit": credit,
+            "line_description": None,
+        }
+
+    def _entry(self, org_id, lines, entry_date="2026-06-15", status="posted",
+               entry_type="manual", reverses_entry_id=None,
+               reversed_by_entry_id=None):
+        entry_id = str(uuid.uuid4())
+        server_db.journal_entries.insert_one({
+            "id": entry_id,
+            "organization_id": org_id,
+            "created_by_user_id": "u-" + org_id,
+            "entry_number": f"JE-{uuid.uuid4().hex[:6]}",
+            "entry_date": entry_date,
+            "description": "Test",
+            "reference": None,
+            "entry_type": entry_type,
+            "status": status,
+            "lines": lines,
+            "total_debit": round(sum(l["debit"] for l in lines), 2),
+            "total_credit": round(sum(l["credit"] for l in lines), 2),
+            "reverses_entry_id": reverses_entry_id,
+            "reversed_by_entry_id": reversed_by_entry_id,
+            "source_type": None,
+            "source_id": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "posted_at": (datetime.now(timezone.utc).isoformat()
+                          if status == "posted" else None),
+        })
+        return entry_id
+
+    def _cleanup(self, org_id):
+        server_db.journal_entries.delete_many({"organization_id": org_id})
+
+    def test_debit_normal_orientation(self):
+        # Compte à solde normal débiteur (actif/charge) : solde = Dr - Cr.
+        # Encaisse débitée 300, créditée 100 → 200.
+        org_id = self._org()
+        cash = "acct-cash"
+        try:
+            self._entry(org_id, [self._line(cash, debit=300.0),
+                                 self._line("other", credit=300.0)])
+            self._entry(org_id, [self._line(cash, credit=100.0),
+                                 self._line("other", debit=100.0)])
+            bal = _account_balance(org_id, cash, "debit")
+            assert bal == 200.0
+        finally:
+            self._cleanup(org_id)
+
+    def test_credit_normal_orientation(self):
+        # Compte à solde normal créditeur (passif/CP/revenu) : solde = Cr - Dr.
+        # Revenu crédité 500, débité 50 → 450.
+        org_id = self._org()
+        rev = "acct-rev"
+        try:
+            self._entry(org_id, [self._line(rev, credit=500.0),
+                                 self._line("other", debit=500.0)])
+            self._entry(org_id, [self._line(rev, debit=50.0),
+                                 self._line("other", credit=50.0)])
+            bal = _account_balance(org_id, rev, "credit")
+            assert bal == 450.0
+        finally:
+            self._cleanup(org_id)
+
+    def test_draft_excluded(self):
+        # Un brouillon (draft) ne doit affecter aucun solde.
+        org_id = self._org()
+        cash = "acct-cash"
+        try:
+            self._entry(org_id, [self._line(cash, debit=100.0),
+                                 self._line("other", credit=100.0)], status="posted")
+            self._entry(org_id, [self._line(cash, debit=999.0),
+                                 self._line("other", credit=999.0)], status="draft")
+            bal = _account_balance(org_id, cash, "debit")
+            assert bal == 100.0  # le draft de 999 est ignoré
+        finally:
+            self._cleanup(org_id)
+
+    def test_reversal_nets_to_zero(self):
+        # INVARIANT §5.3 : origine `posted` + miroir `posted` → net = 0.
+        # Les deux restent posted ; le solde s'annule naturellement.
+        org_id = self._org()
+        cash = "acct-cash"
+        try:
+            origin = self._entry(org_id, [self._line(cash, debit=333.0),
+                                          self._line("other", credit=333.0)])
+            # Miroir : Dr↔Cr inversés, entry_type=reversal, reverses_entry_id posé.
+            mirror = self._entry(
+                org_id,
+                [self._line(cash, credit=333.0), self._line("other", debit=333.0)],
+                entry_type="reversal", reverses_entry_id=origin)
+            # L'origine porte reversed_by_entry_id mais RESTE posted.
+            server_db.journal_entries.update_one(
+                {"id": origin},
+                {"$set": {"reversed_by_entry_id": mirror}})
+            bal = _account_balance(org_id, cash, "debit")
+            assert bal == 0.0  # net nul : jamais de double effet
+        finally:
+            self._cleanup(org_id)
+
+    def test_reversed_entries_still_counted_regression_guard(self):
+        # GARDE ANTI-RÉGRESSION : même quand reverses_entry_id / reversed_by_entry_id
+        # sont posés, les DEUX écritures sont comptées. Si un futur changement
+        # ajoutait par erreur un filtre excluant ces champs, le net ne serait plus 0
+        # (double effet §5.3) et ce test échouerait. On le vérifie en isolant chaque
+        # écriture : chacune, prise seule, doit compter pour ±333.
+        org_id = self._org()
+        cash = "acct-cash"
+        try:
+            origin = self._entry(
+                org_id, [self._line(cash, debit=333.0),
+                         self._line("other", credit=333.0)],
+                reversed_by_entry_id="mirror-placeholder")
+            # Origine seule (avec reversed_by_entry_id posé) : doit compter +333.
+            assert _account_balance(org_id, cash, "debit") == 333.0
+            # Ajoute le miroir seul (reverses_entry_id posé) : doit compter -333.
+            self._entry(
+                org_id, [self._line(cash, credit=333.0),
+                         self._line("other", debit=333.0)],
+                entry_type="reversal", reverses_entry_id=origin)
+            assert _account_balance(org_id, cash, "debit") == 0.0
+        finally:
+            self._cleanup(org_id)
+
+    def test_as_of_date_upper_bound_inclusive(self):
+        # as_of_date borne le solde à cette date (incluse) ; les écritures
+        # postérieures sont exclues.
+        org_id = self._org()
+        cash = "acct-cash"
+        try:
+            self._entry(org_id, [self._line(cash, debit=100.0),
+                                 self._line("other", credit=100.0)],
+                        entry_date="2026-06-15")
+            self._entry(org_id, [self._line(cash, debit=50.0),
+                                 self._line("other", credit=50.0)],
+                        entry_date="2026-06-30")
+            # as_of 2026-06-15 → seule la 1re écriture compte.
+            assert _account_balance(org_id, cash, "debit",
+                                    as_of_date="2026-06-15") == 100.0
+            # as_of 2026-06-30 → les deux comptent (borne incluse).
+            assert _account_balance(org_id, cash, "debit",
+                                    as_of_date="2026-06-30") == 150.0
+        finally:
+            self._cleanup(org_id)
+
+    def test_start_date_lower_bound_inclusive(self):
+        # start_date borne le solde à partir de cette date (incluse) ; les
+        # écritures antérieures sont exclues. Utile pour les soldes de période.
+        org_id = self._org()
+        rev = "acct-rev"
+        try:
+            self._entry(org_id, [self._line(rev, credit=200.0),
+                                 self._line("other", debit=200.0)],
+                        entry_date="2026-01-10")
+            self._entry(org_id, [self._line(rev, credit=300.0),
+                                 self._line("other", debit=300.0)],
+                        entry_date="2026-06-10")
+            # start 2026-06-01 → seule la 2e écriture (juin) compte.
+            assert _account_balance(org_id, rev, "credit",
+                                    start_date="2026-06-01") == 300.0
+            # fenêtre [2026-01-01, 2026-06-30] → les deux comptent.
+            assert _account_balance(org_id, rev, "credit",
+                                    start_date="2026-01-01",
+                                    as_of_date="2026-06-30") == 500.0
+        finally:
+            self._cleanup(org_id)
+
+    def test_no_cross_org_leak(self):
+        # Isolation multi-tenant : le solde d'une org ne doit JAMAIS inclure les
+        # écritures d'une autre org, même avec le même account_id.
+        org_a = self._org()
+        org_b = self._org()
+        cash = "acct-cash"  # même account_id dans les deux orgs
+        try:
+            self._entry(org_a, [self._line(cash, debit=100.0),
+                                self._line("other", credit=100.0)])
+            self._entry(org_b, [self._line(cash, debit=777.0),
+                                self._line("other", credit=777.0)])
+            assert _account_balance(org_a, cash, "debit") == 100.0
+            assert _account_balance(org_b, cash, "debit") == 777.0
+        finally:
+            self._cleanup(org_a)
+            self._cleanup(org_b)
+
+    def test_empty_account_is_zero(self):
+        # Un compte sans aucune écriture postée a un solde nul (pas d'erreur).
+        org_id = self._org()
+        try:
+            assert _account_balance(org_id, "acct-never-used", "debit") == 0.0
+            assert _account_balance(org_id, "acct-never-used", "credit") == 0.0
+        finally:
+            self._cleanup(org_id)
