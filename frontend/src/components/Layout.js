@@ -45,7 +45,7 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
     { name: 'Exports', href: '/export', icon: Download, permission: 'reports:read', current: currentRoute === '/export' },
     { name: 'Rapports', href: '/reports', icon: BarChart2, permission: 'reports:read', current: currentRoute === '/reports' },
     { name: 'Rapprochement', href: '/bank', icon: GitMerge, permission: 'bank:read', current: currentRoute === '/bank' },
-    { name: 'Parametres', href: '/settings', icon: Settings, permission: 'settings:read', current: currentRoute === '/settings' },
+    { name: 'Parametres', href: '/settings', icon: Settings, permission: null, current: currentRoute === '/settings' },
     { name: 'Abonnement', href: '/subscription', icon: Gem, permission: 'billing:manage', current: currentRoute === '/subscription' },
   ];
 
