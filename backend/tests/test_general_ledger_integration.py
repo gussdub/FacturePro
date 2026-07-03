@@ -22,58 +22,35 @@ def owner_headers(client):
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# T3 : les endpoints /api/ledger/* n'existent PAS encore (ils arrivent en T4+).
-# Ce fichier était un stub silencieux (0 test collecté) — dangereux car il
-# ressemblait à de la couverture verte alors qu'AUCUN invariant comptable
-# critique n'était vérifié. On rend la lacune VISIBLE dans le rapport pytest via
-# des placeholders explicitement `skip` (xfail-like) qui documentent chaque
-# invariant à couvrir impérativement quand les endpoints seront implémentés.
-#
-# Réf. spec §12.2 (Plan de tests d'intégration Grand Livre).
-# À convertir en vrais tests (retirer @pytest.mark.skip) en T4+.
-# ─────────────────────────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _purge_seed_org_ledger_litter():
+    """Empêche les tests d'intégration GL de salir le seed org (copie-prod).
 
-_T4_REASON = (
-    "Endpoints /api/ledger/* pas encore implémentés (T4+). "
-    "Placeholder visible — à activer avec les endpoints. Spec §12.2."
-)
-
-
-@pytest.mark.skip(reason=_T4_REASON)
-class TestLedgerEndpointsT4Plus:
-    """Invariants comptables à vérifier côté endpoint dès T4+ (spec §12.2).
-
-    Chaque test ci-dessous est un contrat exécutable qui échouera tant que le
-    endpoint n'existe pas — il ne doit PAS être supprimé, seulement dé-skippé
-    et complété quand le endpoint correspondant est livré.
+    Les écritures postées sont immuables (DELETE API → 400) et les miroirs de
+    contre-passation restent postés, donc les tests ne peuvent pas se nettoyer
+    via l'API. Cette fixture autouse snapshot les journal_entries du seed org
+    AVANT chaque test et purge en DB (local) toute écriture apparue APRÈS —
+    origine + miroir + opening-balance + apport inclus. Les tests cross-org
+    utilisent des orgs jetables (org_id différent) et se nettoient déjà via
+    leur propre _cleanup ; ils ne sont donc pas affectés.
     """
-
-    def test_journal_entry_rejects_unbalanced_dr_ne_cr(self, client, owner_headers):
-        # POST /api/ledger/entries doit refuser (400) une écriture où
-        # somme(débits) != somme(crédits). Invariant partie double NON négociable.
-        pytest.fail("À implémenter en T4+ : rejet Dr != Cr sur POST /api/ledger/entries")
-
-    def test_posted_entry_is_immutable(self, client, owner_headers):
-        # PUT/DELETE sur une écriture status=posted doit être refusé.
-        # Une écriture postée ne se modifie pas (on contre-passe). Spec §12.2.
-        pytest.fail("À implémenter en T4+ : immutabilité des écritures postées")
-
-    def test_opening_balance_balances(self, client, owner_headers):
-        # POST /api/ledger/opening-balance doit produire une écriture équilibrée
-        # (Dr = Cr) et refuser un solde d'ouverture déséquilibré.
-        pytest.fail("À implémenter en T4+ : opening-balance équilibré (Dr = Cr)")
-
-    def test_owner_contribution_balances(self, client, owner_headers):
-        # POST /api/ledger/owner-contribution : Dr Encaisse / Cr Apport propriétaire,
-        # montants égaux. Vérifie la partie double du raccourci apport.
-        pytest.fail("À implémenter en T4+ : owner-contribution équilibré (Dr = Cr)")
-
-    def test_cross_org_isolation_at_runtime(self, client, owner_headers):
-        # Un membre de l'org A ne doit JAMAIS lire/écrire les comptes ou écritures
-        # de l'org B (filtre organization_id à l'exécution, pas seulement à la lecture).
-        # 404/403 attendu, jamais de fuite cross-tenant. Spec §12.2.
-        pytest.fail("À implémenter en T4+ : isolation cross-org à l'exécution")
+    user = server_module.db.users.find_one({"email": "gussdub@gmail.com"})
+    org_id = user.get("organization_id") if user else None
+    before = set()
+    if org_id:
+        before = set(
+            e["id"] for e in server_module.db.journal_entries.find(
+                {"organization_id": org_id}, {"id": 1})
+        )
+    yield
+    if org_id:
+        new_ids = [
+            e["id"] for e in server_module.db.journal_entries.find(
+                {"organization_id": org_id}, {"id": 1})
+            if e["id"] not in before
+        ]
+        if new_ids:
+            server_module.db.journal_entries.delete_many({"id": {"$in": new_ids}})
 
 
 # Implémenté (T7 fix-pass) : les endpoints GET /api/ledger/* existent désormais,
