@@ -106,6 +106,20 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-03 — Grand livre en partie double, Phase 1 MVP (feature #12)**
+  - 3 nouvelles collections : `chart_of_accounts` (plan comptable seedé par org, 29 comptes par défaut QC), `journal_entries` (lignes Dr/Cr embarquées, équilibre forcé backend), `ledger_counters` (numérotation atomique JE-XXXX/OB-0001 par org)
+  - RBAC : `accounting:read` + `accounting:write` ajoutés à `PERMISSIONS_EDITABLE` (comptable = read+write, lecteur = read) ; backfill idempotent dans `migrate_general_ledger_v1`
+  - Champs fiscaux sur `company_settings` : `fiscal_year_end_month/day` (défaut 12/31) + `ledger_start_date` ; éditables via `PUT /api/settings/company`
+  - Partie double stricte : `_validate_entry_balance` (Dr=Cr forcé, tolérance 0,005 $, rejet 400) ; écritures postées immuables ; contre-passation par écriture miroir POSTED (l'origine RESTE `posted`, lien d'audit `reverses_entry_id`/`reversed_by_entry_id`, net zéro garanti, double contre-passation bloquée) ; statuts d'écriture = `draft`|`posted` seulement ; brouillons éditables
+  - Assistant bilan d'ouverture (`OB-0001`, un seul par org, remplaçable) ; apport propriétaire guidé (Dr Encaisse / Cr Apport 3100)
+  - États financiers : grand livre par compte (solde progressif), balance de vérification (invariant Dr=Cr), bilan (Actif = Passif + CP, résultat net dérivé sur l'exercice), 2 PDF FR-CA no-cache
+  - ~15 endpoints `/api/ledger/*` org-scopés ; seed lazy du plan au 1er accès (idempotent)
+  - Frontend : entrée sidebar « Grand livre » gatée `accounting:read` + RouteGuard, `LedgerPage` à 7 onglets (plan, journal avec compteur d'équilibre live, assistant ouverture, apport, grand livre, balance, bilan)
+  - Limites v1 : auto-posting (Phase 2, plan séparé), écriture de clôture annuelle NON automatisée (résultat net dérivé — ⚠️ clôture manuelle à/après fin d'exercice obligatoire, sinon bilan N+1 déséquilibré ; avertissement UI onglets Journal + Bilan), CAD only, pas de verrou de période, export GIFI/T2 hors scope
+  - Tests : ~25 unitaires + ~32 intégration = **~57 nouveaux tests** (dont net-zéro après contre-passation + balance équilibrée + double contre-passation bloquée), 0 régression
+  - Spec : `docs/superpowers/specs/2026-07-03-general-ledger-design.md`
+  - Plan : `docs/superpowers/plans/2026-07-03-general-ledger-phase1.md`
+
 - **2026-07-03 — Split settings:read/write dans le RBAC (feature #11.1)**
   - `settings:manage` (owner-only) découpé en `settings:read` + `settings:write`, tous deux **activables dans la matrice** des rôles
   - Défauts : comptable = read+write ; lecteur = read seul. `billing:manage` et `team:manage` restent owner-only
