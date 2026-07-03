@@ -141,6 +141,200 @@ function AccountsTab() {
   );
 }
 
+function JournalTab() {
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('accounting:write');
+  const [entries, setEntries] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [description, setDescription] = useState('');
+  const [lines, setLines] = useState([
+    { account_id: '', debit: '', credit: '' },
+    { account_id: '', debit: '', credit: '' },
+  ]);
+  const [error, setError] = useState(null);
+
+  const load = () => {
+    axios.get(`${BACKEND_URL}/api/ledger/entries`).then(r => setEntries(r.data)).catch(() => {});
+    axios.get(`${BACKEND_URL}/api/ledger/accounts?active=true`)
+      .then(r => setAccounts(r.data)).catch(() => {});
+  };
+  useEffect(() => { load(); }, []);
+
+  const totalDebit = lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0);
+  const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
+  const diff = Math.round((totalDebit - totalCredit) * 100) / 100;
+  const balanced = Math.abs(diff) < 0.005 && totalDebit > 0;
+
+  const setLine = (i, field, value) => {
+    const next = [...lines];
+    next[i] = { ...next[i], [field]: value };
+    // débit et crédit mutuellement exclusifs
+    if (field === 'debit' && value) next[i].credit = '';
+    if (field === 'credit' && value) next[i].debit = '';
+    setLines(next);
+  };
+  const addLine = () => setLines([...lines, { account_id: '', debit: '', credit: '' }]);
+
+  const submit = async (status) => {
+    setError(null);
+    try {
+      await axios.post(`${BACKEND_URL}/api/ledger/entries`, {
+        entry_date: entryDate, description, status,
+        lines: lines.filter(l => l.account_id).map(l => ({
+          account_id: l.account_id,
+          debit: parseFloat(l.debit) || 0,
+          credit: parseFloat(l.credit) || 0,
+        })),
+      });
+      setShowModal(false);
+      setLines([{ account_id: '', debit: '', credit: '' }, { account_id: '', debit: '', credit: '' }]);
+      setDescription('');
+      load();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const reverse = async (id) => {
+    if (!window.confirm('Contre-passer cette écriture ?')) return;
+    try { await axios.post(`${BACKEND_URL}/api/ledger/entries/${id}/reverse`, {}); load(); }
+    catch (err) { alert(err.response?.data?.detail || 'Erreur'); }
+  };
+
+  // Statuts d'écriture = draft | posted UNIQUEMENT (pas de 'reversed', §5.3).
+  // Une écriture contre-passée reste 'posted' ; on la signale via reversed_by_entry_id.
+  const STATUS_FR = { draft: 'Brouillon', posted: 'Postée' };
+  const statusLabel = (e) =>
+    e.reversed_by_entry_id ? 'Postée (contre-passée)'
+      : e.entry_type === 'reversal' ? 'Postée (contre-passation)'
+      : (STATUS_FR[e.status] || e.status);
+
+  return (
+    <div>
+      {/* ⚠️ Avertissement Clôture annuelle (spec §7.2.1) — toujours visible */}
+      <div style={{ background: '#FEF3C7', border: '1px solid #F59E0B',
+        borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 13,
+        color: '#92400E' }}>
+        <strong>Clôture annuelle</strong> — Le système ne clôture pas l'exercice
+        automatiquement. À (ou après) la fin de votre exercice, passez une écriture
+        de clôture manuelle (Dr Revenus / Cr Dépenses / vers Bénéfices non répartis 3200).
+        Ne clôturez <strong>jamais en cours d'exercice</strong>. Un oubli
+        <strong> déséquilibrera le bilan de l'exercice suivant</strong>.
+      </div>
+      {canWrite && (
+        <button onClick={() => setShowModal(true)} style={{
+          background: '#00A08C', color: '#fff', border: 'none', padding: '8px 16px',
+          borderRadius: 6, cursor: 'pointer', marginBottom: 16, fontWeight: 600 }}>
+          + Nouvelle écriture</button>
+      )}
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+        <thead>
+          <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+            <th style={{ padding: 8 }}>N°</th><th style={{ padding: 8 }}>Date</th>
+            <th style={{ padding: 8 }}>Description</th>
+            <th style={{ padding: 8, textAlign: 'right' }}>Débit total</th>
+            <th style={{ padding: 8 }}>Statut</th>
+            {canWrite && <th></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(e => (
+            <tr key={e.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+              <td style={{ padding: 8, fontFamily: 'monospace' }}>{e.entry_number}</td>
+              <td style={{ padding: 8 }}>{e.entry_date}</td>
+              <td style={{ padding: 8 }}>{e.description}</td>
+              <td style={{ padding: 8, textAlign: 'right' }}>{e.total_debit.toFixed(2)} $</td>
+              <td style={{ padding: 8 }}>{statusLabel(e)}</td>
+              {canWrite && (
+                <td style={{ padding: 8 }}>
+                  {/* Contre-passer seulement si postée ET pas déjà contre-passée */}
+                  {e.status === 'posted' && !e.reversed_by_entry_id
+                    && e.entry_type !== 'reversal' && (
+                    <button onClick={() => reverse(e.id)} style={{
+                      background: 'none', border: '1px solid #d1d5db', borderRadius: 4,
+                      padding: '2px 8px', cursor: 'pointer', fontSize: 12 }}>
+                      Contre-passer</button>
+                  )}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {showModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: 8, padding: 24,
+            width: 720, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }}>
+            <h2 style={{ marginTop: 0 }}>Nouvelle écriture</h2>
+            <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+              <input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)}
+                     style={{ padding: 8, border: '1px solid #d1d5db', borderRadius: 6 }} />
+              <input placeholder="Description" value={description}
+                     onChange={e => setDescription(e.target.value)}
+                     style={{ flex: 1, padding: 8, border: '1px solid #d1d5db', borderRadius: 6 }} />
+            </div>
+            <table style={{ width: '100%', fontSize: 13, marginBottom: 8 }}>
+              <thead><tr><th style={{ textAlign: 'left' }}>Compte</th>
+                <th>Débit</th><th>Crédit</th></tr></thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={i}>
+                    <td>
+                      <select value={l.account_id}
+                              onChange={e => setLine(i, 'account_id', e.target.value)}
+                              style={{ width: '100%', padding: 6 }}>
+                        <option value="">— compte —</option>
+                        {accounts.map(a => (
+                          <option key={a.id} value={a.id}>{a.account_number} — {a.name}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td><input type="number" step="0.01" value={l.debit}
+                               onChange={e => setLine(i, 'debit', e.target.value)}
+                               style={{ width: 100, padding: 6 }} /></td>
+                    <td><input type="number" step="0.01" value={l.credit}
+                               onChange={e => setLine(i, 'credit', e.target.value)}
+                               style={{ width: 100, padding: 6 }} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button onClick={addLine} style={{ background: 'none', border: '1px dashed #d1d5db',
+              borderRadius: 6, padding: '4px 12px', cursor: 'pointer', fontSize: 13,
+              marginBottom: 12 }}>+ Ligne</button>
+
+            <div style={{ display: 'flex', gap: 24, padding: 12,
+              background: balanced ? '#ecfdf5' : '#fef2f2', borderRadius: 6, marginBottom: 12 }}>
+              <span>Total Dr : <strong>{totalDebit.toFixed(2)} $</strong></span>
+              <span>Total Cr : <strong>{totalCredit.toFixed(2)} $</strong></span>
+              <span>Écart : <strong style={{ color: balanced ? '#059669' : '#dc2626' }}>
+                {diff.toFixed(2)} $</strong></span>
+            </div>
+            {error && <div style={{ color: '#991b1b', fontSize: 13, marginBottom: 12 }}>{error}</div>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setShowModal(false)} style={{ background: '#fff',
+                border: '1px solid #d1d5db', padding: '8px 16px', borderRadius: 6,
+                cursor: 'pointer' }}>Annuler</button>
+              <button onClick={() => submit('draft')} disabled={!balanced} style={{
+                background: '#6b7280', color: '#fff', border: 'none', padding: '8px 16px',
+                borderRadius: 6, cursor: balanced ? 'pointer' : 'not-allowed',
+                opacity: balanced ? 1 : 0.5 }}>Enregistrer brouillon</button>
+              <button onClick={() => submit('posted')} disabled={!balanced} style={{
+                background: '#00A08C', color: '#fff', border: 'none', padding: '8px 16px',
+                borderRadius: 6, cursor: balanced ? 'pointer' : 'not-allowed',
+                fontWeight: 600, opacity: balanced ? 1 : 0.5 }}>Poster</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LedgerPage() {
   const [tab, setTab] = useState('accounts');
   return (
@@ -160,6 +354,7 @@ export default function LedgerPage() {
       </div>
       <div>{/* Onglets remplis aux Tasks 14-17 */}
         {tab === 'accounts' && <AccountsTab />}
+        {tab === 'journal' && <JournalTab />}
       </div>
     </div>
   );
