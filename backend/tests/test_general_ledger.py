@@ -123,10 +123,11 @@ class TestAccountingPermissions:
         assert "accounting:read" in perms
         assert "accounting:write" in perms
 
-    def test_viewer_cannot_get_write_via_matrix(self):
-        # matrice polluée : viewer tente accounting:write → doit rester filtré
+    def test_viewer_can_be_granted_write_by_owner(self):
+        # accounting:write est un code EDITABLE (pas owner-only) : l'owner peut
+        # l'accorder volontairement à un rôle via la matrice role_permissions.
+        # Ici l'owner a coché accounting:write pour le viewer → le résolveur
+        # doit le laisser passer (il franchit le filtre PERMISSIONS_EDITABLE).
         org = {"role_permissions": {"viewer": ["accounting:read", "accounting:write"]}}
         perms = _resolve_permissions(org, "viewer")
-        # accounting:write est editable donc PASSE le filtre PERMISSIONS_EDITABLE ;
-        # ce test documente que la matrice owner-controlee peut l'accorder volontairement.
         assert "accounting:write" in perms

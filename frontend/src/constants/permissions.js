@@ -16,11 +16,13 @@ export const PERMISSIONS_EDITABLE = [
   { code: 'reports:read',    group: 'Rapports',  label: 'Consulter les rapports (P&L, TPS/TVQ, T2125)' },
   { code: 'bank:read',       group: 'Bancaire',  label: 'Lire les imports bancaires' },
   { code: 'bank:write',      group: 'Bancaire',  label: 'Créer / modifier les imports bancaires' },
+  { code: 'accounting:read',  group: 'Comptabilité', label: 'Consulter le grand livre et les comptes' },
+  { code: 'accounting:write', group: 'Comptabilité', label: 'Créer / modifier les écritures comptables' },
   { code: 'settings:read',   group: 'Paramètres', label: 'Voir les paramètres entreprise (numéros fiscaux, province)' },
   { code: 'settings:write',  group: 'Paramètres', label: 'Modifier les paramètres entreprise' },
 ];
 
-export const PERMISSION_GROUPS = ['Dépenses', 'Factures', 'Devis', 'Clients', 'Produits', 'Employés', 'Rapports', 'Bancaire', 'Paramètres'];
+export const PERMISSION_GROUPS = ['Dépenses', 'Factures', 'Devis', 'Clients', 'Produits', 'Employés', 'Rapports', 'Bancaire', 'Comptabilité', 'Paramètres'];
 
 // Libellés FR des rôles (le code interne reste anglais côté backend).
 export const ROLE_LABELS = {
