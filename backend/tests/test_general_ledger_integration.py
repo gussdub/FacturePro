@@ -1016,3 +1016,122 @@ class TestLedgerPDF:
             assert rb.content[:4] == b"%PDF"
         finally:
             server_module.db.journal_entries.delete_one({"entry_number": orphan_num})
+
+
+class TestLedgerRBAC:
+    def _make_viewer(self, client):
+        """Crée un user viewer dans l'org du owner via invitation directe DB."""
+        owner = server_module.db.users.find_one({"email": "gussdub@gmail.com"})
+        org_id = owner["organization_id"]
+        uid = f"gl-viewer-{uuid.uuid4().hex[:8]}"
+        server_module.db.users.insert_one({
+            "id": uid, "email": f"{uid}@viewer.test", "is_active": True,
+            "organization_id": org_id, "role": "viewer",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.user_passwords.insert_one({
+            "user_id": uid,
+            "hashed_password": server_module.hash_password("viewerpass"),
+        })
+        r = client.post("/api/auth/login",
+                        json={"email": f"{uid}@viewer.test", "password": "viewerpass"})
+        return uid, {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    def test_viewer_can_read_but_not_write(self, client):
+        uid, vh = self._make_viewer(client)
+        try:
+            r = client.get("/api/ledger/entries", headers=vh)
+            assert r.status_code == 200
+            accounts = client.get("/api/ledger/accounts", headers=vh).json()
+            by_num = {a["account_number"]: a for a in accounts}
+            r2 = client.post("/api/ledger/entries", headers=vh, json={
+                "entry_date": "2026-06-01", "description": "no", "status": "posted",
+                "lines": [
+                    {"account_id": by_num["1000"]["id"], "debit": 10, "credit": 0},
+                    {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 10},
+                ],
+            })
+            assert r2.status_code == 403
+        finally:
+            server_module.db.users.delete_one({"id": uid})
+            server_module.db.user_passwords.delete_one({"user_id": uid})
+
+
+class TestLedgerCrossOrgIsolation:
+    def _setup_org_b(self, client):
+        uid = f"glb-{uuid.uuid4().hex[:8]}"
+        org_id = str(uuid.uuid4())
+        server_module.db.organizations.insert_one({
+            "id": org_id, "name": "OrgB GL", "owner_id": uid,
+            "subscription_status": "trial",
+            "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=100)).isoformat(),
+            "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.company_settings.insert_one({
+            "id": f"cs-{org_id}", "user_id": uid, "organization_id": org_id,
+            "company_name": "OrgB GL",
+        })
+        server_module.db.users.insert_one({
+            "id": uid, "email": f"{uid}@orgb.test", "is_active": True,
+            "organization_id": org_id, "role": "owner",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_module.db.user_passwords.insert_one({
+            "user_id": uid, "hashed_password": server_module.hash_password("orgbpass"),
+        })
+        r = client.post("/api/auth/login",
+                        json={"email": f"{uid}@orgb.test", "password": "orgbpass"})
+        return uid, org_id, {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    def _cleanup(self, uid, org_id):
+        server_module.db.users.delete_one({"id": uid})
+        server_module.db.user_passwords.delete_one({"user_id": uid})
+        server_module.db.organizations.delete_one({"id": org_id})
+        server_module.db.company_settings.delete_many({"organization_id": org_id})
+        server_module.db.chart_of_accounts.delete_many({"organization_id": org_id})
+        server_module.db.journal_entries.delete_many({"organization_id": org_id})
+        server_module.db.ledger_counters.delete_many({"organization_id": org_id})
+
+    def test_org_b_cannot_read_org_a_entry(self, client, owner_headers):
+        # org A (owner) crée une écriture
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        by_num = {a["account_number"]: a for a in accounts}
+        r = client.post("/api/ledger/entries", headers=owner_headers, json={
+            "entry_date": "2026-06-02", "description": "OrgA privée", "status": "posted",
+            "lines": [
+                {"account_id": by_num["1000"]["id"], "debit": 77, "credit": 0},
+                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 77},
+            ],
+        })
+        entry_id_a = r.json()["id"]
+        uid, org_id, hb = self._setup_org_b(client)
+        try:
+            # org B GET l'écriture de A → 404
+            r2 = client.get(f"/api/ledger/entries/{entry_id_a}", headers=hb)
+            assert r2.status_code == 404
+            # la balance de B n'inclut pas les comptes de A (org B a son propre seed)
+            tb = client.get("/api/ledger/trial-balance?as_of=2026-12-31", headers=hb).json()
+            assert tb["total_debit"] == 0 or all(
+                a["debit_balance"] != 77 for a in tb["accounts"])
+        finally:
+            client.post(f"/api/ledger/entries/{entry_id_a}/reverse",
+                        headers=owner_headers, json={})
+            self._cleanup(uid, org_id)
+
+    def test_org_b_isolated_je_counter(self, client, owner_headers):
+        # org B doit démarrer à JE-0001 indépendamment de A
+        uid, org_id, hb = self._setup_org_b(client)
+        try:
+            accounts = client.get("/api/ledger/accounts", headers=hb).json()
+            by_num = {a["account_number"]: a for a in accounts}
+            r = client.post("/api/ledger/entries", headers=hb, json={
+                "entry_date": "2026-06-03", "description": "OrgB first", "status": "posted",
+                "lines": [
+                    {"account_id": by_num["1000"]["id"], "debit": 5, "credit": 0},
+                    {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 5},
+                ],
+            })
+            assert r.json()["entry_number"] == "JE-0001"
+        finally:
+            self._cleanup(uid, org_id)
