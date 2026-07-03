@@ -2893,6 +2893,52 @@ def update_opening_balance(
         {"_id": 0})
 
 
+@app.post("/api/ledger/owner-contribution", status_code=201)
+def owner_contribution(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    """Formulaire guidé « Apport du propriétaire » : Dr Encaisse (1000) /
+    Cr Apports du propriétaire (3100). Écriture posted immédiate (partie double
+    forcée par _create_journal_entry). Comptes surchargeables via
+    cash_account_id / equity_account_id (validés actifs + scopés à l'org)."""
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    try:
+        amount = round(float(body.get("amount", 0) or 0), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Montant invalide")
+    if amount <= 0:
+        raise HTTPException(400, "Le montant doit être supérieur à 0")
+
+    def _resolve(default_number, override_id):
+        if override_id:
+            acc = db.chart_of_accounts.find_one({
+                "id": override_id, "organization_id": current_user.organization_id,
+                "is_active": True}, {"_id": 0})
+            if not acc:
+                raise HTTPException(400, "Compte spécifié introuvable ou inactif")
+            return acc
+        acc = db.chart_of_accounts.find_one({
+            "organization_id": current_user.organization_id,
+            "account_number": default_number, "is_active": True}, {"_id": 0})
+        if not acc:
+            raise HTTPException(400, f"Compte par défaut {default_number} introuvable")
+        return acc
+
+    cash = _resolve("1000", body.get("cash_account_id"))
+    equity = _resolve("3100", body.get("equity_account_id"))
+    entry_date = _require_entry_date(body.get("date"))
+    description = (body.get("description") or "").strip() or "Apport du propriétaire"
+    return _create_journal_entry(
+        current_user.organization_id, current_user.id,
+        entry_date=entry_date, description=description,
+        lines=[
+            {"account_id": cash["id"], "debit": amount, "credit": 0},
+            {"account_id": equity["id"], "debit": 0, "credit": amount},
+        ],
+        status="posted", entry_type="manual")
+
+
 # ─── Health ───
 @app.get("/")
 def root():

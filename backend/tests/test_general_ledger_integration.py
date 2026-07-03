@@ -650,3 +650,35 @@ class TestOpeningBalance:
         })
         assert r.status_code == 200
         assert r.json()["total_debit"] == 8000.0
+
+
+class TestOwnerContribution:
+    def _accounts(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        return {a["account_number"]: a for a in accounts}
+
+    def test_contribution_creates_dr_cash_cr_equity(self, client, owner_headers):
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": 5000.0, "date": "2026-06-20",
+        })
+        assert r.status_code == 201, r.text
+        body = r.json()
+        by_line = {l["account_number"]: l for l in body["lines"]}
+        assert by_line["1000"]["debit"] == 5000.0   # Encaisse débitée
+        assert by_line["3100"]["credit"] == 5000.0  # Apport crédité
+        assert body["status"] == "posted"
+        # reverse pour ne pas polluer les soldes des autres tests
+        client.post(f"/api/ledger/entries/{body['id']}/reverse",
+                    headers=owner_headers, json={})
+
+    def test_amount_zero_400(self, client, owner_headers):
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": 0, "date": "2026-06-20",
+        })
+        assert r.status_code == 400
+
+    def test_negative_amount_400(self, client, owner_headers):
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": -100.0, "date": "2026-06-20",
+        })
+        assert r.status_code == 400
