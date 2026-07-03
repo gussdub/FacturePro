@@ -131,3 +131,71 @@ class TestAccountingPermissions:
         org = {"role_permissions": {"viewer": ["accounting:read", "accounting:write"]}}
         perms = _resolve_permissions(org, "viewer")
         assert "accounting:write" in perms
+
+
+from server import migrate_general_ledger_v1, db as server_db
+
+
+class TestMigrateGeneralLedgerV1:
+    def _make_org_and_settings(self):
+        org_id = f"gl-mig-{uuid.uuid4().hex[:8]}"
+        server_db.organizations.insert_one({
+            "id": org_id, "name": "GL Mig Test", "owner_id": "u-" + org_id,
+            "role_permissions": {"accountant": [], "viewer": []},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        server_db.company_settings.insert_one({
+            "id": f"cs-{org_id}", "user_id": "u-" + org_id,
+            "organization_id": org_id, "company_name": "GL Mig Test",
+        })
+        return org_id
+
+    def _cleanup(self, org_id):
+        server_db.organizations.delete_one({"id": org_id})
+        server_db.company_settings.delete_many({"organization_id": org_id})
+
+    def test_backfills_fiscal_fields_default_dec_31(self):
+        org_id = self._make_org_and_settings()
+        try:
+            migrate_general_ledger_v1()
+            cs = server_db.company_settings.find_one({"organization_id": org_id})
+            assert cs["fiscal_year_end_month"] == 12
+            assert cs["fiscal_year_end_day"] == 31
+        finally:
+            self._cleanup(org_id)
+
+    def test_backfills_accounting_perms(self):
+        org_id = self._make_org_and_settings()
+        try:
+            migrate_general_ledger_v1()
+            org = server_db.organizations.find_one({"id": org_id})
+            rp = org["role_permissions"]
+            assert "accounting:read" in rp["accountant"]
+            assert "accounting:write" in rp["accountant"]
+            assert "accounting:read" in rp["viewer"]
+            assert "accounting:write" not in rp["viewer"]
+        finally:
+            self._cleanup(org_id)
+
+    def test_idempotent(self):
+        org_id = self._make_org_and_settings()
+        try:
+            migrate_general_ledger_v1()
+            migrate_general_ledger_v1()  # re-run — no crash, no dup
+            cs = server_db.company_settings.find_one({"organization_id": org_id})
+            assert cs["fiscal_year_end_month"] == 12
+        finally:
+            self._cleanup(org_id)
+
+    def test_does_not_overwrite_custom_fiscal(self):
+        org_id = self._make_org_and_settings()
+        server_db.company_settings.update_one(
+            {"organization_id": org_id},
+            {"$set": {"fiscal_year_end_month": 3, "fiscal_year_end_day": 31}}
+        )
+        try:
+            migrate_general_ledger_v1()
+            cs = server_db.company_settings.find_one({"organization_id": org_id})
+            assert cs["fiscal_year_end_month"] == 3  # respecté
+        finally:
+            self._cleanup(org_id)

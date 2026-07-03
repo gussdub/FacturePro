@@ -1558,6 +1558,52 @@ def migrate_organizations_v1():
         print(f"MIGRATION settings perms : {perms_backfilled} orgs mises a jour")
 
 
+def migrate_general_ledger_v1():
+    """Idempotente. Safe à chaque boot (feature #12).
+    1. Backfill des champs fiscaux sur company_settings (défaut 31 déc.).
+    2. Backfill accounting:read/write dans role_permissions des orgs existantes.
+    3. Indexes des nouvelles collections.
+    Le plan comptable par défaut est seedé au 1er accès GL (lazy, PAS ici)."""
+    # 1. Champs fiscaux — n'écrase jamais une valeur existante
+    db.company_settings.update_many(
+        {"fiscal_year_end_month": {"$exists": False}},
+        {"$set": {"fiscal_year_end_month": 12}}
+    )
+    db.company_settings.update_many(
+        {"fiscal_year_end_day": {"$exists": False}},
+        {"$set": {"fiscal_year_end_day": 31}}
+    )
+    # 2. Backfill perms accounting (accountant → read+write ; viewer → read)
+    for org in db.organizations.find({}, {"id": 1, "role_permissions": 1}):
+        rp = org.get("role_permissions") or {}
+        changed = False
+        acc = set(rp.get("accountant", []))
+        if "accounting:read" not in acc or "accounting:write" not in acc:
+            acc.update({"accounting:read", "accounting:write"})
+            rp["accountant"] = sorted(acc)
+            changed = True
+        vw = set(rp.get("viewer", []))
+        if "accounting:read" not in vw:
+            vw.add("accounting:read")
+            rp["viewer"] = sorted(vw)
+            changed = True
+        if changed:
+            db.organizations.update_one({"id": org["id"]},
+                                        {"$set": {"role_permissions": rp}})
+    # 3. Indexes idempotents
+    db.chart_of_accounts.create_index(
+        [("organization_id", 1), ("account_number", 1)], unique=True)
+    db.chart_of_accounts.create_index([("organization_id", 1), ("account_type", 1)])
+    db.chart_of_accounts.create_index([("organization_id", 1), ("is_active", 1)])
+    db.journal_entries.create_index([("organization_id", 1), ("entry_date", 1)])
+    db.journal_entries.create_index(
+        [("organization_id", 1), ("entry_number", 1)], unique=True)
+    db.journal_entries.create_index([("organization_id", 1), ("status", 1)])
+    db.journal_entries.create_index(
+        [("organization_id", 1), ("source_type", 1), ("source_id", 1)])
+    db.ledger_counters.create_index("id", unique=True)
+
+
 # ─── Auth Dependencies ───
 EXEMPT_USERS = ["gussdub@gmail.com"]
 
@@ -4050,6 +4096,17 @@ def update_settings(
             if not (0 <= v <= 100):
                 raise HTTPException(422, f"{field} doit être entre 0 et 100")
             settings_data[field] = v
+    # Feature #12 — exercice financier (validation stricte)
+    if "fiscal_year_end_month" in settings_data:
+        m = settings_data["fiscal_year_end_month"]
+        if not isinstance(m, int) or isinstance(m, bool) or not (1 <= m <= 12):
+            raise HTTPException(400, "fiscal_year_end_month doit être entre 1 et 12")
+        settings_data["fiscal_year_end_month"] = m
+    if "fiscal_year_end_day" in settings_data:
+        d = settings_data["fiscal_year_end_day"]
+        if not isinstance(d, int) or isinstance(d, bool) or not (1 <= d <= 31):
+            raise HTTPException(400, "fiscal_year_end_day doit être entre 1 et 31")
+        settings_data["fiscal_year_end_day"] = d
     # Feature #11 — update par organization_id (source de vérité multi-tenant),
     # avec fallback pre-migration sur user_id du owner (docs legacy).
     db.company_settings.update_one(
@@ -5708,6 +5765,9 @@ def seed_data():
 
         # Migration feature #11 — organizations multi-tenant (idempotente)
         migrate_organizations_v1()
+
+        # Migration feature #12 — grand livre (idempotente)
+        migrate_general_ledger_v1()
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(
