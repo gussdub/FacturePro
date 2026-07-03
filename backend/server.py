@@ -2480,12 +2480,29 @@ def _ensure_chart_seeded(organization_id: str, user_id: str):
             _build_default_accounts(organization_id, user_id))
 
 
+# Chiffres financiers (soldes, écritures, balance) : jamais mis en cache par un
+# proxy/CDN/navigateur. Même politique que les PDF financiers (server.py ~5313).
+# Spec §12.2 (test_ledger_responses_are_no_store_no_cache).
+_LEDGER_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+}
+
+
+def _apply_ledger_no_store(response: Response) -> None:
+    """Pose les headers no-store/no-cache sur une réponse GET /api/ledger/*."""
+    for k, v in _LEDGER_NO_STORE_HEADERS.items():
+        response.headers[k] = v
+
+
 @app.get("/api/ledger/accounts")
 def list_accounts(
+    response: Response,
     type: str = None,
     active: bool = None,
     current_user: CurrentUser = Depends(require_permission("accounting:read")),
 ):
+    _apply_ledger_no_store(response)
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
     query = {"organization_id": current_user.organization_id}
     if type:
@@ -2607,9 +2624,11 @@ def delete_account(
 
 @app.get("/api/ledger/entries")
 def list_entries(
+    response: Response,
     start: str = None, end: str = None, account_id: str = None, status: str = None,
     current_user: CurrentUser = Depends(require_permission("accounting:read")),
 ):
+    _apply_ledger_no_store(response)
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
     query = {"organization_id": current_user.organization_id}
     if status:
@@ -2631,8 +2650,10 @@ def list_entries(
 @app.get("/api/ledger/entries/{entry_id}")
 def get_entry(
     entry_id: str,
+    response: Response,
     current_user: CurrentUser = Depends(require_permission("accounting:read")),
 ):
+    _apply_ledger_no_store(response)
     entry = db.journal_entries.find_one({
         "id": entry_id, "organization_id": current_user.organization_id,
     }, {"_id": 0})
@@ -2782,8 +2803,10 @@ def delete_entry(
 
 @app.get("/api/ledger/opening-balance")
 def get_opening_balance(
+    response: Response,
     current_user: CurrentUser = Depends(require_permission("accounting:read")),
 ):
+    _apply_ledger_no_store(response)
     entry = db.journal_entries.find_one({
         "organization_id": current_user.organization_id, "entry_type": "opening",
     }, {"_id": 0})
@@ -2807,17 +2830,24 @@ def create_opening_balance(
     })
     if existing:
         raise HTTPException(409, "Bilan d'ouverture déjà saisi — modifiez-le")
-    opening_date = body.get("opening_date")
-    if not opening_date:
-        raise HTTPException(400, "opening_date requise")
+    # Valide + NORMALISE la date (rejette '2026-13-45', 'jan 1 2026', 42, et le
+    # suffixe horaire '...T00:00:00Z' qui casse les $gte/$lte string de solde).
+    # Même garde que /api/ledger/entries (T6, commit 93cdc01) : sans ça une OB
+    # datée hors-canon fausse silencieusement toute requête de solde bornée.
+    opening_date = _require_entry_date(body.get("opening_date"))
     entry = _create_journal_entry(
         current_user.organization_id, current_user.id,
         entry_date=opening_date, description="Bilan d'ouverture",
         lines=body.get("balances") or [], status="posted",
         entry_type="opening", entry_number="OB-0001")
+    # upsert : company_settings est créé de façon lazy (au 1er GET /api/settings/company).
+    # Sans upsert, une org qui n'a jamais ouvert Paramètres perd ledger_start_date
+    # silencieusement alors que l'écriture OB est bien créée (exists=true / date=null).
     db.company_settings.update_one(
         {"organization_id": current_user.organization_id},
-        {"$set": {"ledger_start_date": opening_date}})
+        {"$set": {"ledger_start_date": opening_date},
+         "$setOnInsert": {"organization_id": current_user.organization_id}},
+        upsert=True)
     return entry
 
 
@@ -2831,7 +2861,17 @@ def update_opening_balance(
     }, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Aucun bilan d'ouverture à modifier")
-    opening_date = body.get("opening_date") or existing["entry_date"]
+    # Immutabilité : une OB déjà contre-passée ne se réécrit PAS en place. La muter
+    # laisserait son miroir de contre-passation intact → net ≠ 0 et piste d'audit
+    # corrompue (cf. update_entry/post_entry qui refusent toute mutation d'une postée
+    # figée). Le remplacement "pré-clôture" (spec §6.3) n'est autorisé que tant que
+    # l'OB n'a pas été contre-passée.
+    if existing.get("reversed_by_entry_id"):
+        raise HTTPException(
+            409, "Bilan d'ouverture contre-passé — non modifiable (piste d'audit figée)")
+    # Valide + NORMALISE la date (cf. POST) : jamais de composante horaire ni de
+    # date malformée stockée sur une écriture posted bornant les requêtes de solde.
+    opening_date = _require_entry_date(body.get("opening_date") or existing["entry_date"])
     _validate_entry_balance(body.get("balances") or [])
     enriched = _snapshot_lines(current_user.organization_id, body.get("balances") or [])
     db.journal_entries.update_one(
@@ -2842,9 +2882,12 @@ def update_opening_balance(
             "total_debit": round(sum(l["debit"] for l in enriched), 2),
             "total_credit": round(sum(l["credit"] for l in enriched), 2),
         }})
+    # upsert : idem POST — ne pas perdre ledger_start_date si le doc settings n'existe pas.
     db.company_settings.update_one(
         {"organization_id": current_user.organization_id},
-        {"$set": {"ledger_start_date": opening_date}})
+        {"$set": {"ledger_start_date": opening_date},
+         "$setOnInsert": {"organization_id": current_user.organization_id}},
+        upsert=True)
     return db.journal_entries.find_one(
         {"id": existing["id"], "organization_id": current_user.organization_id},
         {"_id": 0})

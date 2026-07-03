@@ -69,17 +69,24 @@ class TestLedgerEndpointsT4Plus:
         # montants égaux. Vérifie la partie double du raccourci apport.
         pytest.fail("À implémenter en T4+ : owner-contribution équilibré (Dr = Cr)")
 
-    def test_ledger_responses_are_no_store_no_cache(self, client, owner_headers):
-        # Tous les GET /api/ledger/* (états financiers, balance, grand livre) doivent
-        # renvoyer Cache-Control: no-store, no-cache — jamais de cache sur des chiffres
-        # financiers. Invariant sécurité/exactitude. Spec §12.2.
-        pytest.fail("À implémenter en T4+ : headers no-store/no-cache sur GET /api/ledger/*")
-
     def test_cross_org_isolation_at_runtime(self, client, owner_headers):
         # Un membre de l'org A ne doit JAMAIS lire/écrire les comptes ou écritures
         # de l'org B (filtre organization_id à l'exécution, pas seulement à la lecture).
         # 404/403 attendu, jamais de fuite cross-tenant. Spec §12.2.
         pytest.fail("À implémenter en T4+ : isolation cross-org à l'exécution")
+
+
+# Implémenté (T7 fix-pass) : les endpoints GET /api/ledger/* existent désormais,
+# donc ce contrat §12.2 est actif (sorti de la classe skip T4Plus). Les chiffres
+# financiers ne doivent JAMAIS être mis en cache par un proxy/CDN/navigateur.
+def test_ledger_responses_are_no_store_no_cache(client, owner_headers):
+    for path in ("/api/ledger/accounts", "/api/ledger/entries",
+                 "/api/ledger/opening-balance"):
+        r = client.get(path, headers=owner_headers)
+        assert r.status_code == 200, r.text
+        cc = r.headers.get("Cache-Control", "")
+        assert "no-store" in cc, f"{path} manque no-store : {cc!r}"
+        assert "no-cache" in cc, f"{path} manque no-cache : {cc!r}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
