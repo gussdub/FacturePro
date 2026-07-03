@@ -345,6 +345,143 @@ function JournalTab() {
   );
 }
 
+function OpeningTab() {
+  const [accounts, setAccounts] = useState([]);
+  const [openingDate, setOpeningDate] = useState('2026-01-01');
+  const [balances, setBalances] = useState({}); // account_id -> {debit, credit}
+  const [existing, setExisting] = useState(null);
+  const [error, setError] = useState(null);
+  const [ok, setOk] = useState(false);
+
+  const load = () => {
+    axios.get(`${BACKEND_URL}/api/ledger/accounts?active=true`)
+      .then(r => setAccounts(r.data)).catch(() => {});
+    axios.get(`${BACKEND_URL}/api/ledger/opening-balance`)
+      .then(r => setExisting(r.data)).catch(() => {});
+  };
+  useEffect(() => { load(); }, []);
+
+  const set = (id, field, value) => {
+    setBalances(prev => {
+      const next = { ...prev, [id]: { ...(prev[id] || {}), [field]: value } };
+      if (field === 'debit' && value) next[id].credit = '';
+      if (field === 'credit' && value) next[id].debit = '';
+      return next;
+    });
+  };
+
+  const rows = Object.entries(balances)
+    .map(([id, v]) => ({ account_id: id,
+      debit: parseFloat(v.debit) || 0, credit: parseFloat(v.credit) || 0 }))
+    .filter(r => r.debit > 0 || r.credit > 0);
+  const totalDr = rows.reduce((s, r) => s + r.debit, 0);
+  const totalCr = rows.reduce((s, r) => s + r.credit, 0);
+  const balanced = Math.abs(totalDr - totalCr) < 0.005 && totalDr > 0;
+
+  const submit = async () => {
+    setError(null); setOk(false);
+    const method = existing?.exists ? 'put' : 'post';
+    try {
+      await axios[method](`${BACKEND_URL}/api/ledger/opening-balance`,
+        { opening_date: openingDate, balances: rows });
+      setOk(true); load();
+    } catch (err) { setError(err.response?.data?.detail || 'Erreur'); }
+  };
+
+  return (
+    <div>
+      <div style={{ background: '#eff6ff', padding: 12, borderRadius: 6, marginBottom: 16,
+        fontSize: 13, color: '#1e3a8a' }}>
+        Saisissez la balance de vérification d'ouverture fournie par votre comptable.
+        Les débits doivent égaler les crédits.
+      </div>
+      {existing?.exists && (
+        <div style={{ color: '#92400e', fontSize: 13, marginBottom: 12 }}>
+          Un bilan d'ouverture existe déjà ({existing.opening_date}). L'enregistrement le remplacera.
+        </div>
+      )}
+      <label style={{ fontSize: 13, fontWeight: 600 }}>Date d'ouverture{' '}
+        <input type="date" value={openingDate} onChange={e => setOpeningDate(e.target.value)}
+               style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} />
+      </label>
+      <table style={{ width: '100%', fontSize: 13, marginTop: 12 }}>
+        <thead><tr style={{ textAlign: 'left', borderBottom: '2px solid #e5e7eb' }}>
+          <th style={{ padding: 6 }}>Compte</th><th>Débit</th><th>Crédit</th></tr></thead>
+        <tbody>
+          {accounts.map(a => (
+            <tr key={a.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+              <td style={{ padding: 6 }}>{a.account_number} — {a.name}</td>
+              <td><input type="number" step="0.01" value={balances[a.id]?.debit || ''}
+                         onChange={e => set(a.id, 'debit', e.target.value)}
+                         style={{ width: 100, padding: 4 }} /></td>
+              <td><input type="number" step="0.01" value={balances[a.id]?.credit || ''}
+                         onChange={e => set(a.id, 'credit', e.target.value)}
+                         style={{ width: 100, padding: 4 }} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ display: 'flex', gap: 24, padding: 12, marginTop: 12,
+        background: balanced ? '#ecfdf5' : '#fef2f2', borderRadius: 6 }}>
+        <span>Total Dr : <strong>{totalDr.toFixed(2)} $</strong></span>
+        <span>Total Cr : <strong>{totalCr.toFixed(2)} $</strong></span>
+        <span style={{ color: balanced ? '#059669' : '#dc2626' }}>
+          {balanced ? 'Équilibré' : 'Déséquilibré'}</span>
+      </div>
+      {error && <div style={{ color: '#991b1b', fontSize: 13, marginTop: 8 }}>{error}</div>}
+      {ok && <div style={{ color: '#059669', fontSize: 13, marginTop: 8 }}>Bilan d'ouverture enregistré.</div>}
+      <button onClick={submit} disabled={!balanced} style={{ marginTop: 12,
+        background: '#00A08C', color: '#fff', border: 'none', padding: '10px 20px',
+        borderRadius: 6, cursor: balanced ? 'pointer' : 'not-allowed', fontWeight: 600,
+        opacity: balanced ? 1 : 0.5 }}>Enregistrer le bilan d'ouverture</button>
+    </div>
+  );
+}
+
+function ContributionTab() {
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [error, setError] = useState(null);
+  const [ok, setOk] = useState(false);
+
+  const submit = async () => {
+    setError(null); setOk(false);
+    try {
+      await axios.post(`${BACKEND_URL}/api/ledger/owner-contribution`,
+        { amount: parseFloat(amount), date });
+      setOk(true); setAmount('');
+    } catch (err) { setError(err.response?.data?.detail || 'Erreur'); }
+  };
+
+  return (
+    <div style={{ maxWidth: 480 }}>
+      <div style={{ background: '#eff6ff', padding: 12, borderRadius: 6, marginBottom: 16,
+        fontSize: 13, color: '#1e3a8a' }}>
+        Enregistre un apport personnel dans l'entreprise.
+      </div>
+      <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Montant</label>
+      <input type="number" step="0.01" value={amount} onChange={e => setAmount(e.target.value)}
+             style={{ width: '100%', padding: 8, marginBottom: 12, border: '1px solid #d1d5db',
+                      borderRadius: 6, boxSizing: 'border-box' }} />
+      <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Date</label>
+      <input type="date" value={date} onChange={e => setDate(e.target.value)}
+             style={{ padding: 8, marginBottom: 12, border: '1px solid #d1d5db', borderRadius: 6 }} />
+      {amount > 0 && (
+        <div style={{ background: '#f3f4f6', padding: 12, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+          Cela enregistrera : <strong>Débit Encaisse {parseFloat(amount).toFixed(2)} $</strong> /{' '}
+          <strong>Crédit Apport du propriétaire {parseFloat(amount).toFixed(2)} $</strong>
+        </div>
+      )}
+      {error && <div style={{ color: '#991b1b', fontSize: 13, marginBottom: 8 }}>{error}</div>}
+      {ok && <div style={{ color: '#059669', fontSize: 13, marginBottom: 8 }}>Apport enregistré.</div>}
+      <button onClick={submit} disabled={!(amount > 0)} style={{
+        background: '#00A08C', color: '#fff', border: 'none', padding: '10px 20px',
+        borderRadius: 6, cursor: amount > 0 ? 'pointer' : 'not-allowed', fontWeight: 600,
+        opacity: amount > 0 ? 1 : 0.5 }}>Enregistrer l'apport</button>
+    </div>
+  );
+}
+
 export default function LedgerPage() {
   const [tab, setTab] = useState('accounts');
   return (
@@ -365,6 +502,8 @@ export default function LedgerPage() {
       <div>{/* Onglets remplis aux Tasks 14-17 */}
         {tab === 'accounts' && <AccountsTab />}
         {tab === 'journal' && <JournalTab />}
+        {tab === 'opening' && <OpeningTab />}
+        {tab === 'contribution' && <ContributionTab />}
       </div>
     </div>
   );
