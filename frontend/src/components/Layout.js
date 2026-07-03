@@ -18,7 +18,8 @@ const getImageUrl = (url) => {
 };
 
 const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
-  const { user, logout, hasPermission } = useAuth();
+  const { user, organization, logout, hasPermission } = useAuth();
+  const orgName = organization?.name || user?.company_name || 'Entreprise';
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settings, setSettings] = useState(null);
 
@@ -117,12 +118,12 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
                 <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '40px', height: '40px', objectFit: 'contain' }} />
               ) : (
                 <span style={{ color: 'white', fontSize: '16px', fontWeight: '700' }}>
-                  {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                  {orgName.charAt(0).toUpperCase()}
                 </span>
               )}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: 'white', fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.company_name || 'Entreprise'}</div>
+              <div style={{ color: 'white', fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{orgName}</div>
               <div style={{ color: '#94a3b8', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user?.email}</div>
             </div>
           </div>
@@ -194,11 +195,11 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
                     <img src={getImageUrl(settings.logo_url)} alt="Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
                   ) : (
                     <span style={{ color: '#fff', fontSize: '12px', fontWeight: '700' }}>
-                      {user?.company_name?.charAt(0)?.toUpperCase() || 'U'}
+                      {orgName.charAt(0).toUpperCase()}
                     </span>
                   )}
                 </div>
-                <span style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>{user?.company_name}</span>
+                <span style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>{orgName}</span>
               </div>
             </div>
           </div>
