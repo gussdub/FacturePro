@@ -7,7 +7,7 @@ import FactureProLogo from './FactureProLogo';
 import {
   LayoutDashboard, Users, Package, FileText, FilePen,
   UserCheck, Receipt, Download, Settings, Gem,
-  LogOut, Search, Bell, BarChart2, GitMerge
+  LogOut, Search, Bell, BarChart2, GitMerge, BookOpen
 } from 'lucide-react';
 
 const getImageUrl = (url) => {
@@ -46,6 +46,7 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
     { name: 'Exports', href: '/export', icon: Download, permission: 'reports:read', current: currentRoute === '/export' },
     { name: 'Rapports', href: '/reports', icon: BarChart2, permission: 'reports:read', current: currentRoute === '/reports' },
     { name: 'Rapprochement', href: '/bank', icon: GitMerge, permission: 'bank:read', current: currentRoute === '/bank' },
+    { name: 'Grand livre', href: '/ledger', icon: BookOpen, permission: 'accounting:read', current: currentRoute === '/ledger' },
     { name: 'Parametres', href: '/settings', icon: Settings, permission: null, current: currentRoute === '/settings' },
     { name: 'Abonnement', href: '/subscription', icon: Gem, permission: 'billing:manage', current: currentRoute === '/subscription' },
   ];

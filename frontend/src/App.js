@@ -15,6 +15,7 @@ import SettingsPage from './pages/SettingsPage';
 import SubscriptionPage from './pages/SubscriptionPage';
 import ReportsPage from './pages/ReportsPage';
 import BankReconciliationPage from './pages/BankReconciliationPage';
+import LedgerPage from './pages/LedgerPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 
 function App() {
@@ -72,6 +73,7 @@ function App() {
       case '/export': return <RouteGuard permission="reports:read"><ExportPage /></RouteGuard>;
       case '/reports': return <RouteGuard permission="reports:read"><ReportsPage /></RouteGuard>;
       case '/bank': return <RouteGuard permission="bank:read"><BankReconciliationPage /></RouteGuard>;
+      case '/ledger': return <RouteGuard permission="accounting:read"><LedgerPage /></RouteGuard>;
       case '/settings': return <SettingsPage />;
       case '/subscription': return <RouteGuard permission="billing:manage"><SubscriptionPage /></RouteGuard>;
       default: return <Dashboard navigate={navigate} />;
