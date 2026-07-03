@@ -80,3 +80,73 @@ class TestLedgerEndpointsT4Plus:
         # de l'org B (filtre organization_id à l'exécution, pas seulement à la lecture).
         # 404/403 attendu, jamais de fuite cross-tenant. Spec §12.2.
         pytest.fail("À implémenter en T4+ : isolation cross-org à l'exécution")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T4 : Plan comptable — CRUD + seed lazy (feature #12).
+# ─────────────────────────────────────────────────────────────────────────────
+class TestChartOfAccounts:
+    def test_seed_lazy_on_first_access(self, client, owner_headers):
+        r = client.get("/api/ledger/accounts", headers=owner_headers)
+        assert r.status_code == 200, r.text
+        accounts = r.json()
+        assert len(accounts) >= 29
+        numbers = [a["account_number"] for a in accounts]
+        assert "1000" in numbers and "3100" in numbers and "5900" in numbers
+        # trié par account_number
+        assert numbers == sorted(numbers)
+
+    def test_seed_idempotent(self, client, owner_headers):
+        r1 = client.get("/api/ledger/accounts", headers=owner_headers)
+        n1 = len(r1.json())
+        r2 = client.get("/api/ledger/accounts", headers=owner_headers)
+        assert len(r2.json()) == n1  # pas de doublon au 2e appel
+
+    def test_create_account_happy_path(self, client, owner_headers):
+        num = "1500"
+        client.delete_by_number = None  # noqa
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": num, "name": "Équipement", "sub_type": "fixed_asset",
+        })
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["account_type"] == "asset"
+        assert body["normal_balance"] == "debit"
+        assert body["is_system"] is False
+        # cleanup
+        client.delete(f"/api/ledger/accounts/{body['id']}", headers=owner_headers)
+
+    def test_create_out_of_range_type_mismatch(self, client, owner_headers):
+        # 6xxx hors plages canoniques
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "6000", "name": "Bidon",
+        })
+        assert r.status_code == 400
+
+    def test_create_duplicate_number_409(self, client, owner_headers):
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1000", "name": "Doublon encaisse",
+        })
+        assert r.status_code == 409
+
+    def test_delete_system_account_forbidden(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        cash = next(a for a in accounts if a["account_number"] == "1000")
+        r = client.delete(f"/api/ledger/accounts/{cash['id']}", headers=owner_headers)
+        assert r.status_code == 400
+
+    def test_put_cannot_change_number_or_type(self, client, owner_headers):
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1510", "name": "Mobilier", "sub_type": "fixed_asset",
+        })
+        acc_id = r.json()["id"]
+        try:
+            r2 = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"account_number": "1520"})
+            assert r2.status_code == 400
+            r3 = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"name": "Mobilier de bureau"})
+            assert r3.status_code == 200
+            assert r3.json()["name"] == "Mobilier de bureau"
+        finally:
+            client.delete(f"/api/ledger/accounts/{acc_id}", headers=owner_headers)

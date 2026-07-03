@@ -2239,6 +2239,133 @@ def transfer_ownership(
     }
 
 
+# ─── Grand livre — endpoints (feature #12) ───
+
+def _ensure_chart_seeded(organization_id: str, user_id: str):
+    """Seed lazy du plan comptable par défaut au 1er accès GL (§8.3).
+    Idempotent : ne seed que si zéro compte pour l'org."""
+    if db.chart_of_accounts.count_documents({"organization_id": organization_id}) == 0:
+        db.chart_of_accounts.insert_many(
+            _build_default_accounts(organization_id, user_id))
+
+
+@app.get("/api/ledger/accounts")
+def list_accounts(
+    type: str = None,
+    active: bool = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    query = {"organization_id": current_user.organization_id}
+    if type:
+        query["account_type"] = type
+    if active is not None:
+        query["is_active"] = active
+    cursor = db.chart_of_accounts.find(query, {"_id": 0}).sort("account_number", 1)
+    return list(cursor)
+
+
+@app.post("/api/ledger/accounts", status_code=201)
+def create_account(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    account_number = str(body.get("account_number") or "").strip()
+    name = (body.get("name") or "").strip()
+    if not account_number or not name:
+        raise HTTPException(400, "account_number et name requis")
+    if not (account_number.isdigit() and len(account_number) == 4):
+        raise HTTPException(400, "account_number doit être 4 chiffres (1000-5999)")
+    account_type = _account_type_for_number(account_number)
+    if account_type is None:
+        raise HTTPException(400, "account_number hors des plages canoniques 1000-5999")
+    existing = db.chart_of_accounts.find_one({
+        "organization_id": current_user.organization_id,
+        "account_number": account_number,
+    })
+    if existing:
+        raise HTTPException(409, "Un compte porte déjà ce numéro")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "account_number": account_number,
+        "name": name,
+        "account_type": account_type,
+        "sub_type": body.get("sub_type"),
+        "normal_balance": _normal_balance_for_type(account_type),
+        "is_active": True,
+        "is_system": False,
+        "expense_category_code": body.get("expense_category_code"),
+        "description": (body.get("description") or "").strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.chart_of_accounts.insert_one(dict(doc))
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
+@app.put("/api/ledger/accounts/{account_id}")
+def update_account(
+    account_id: str,
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    acc = db.chart_of_accounts.find_one({
+        "id": account_id, "organization_id": current_user.organization_id,
+    }, {"_id": 0})
+    if not acc:
+        raise HTTPException(404, "Compte introuvable")
+    if "account_number" in body or "account_type" in body:
+        raise HTTPException(400, "Numéro et type de compte non modifiables")
+    set_fields = {}
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name ne peut être vide")
+        set_fields["name"] = name
+    if "sub_type" in body:
+        set_fields["sub_type"] = body["sub_type"]
+    if "description" in body:
+        set_fields["description"] = (body.get("description") or "").strip()
+    if "expense_category_code" in body:
+        set_fields["expense_category_code"] = body["expense_category_code"]
+    if "is_active" in body:
+        want_active = bool(body["is_active"])
+        if acc.get("is_system") and not want_active:
+            raise HTTPException(400, "Un compte système ne peut être désactivé")
+        set_fields["is_active"] = want_active
+    if set_fields:
+        db.chart_of_accounts.update_one(
+            {"id": account_id, "organization_id": current_user.organization_id},
+            {"$set": set_fields})
+    return db.chart_of_accounts.find_one(
+        {"id": account_id, "organization_id": current_user.organization_id}, {"_id": 0})
+
+
+@app.delete("/api/ledger/accounts/{account_id}", status_code=204)
+def delete_account(
+    account_id: str,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    acc = db.chart_of_accounts.find_one({
+        "id": account_id, "organization_id": current_user.organization_id,
+    })
+    if not acc:
+        raise HTTPException(404, "Compte introuvable")
+    if acc.get("is_system"):
+        raise HTTPException(400, "Compte système protégé — désactivez-le plutôt")
+    used = db.journal_entries.count_documents({
+        "organization_id": current_user.organization_id,
+        "lines.account_id": account_id,
+    })
+    if used > 0:
+        raise HTTPException(400, "Compte utilisé par des écritures — désactivez-le plutôt")
+    db.chart_of_accounts.delete_one(
+        {"id": account_id, "organization_id": current_user.organization_id})
+    return
+
+
 # ─── Health ───
 @app.get("/")
 def root():
