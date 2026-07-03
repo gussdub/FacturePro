@@ -1058,11 +1058,15 @@ class TestLedgerRBAC:
 
 
 class TestLedgerCrossOrgIsolation:
-    def _setup_org_b(self, client):
-        uid = f"glb-{uuid.uuid4().hex[:8]}"
+    def _setup_org(self, client, label):
+        """Crée une org JETABLE isolée (owner + login) et renvoie
+        (uid, org_id, headers). Ne touche JAMAIS l'org de seed (gussdub) :
+        chaque org de test est purgée intégralement par _cleanup, donc aucune
+        écriture résiduelle ni croissance du compteur JE dans la copie-prod."""
+        uid = f"gl{label}-{uuid.uuid4().hex[:8]}"
         org_id = str(uuid.uuid4())
         server_module.db.organizations.insert_one({
-            "id": org_id, "name": "OrgB GL", "owner_id": uid,
+            "id": org_id, "name": f"Org{label} GL", "owner_id": uid,
             "subscription_status": "trial",
             "trial_ends_at": (datetime.now(timezone.utc) + timedelta(days=100)).isoformat(),
             "role_permissions": server_module.DEFAULT_ROLE_PERMISSIONS,
@@ -1070,19 +1074,22 @@ class TestLedgerCrossOrgIsolation:
         })
         server_module.db.company_settings.insert_one({
             "id": f"cs-{org_id}", "user_id": uid, "organization_id": org_id,
-            "company_name": "OrgB GL",
+            "company_name": f"Org{label} GL",
         })
         server_module.db.users.insert_one({
-            "id": uid, "email": f"{uid}@orgb.test", "is_active": True,
+            "id": uid, "email": f"{uid}@org{label}.test", "is_active": True,
             "organization_id": org_id, "role": "owner",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         server_module.db.user_passwords.insert_one({
-            "user_id": uid, "hashed_password": server_module.hash_password("orgbpass"),
+            "user_id": uid, "hashed_password": server_module.hash_password("orgpass"),
         })
         r = client.post("/api/auth/login",
-                        json={"email": f"{uid}@orgb.test", "password": "orgbpass"})
+                        json={"email": f"{uid}@org{label}.test", "password": "orgpass"})
         return uid, org_id, {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    def _setup_org_b(self, client):
+        return self._setup_org(client, "b")
 
     def _cleanup(self, uid, org_id):
         server_module.db.users.delete_one({"id": uid})
@@ -1093,20 +1100,25 @@ class TestLedgerCrossOrgIsolation:
         server_module.db.journal_entries.delete_many({"organization_id": org_id})
         server_module.db.ledger_counters.delete_many({"organization_id": org_id})
 
-    def test_org_b_cannot_read_org_a_entry(self, client, owner_headers):
-        # org A (owner) crée une écriture
-        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
-        by_num = {a["account_number"]: a for a in accounts}
-        r = client.post("/api/ledger/entries", headers=owner_headers, json={
-            "entry_date": "2026-06-02", "description": "OrgA privée", "status": "posted",
-            "lines": [
-                {"account_id": by_num["1000"]["id"], "debit": 77, "credit": 0},
-                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 77},
-            ],
-        })
-        entry_id_a = r.json()["id"]
-        uid, org_id, hb = self._setup_org_b(client)
+    def test_org_b_cannot_read_org_a_entry(self, client):
+        # org A JETABLE (pas l'org de seed) crée une écriture privée : ainsi le
+        # test ne salit PAS la copie-prod (gussdub) — origine + éventuel miroir
+        # sont purgés par _cleanup, et le compteur JE de l'org de seed ne bouge
+        # pas d'un run à l'autre.
+        uid_a, org_a, ha = self._setup_org(client, "a")
+        uid_b, org_b, hb = self._setup_org(client, "b")
         try:
+            accounts = client.get("/api/ledger/accounts", headers=ha).json()
+            by_num = {a["account_number"]: a for a in accounts}
+            r = client.post("/api/ledger/entries", headers=ha, json={
+                "entry_date": "2026-06-02", "description": "OrgA privée",
+                "status": "posted",
+                "lines": [
+                    {"account_id": by_num["1000"]["id"], "debit": 77, "credit": 0},
+                    {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 77},
+                ],
+            })
+            entry_id_a = r.json()["id"]
             # org B GET l'écriture de A → 404
             r2 = client.get(f"/api/ledger/entries/{entry_id_a}", headers=hb)
             assert r2.status_code == 404
@@ -1115,9 +1127,8 @@ class TestLedgerCrossOrgIsolation:
             assert tb["total_debit"] == 0 or all(
                 a["debit_balance"] != 77 for a in tb["accounts"])
         finally:
-            client.post(f"/api/ledger/entries/{entry_id_a}/reverse",
-                        headers=owner_headers, json={})
-            self._cleanup(uid, org_id)
+            self._cleanup(uid_b, org_b)
+            self._cleanup(uid_a, org_a)
 
     def test_org_b_isolated_je_counter(self, client, owner_headers):
         # org B doit démarrer à JE-0001 indépendamment de A
