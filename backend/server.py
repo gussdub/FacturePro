@@ -2588,6 +2588,37 @@ def _trial_balance_rows(organization_id: str, as_of: str = None) -> dict:
     }
 
 
+def _current_fiscal_year(as_of: "date", fy_end_month: int, fy_end_day: int):
+    """Retourne (fy_start, fy_end) encadrant as_of (§7.2). Sans dépendance externe.
+
+    [COMPTA] L'exercice financier borne le résultat net de l'exercice courant sur
+    le bilan : on n'agrège revenus/dépenses que sur [fy_start, as_of]. fy_end est
+    la fin d'exercice (mois/jour configurés dans company_settings) qui suit ou
+    coïncide avec as_of ; fy_start est le lendemain de la fin d'exercice
+    précédente. Les jours invalides (ex. 31 fév.) retombent sur le 28."""
+    from datetime import date as _date, timedelta as _td
+    y = as_of.year
+    try:
+        fy_end_this = _date(y, fy_end_month, fy_end_day)
+    except ValueError:
+        # ex. 31 fév. → dernier jour valide du mois ; fallback 28
+        fy_end_this = _date(y, fy_end_month, 28)
+    if as_of <= fy_end_this:
+        fy_end = fy_end_this
+    else:
+        try:
+            fy_end = _date(y + 1, fy_end_month, fy_end_day)
+        except ValueError:
+            fy_end = _date(y + 1, fy_end_month, 28)
+    # début d'exercice = lendemain de la fin de l'exercice précédent
+    try:
+        prev_end = _date(fy_end.year - 1, fy_end_month, fy_end_day)
+    except ValueError:
+        prev_end = _date(fy_end.year - 1, fy_end_month, 28)
+    fy_start = prev_end + _td(days=1)
+    return fy_start, fy_end
+
+
 @app.get("/api/ledger/accounts")
 def list_accounts(
     response: Response,
@@ -3065,6 +3096,123 @@ def trial_balance(
     if not as_of:
         as_of = datetime.now(timezone.utc).date().isoformat()
     return _trial_balance_rows(current_user.organization_id, as_of)
+
+
+@app.get("/api/ledger/balance-sheet")
+def balance_sheet(
+    response: Response,
+    as_of: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """Bilan / état de la situation financière (§7.2).
+
+    [COMPTA] Équation comptable : Actif = Passif + Capitaux propres. Les soldes
+    de comptes (actif/passif/CP) sont cumulés depuis l'origine jusqu'à as_of
+    inclus, orientés par leur solde normal. Le RÉSULTAT NET DE L'EXERCICE COURANT
+    n'a pas de compte propre au bilan : il est DÉRIVÉ (revenus - dépenses sur
+    [fy_start, as_of]) et ajouté aux capitaux propres — ce qui referme
+    l'équation tant que le journal est équilibré (chaque écriture Dr==Cr, tous
+    les posted comptent, contre-passations = origine + miroir → net zéro). Un
+    exercice équilibré donne toujours `balanced=true` ; un déséquilibre resterait
+    VISIBLE plutôt qu'avalé.
+
+    `as_of` (ISO YYYY-MM-DD, inclusif) ; défaut = aujourd'hui (UTC). L'exercice
+    financier est borné par fiscal_year_end_month/day de company_settings
+    (défaut 31 décembre). [COMPTA] no-store : chiffre financier jamais mis en
+    cache."""
+    from datetime import date as _date
+    _apply_ledger_no_store(response)
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    org_id = current_user.organization_id
+    if not as_of:
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    as_of_date = _date.fromisoformat(as_of)
+
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    fy_end_month = settings.get("fiscal_year_end_month", 12)
+    fy_end_day = settings.get("fiscal_year_end_day", 31)
+    fy_start, fy_end = _current_fiscal_year(as_of_date, fy_end_month, fy_end_day)
+    fy_start_iso = fy_start.isoformat()
+
+    accounts = list(db.chart_of_accounts.find({"organization_id": org_id}, {"_id": 0}))
+
+    def _section(account_type):
+        rows = []
+        total = 0.0
+        for acc in accounts:
+            if acc["account_type"] != account_type:
+                continue
+            bal = _account_balance(org_id, acc["id"], acc["normal_balance"],
+                                   as_of_date=as_of)
+            if abs(bal) < 0.005:
+                continue
+            rows.append({"account_number": acc["account_number"],
+                         "name": acc["name"], "balance": round(bal, 2)})
+            total += bal
+        rows.sort(key=lambda r: r["account_number"])
+        return rows, round(total, 2)
+
+    asset_rows, total_assets = _section("asset")
+    liability_rows, total_liabilities = _section("liability")
+    equity_rows, equity_accounts_total = _section("equity")
+
+    # Résultat net de l'exercice = revenus - dépenses sur [fy_start, as_of]
+    revenue_total = 0.0
+    expense_total = 0.0
+    for acc in accounts:
+        if acc["account_type"] == "revenue":
+            revenue_total += _account_balance(org_id, acc["id"], "credit",
+                                              start_date=fy_start_iso, as_of_date=as_of)
+        elif acc["account_type"] == "expense":
+            expense_total += _account_balance(org_id, acc["id"], "debit",
+                                              start_date=fy_start_iso, as_of_date=as_of)
+    net_income = round(revenue_total - expense_total, 2)
+    total_equity = round(equity_accounts_total + net_income, 2)
+    total_liab_and_equity = round(total_liabilities + total_equity, 2)
+
+    # [COMPTA] DIAGNOSTIC ORPHELINS (même principe que la balance de vérif, T9).
+    # Les sections ci-dessus n'itèrent que sur chart_of_accounts : une ligne
+    # posted qui réfère un account_id absent du plan (compte supprimé, orphelin de
+    # migration) serait AVALÉE silencieusement et casserait l'équation sans
+    # explication. On recense ici tout account_id orphelin ≤ as_of pour rendre la
+    # cause VISIBLE. `balanced` conserve exactement la sémantique du plan
+    # (Actif == Passif + CP) : un orphelin non compensé le fait déjà passer à
+    # false ; `unmapped_accounts` dit simplement POURQUOI. Jeu d'écritures sain =>
+    # liste vide, aucun changement de comportement.
+    known_account_ids = {acc["id"] for acc in accounts}
+    entry_match = {"organization_id": org_id, "status": "posted",
+                   "entry_date": {"$lte": as_of}}
+    unmapped = {}
+    for entry in db.journal_entries.find(entry_match, {"_id": 0, "lines": 1}):
+        for ln in entry.get("lines", []):
+            acc_id = ln.get("account_id")
+            if acc_id not in known_account_ids:
+                agg = unmapped.setdefault(acc_id, {"debit": 0.0, "credit": 0.0})
+                agg["debit"] += float(ln.get("debit", 0) or 0)
+                agg["credit"] += float(ln.get("credit", 0) or 0)
+    unmapped_accounts = [
+        {"account_id": aid,
+         "debit": round(v["debit"], 2),
+         "credit": round(v["credit"], 2)}
+        for aid, v in sorted(unmapped.items())
+    ]
+
+    return {
+        "as_of": as_of,
+        "fiscal_year_start": fy_start_iso,
+        "fiscal_year_end": fy_end.isoformat(),
+        "assets": {"accounts": asset_rows, "total": total_assets},
+        "liabilities": {"accounts": liability_rows, "total": total_liabilities},
+        "equity": {
+            "accounts": equity_rows,
+            "net_income_current_year": net_income,
+            "total": total_equity,
+        },
+        "total_assets": total_assets,
+        "total_liabilities_and_equity": total_liab_and_equity,
+        "balanced": abs(total_assets - total_liab_and_equity) <= 0.01,
+        "unmapped_accounts": unmapped_accounts,
+    }
 
 
 # ─── Health ───

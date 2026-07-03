@@ -784,3 +784,45 @@ class TestTrialBalance:
         finally:
             client.post(f"/api/ledger/entries/{entry_id}/reverse",
                         headers=owner_headers, json={})
+
+
+class TestBalanceSheet:
+    def _accounts(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        return {a["account_number"]: a for a in accounts}
+
+    def test_balance_sheet_balanced_after_contribution(self, client, owner_headers):
+        # apport 4000 : Dr Encaisse (actif) / Cr Apport (CP) → Actif = CP
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": 4000.0, "date": "2026-03-01",
+        })
+        contrib_id = r.json()["id"]
+        try:
+            bs = client.get("/api/ledger/balance-sheet?as_of=2026-12-31",
+                            headers=owner_headers).json()
+            assert bs["balanced"] is True
+            assert round(bs["total_assets"], 2) == round(
+                bs["total_liabilities_and_equity"], 2)
+        finally:
+            client.post(f"/api/ledger/entries/{contrib_id}/reverse",
+                        headers=owner_headers, json={})
+
+    def test_net_income_current_year_reflected(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        # revenu 1000 : Dr Encaisse / Cr Revenus → net income +1000
+        r = client.post("/api/ledger/entries", headers=owner_headers, json={
+            "entry_date": "2026-04-01", "description": "Vente", "status": "posted",
+            "lines": [
+                {"account_id": by_num["1000"]["id"], "debit": 1000.0, "credit": 0},
+                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 1000.0},
+            ],
+        })
+        entry_id = r.json()["id"]
+        try:
+            bs = client.get("/api/ledger/balance-sheet?as_of=2026-12-31",
+                            headers=owner_headers).json()
+            assert bs["equity"]["net_income_current_year"] >= 1000.0
+            assert bs["balanced"] is True
+        finally:
+            client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                        headers=owner_headers, json={})

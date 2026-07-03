@@ -666,3 +666,25 @@ class TestAccountBalance:
             assert _account_balance(org_id, "acct-never-used", "credit") == 0.0
         finally:
             self._cleanup(org_id)
+
+
+from server import _current_fiscal_year
+from datetime import date
+
+
+class TestCurrentFiscalYear:
+    def test_dec_31_year_end(self):
+        fy_start, fy_end = _current_fiscal_year(date(2026, 6, 15), 12, 31)
+        assert fy_start == date(2026, 1, 1)
+        assert fy_end == date(2026, 12, 31)
+
+    def test_march_31_year_end(self):
+        # as_of après le 31 mars → exercice se termine 31 mars de l'année suivante
+        fy_start, fy_end = _current_fiscal_year(date(2026, 6, 15), 3, 31)
+        assert fy_end == date(2027, 3, 31)
+        assert fy_start == date(2026, 4, 1)
+
+    def test_march_31_before_year_end(self):
+        fy_start, fy_end = _current_fiscal_year(date(2026, 2, 10), 3, 31)
+        assert fy_end == date(2026, 3, 31)
+        assert fy_start == date(2025, 4, 1)
