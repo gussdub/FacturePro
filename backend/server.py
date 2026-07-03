@@ -3215,6 +3215,88 @@ def balance_sheet(
     }
 
 
+@app.get("/api/ledger/general-ledger")
+def general_ledger(
+    response: Response,
+    account_id: str,
+    start: str = None, end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """Grand livre par compte (§6.5) : détail des mouvements d'un compte avec
+    solde progressif (running_balance).
+
+    [COMPTA] Le solde progressif est orienté par le solde normal du compte
+    (débiteur pour actif/charges, créditeur pour passif/capitaux/produits) et
+    n'agrège QUE les écritures status='posted' — origines contre-passées ET
+    leurs miroirs restent posted (net zéro), aucune n'est jamais retirée
+    (cf. _account_balance §5.2/§5.3). `opening_balance` = solde du compte AVANT
+    `start` (borne day_before = start - 1j) ; les mouvements de la fenêtre
+    [start, end] sont ensuite cumulés ligne par ligne ; `closing_balance` =
+    solde progressif final. Compte introuvable → 404. [COMPTA] no-store : chiffre
+    financier jamais mis en cache."""
+    from datetime import date as _date, timedelta as _td
+    _apply_ledger_no_store(response)
+    org_id = current_user.organization_id
+    _ensure_chart_seeded(org_id, current_user.id)
+    acc = db.chart_of_accounts.find_one({
+        "id": account_id, "organization_id": org_id}, {"_id": 0})
+    if not acc:
+        raise HTTPException(404, "Compte introuvable")
+    normal = acc["normal_balance"]
+
+    # Solde d'ouverture = solde du compte avant `start` (jour précédent inclus)
+    opening_balance = 0.0
+    if start:
+        day_before = (_date.fromisoformat(start) - _td(days=1)).isoformat()
+        opening_balance = _account_balance(org_id, account_id, normal,
+                                           as_of_date=day_before)
+
+    match = {"organization_id": org_id, "status": "posted",
+             "lines.account_id": account_id}
+    if start or end:
+        df = {}
+        if start:
+            df["$gte"] = start
+        if end:
+            df["$lte"] = end
+        match["entry_date"] = df
+    entries = list(db.journal_entries.find(match, {"_id": 0})
+                   .sort([("entry_date", 1), ("entry_number", 1)]))
+
+    running = opening_balance
+    lines = []
+    for entry in entries:
+        for ln in entry["lines"]:
+            if ln["account_id"] != account_id:
+                continue
+            debit = float(ln.get("debit", 0) or 0)
+            credit = float(ln.get("credit", 0) or 0)
+            if normal == "debit":
+                running += debit - credit
+            else:
+                running += credit - debit
+            lines.append({
+                "entry_id": entry["id"],
+                "entry_number": entry["entry_number"],
+                "entry_date": entry["entry_date"],
+                "description": entry["description"],
+                "reference": entry.get("reference"),
+                "debit": round(debit, 2),
+                "credit": round(credit, 2),
+                "running_balance": round(running, 2),
+            })
+    return {
+        "account": {
+            "id": acc["id"], "account_number": acc["account_number"],
+            "name": acc["name"], "account_type": acc["account_type"],
+            "normal_balance": normal,
+        },
+        "opening_balance": round(opening_balance, 2),
+        "lines": lines,
+        "closing_balance": round(running, 2),
+    }
+
+
 # ─── Health ───
 @app.get("/")
 def root():

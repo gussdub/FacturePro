@@ -791,8 +791,32 @@ class TestBalanceSheet:
         accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
         return {a["account_number"]: a for a in accounts}
 
+    def _unexplained_imbalance(self, bs):
+        # [COMPTA] Invariant robuste à l'org partagée (mêmes contraintes que
+        # TestTrialBalance) : la vraie base gussdub contient déjà une ligne posted
+        # ORPHELINE (account_id hors chart, Dr 30) laissée par des tests/migrations
+        # antérieurs, ce qui fait balanced=False EN ABSOLU. L'endpoint expose cet
+        # orphelin dans `unmapped_accounts`. Un ledger sain SUR LE CHART est équilibré
+        # (Actif = Passif + CP) ; tout écart résiduel doit être ENTIÈREMENT expliqué
+        # par les orphelins non mappés : total_assets - total_liab_and_equity ==
+        # -(Σ unmapped_debit - unmapped_credit). L'orphelin est un débit qui n'entre
+        # pas dans total_assets (absent du chart), donc l'actif est « court » du même
+        # montant → l'écart est le négatif du débit net orphelin. Cette fonction
+        # renvoie l'imbalance NON expliquée par les orphelins ; elle doit être ~0
+        # sur un jeu d'écritures équilibrées, indépendamment de l'état préexistant.
+        diff = round(bs["total_assets"] - bs["total_liabilities_and_equity"], 2)
+        net_unmapped = round(sum(u["debit"] - u["credit"]
+                                 for u in bs["unmapped_accounts"]), 2)
+        return round(diff + net_unmapped, 2)
+
     def test_balance_sheet_balanced_after_contribution(self, client, owner_headers):
-        # apport 4000 : Dr Encaisse (actif) / Cr Apport (CP) → Actif = CP
+        # apport 4000 : Dr Encaisse (actif) / Cr Apport (CP) → Actif = CP.
+        # On mesure le DELTA introduit par CETTE écriture et on vérifie l'invariant
+        # comptable (imbalance résiduel après retrait des orphelins == 0), plutôt
+        # que balanced=True en absolu (fragile face à l'orphelin préexistant).
+        before = client.get("/api/ledger/balance-sheet?as_of=2026-12-31",
+                            headers=owner_headers).json()
+        assert self._unexplained_imbalance(before) == 0.0
         r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
             "amount": 4000.0, "date": "2026-03-01",
         })
@@ -800,15 +824,21 @@ class TestBalanceSheet:
         try:
             bs = client.get("/api/ledger/balance-sheet?as_of=2026-12-31",
                             headers=owner_headers).json()
-            assert bs["balanced"] is True
-            assert round(bs["total_assets"], 2) == round(
-                bs["total_liabilities_and_equity"], 2)
+            # L'apport (Dr actif / Cr CP, tous deux dans le chart) reste équilibré :
+            # aucun nouvel écart inexpliqué, et les deux totaux montent de +4000.
+            assert self._unexplained_imbalance(bs) == 0.0
+            assert round(bs["total_assets"] - before["total_assets"], 2) == 4000.0
+            assert round(bs["total_liabilities_and_equity"]
+                         - before["total_liabilities_and_equity"], 2) == 4000.0
         finally:
             client.post(f"/api/ledger/entries/{contrib_id}/reverse",
                         headers=owner_headers, json={})
 
     def test_net_income_current_year_reflected(self, client, owner_headers):
         by_num = self._accounts(client, owner_headers)
+        before = client.get("/api/ledger/balance-sheet?as_of=2026-12-31",
+                            headers=owner_headers).json()
+        ni_before = before["equity"]["net_income_current_year"]
         # revenu 1000 : Dr Encaisse / Cr Revenus → net income +1000
         r = client.post("/api/ledger/entries", headers=owner_headers, json={
             "entry_date": "2026-04-01", "description": "Vente", "status": "posted",
@@ -821,8 +851,105 @@ class TestBalanceSheet:
         try:
             bs = client.get("/api/ledger/balance-sheet?as_of=2026-12-31",
                             headers=owner_headers).json()
-            assert bs["equity"]["net_income_current_year"] >= 1000.0
-            assert bs["balanced"] is True
+            # DELTA du résultat net dérivé = +1000 (revenu de l'exercice courant).
+            assert round(bs["equity"]["net_income_current_year"] - ni_before, 2) == 1000.0
+            # L'écriture est équilibrée dans le chart → aucun écart inexpliqué
+            # supplémentaire (invariant robuste à l'orphelin préexistant).
+            assert self._unexplained_imbalance(bs) == 0.0
         finally:
             client.post(f"/api/ledger/entries/{entry_id}/reverse",
                         headers=owner_headers, json={})
+
+
+class TestGeneralLedgerDetail:
+    def _accounts(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        return {a["account_number"]: a for a in accounts}
+
+    def _get_or_create_asset(self, client, owner_headers, acc_num):
+        """Récupère (ou crée) un compte d'actif dédié au test, garanti ACTIF. La
+        base de dev est une copie restaurée de prod et le module tourne plusieurs
+        fois : le compte peut déjà exister (409) avec des écritures, voire inactivé
+        par un run précédent — on le réutilise et on le réactive au besoin (une
+        écriture ne peut viser qu'un compte actif), ce qui rend le test idempotent."""
+        def _ensure_active(acc):
+            if not acc.get("is_active", True):
+                client.put(f"/api/ledger/accounts/{acc['id']}",
+                           headers=owner_headers, json={"is_active": True})
+            return acc["id"]
+
+        by_num = self._accounts(client, owner_headers)
+        if acc_num in by_num:
+            return _ensure_active(by_num[acc_num])
+        cr = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": acc_num, "name": "Compte test grand livre",
+            "sub_type": "current_asset",
+        })
+        if cr.status_code == 409:
+            # créé en parallèle / reliquat → relire et garantir actif
+            return _ensure_active(self._accounts(client, owner_headers)[acc_num])
+        assert cr.status_code == 201, cr.text
+        assert cr.json()["normal_balance"] == "debit"  # actif → débiteur
+        return cr.json()["id"]
+
+    def test_running_balance_progression(self, client, owner_headers):
+        # [COMPTA] Le solde progressif d'un compte débiteur croît de `debit` à
+        # chaque ligne de débit, dans l'ordre chronologique. La base dev est une
+        # copie restaurée de prod ET le module peut re-tourner (données rémanentes),
+        # donc on garantit l'isolation par une FENÊTRE DE DATES UNIQUE PAR RUN
+        # (année 2099+, dérivée d'un timestamp) : aucune écriture antérieure ni
+        # d'un run précédent ne peut y tomber. Dans cette fenêtre pristine, nos 2
+        # débits (100 puis 250) sont les SEULS mouvements → opening=0, solde
+        # progressif = [100, 350], closing=350. Contre-passations datées HORS
+        # fenêtre pour ne pas polluer un run ultérieur.
+        by_num = self._accounts(client, owner_headers)
+        test_acc_id = self._get_or_create_asset(client, owner_headers, "1590")
+
+        # Fenêtre unique : un jour distinct par exécution évite toute collision
+        # avec des reliquats de run précédent (mêmes dates → running faussé).
+        uniq = 2099 + (int(datetime.now(timezone.utc).timestamp()) % 800)
+        d1 = f"{uniq}-03-05"
+        d2 = f"{uniq}-03-12"
+        win_start = f"{uniq}-03-01"
+        win_end = f"{uniq}-03-31"
+        # date de contre-passation HORS de la fenêtre interrogée
+        rev_date = f"{uniq}-06-30"
+
+        ids = []
+        for amt, day in [(100.0, d1), (250.0, d2)]:
+            r = client.post("/api/ledger/entries", headers=owner_headers, json={
+                "entry_date": day, "description": f"Mvt {amt}",
+                "status": "posted",
+                "lines": [
+                    {"account_id": test_acc_id, "debit": amt, "credit": 0},
+                    {"account_id": by_num["4000"]["id"], "debit": 0, "credit": amt},
+                ],
+            })
+            assert r.status_code == 201, r.text
+            ids.append(r.json()["id"])
+        try:
+            gl = client.get(
+                f"/api/ledger/general-ledger?account_id={test_acc_id}"
+                f"&start={win_start}&end={win_end}", headers=owner_headers).json()
+            assert gl["account"]["account_number"] == "1590"
+            # Fenêtre pristine : aucun mouvement antérieur → opening 0.
+            assert gl["opening_balance"] == 0.0
+            # Exactement nos 2 lignes, dans l'ordre chronologique.
+            assert len(gl["lines"]) == 2
+            assert gl["lines"][0]["entry_id"] == ids[0]
+            assert gl["lines"][1]["entry_id"] == ids[1]
+            balances = [ln["running_balance"] for ln in gl["lines"]]
+            # solde progressif croissant sur ces 2 débits (compte débiteur)
+            assert balances == [100.0, 350.0]
+            assert balances == sorted(balances)
+            assert gl["closing_balance"] == 350.0
+            assert gl["closing_balance"] >= gl["opening_balance"]
+        finally:
+            for eid in ids:
+                client.post(f"/api/ledger/entries/{eid}/reverse",
+                            headers=owner_headers, json={"entry_date": rev_date})
+
+    def test_unknown_account_404(self, client, owner_headers):
+        r = client.get(f"/api/ledger/general-ledger?account_id={uuid.uuid4()}",
+                       headers=owner_headers)
+        assert r.status_code == 404
