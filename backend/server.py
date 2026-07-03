@@ -1350,6 +1350,125 @@ _ORG_SCOPED_COLLECTIONS = [
 ]
 
 
+# ─── Grand livre — comptabilité en partie double (feature #12) ───
+
+ACCOUNT_TYPES = ["asset", "liability", "equity", "revenue", "expense"]
+
+ACCOUNT_NUMBER_RANGES = {
+    "asset":     (1000, 1999),
+    "liability": (2000, 2999),
+    "equity":    (3000, 3999),
+    "revenue":   (4000, 4999),
+    "expense":   (5000, 5999),
+}
+
+_NORMAL_BALANCE_BY_TYPE = {
+    "asset": "debit",
+    "liability": "credit",
+    "equity": "credit",
+    "revenue": "credit",
+    "expense": "debit",
+}
+
+
+def _normal_balance_for_type(account_type: str) -> str:
+    """Solde normal dérivé du type de compte (§3.1 spec)."""
+    return _NORMAL_BALANCE_BY_TYPE.get(account_type, "debit")
+
+
+def _account_type_for_number(account_number) -> str:
+    """Déduit le type de compte à partir de la plage du numéro (§ décision #4).
+    Retourne None si hors des plages canoniques 1000-5999."""
+    try:
+        n = int(str(account_number))
+    except (TypeError, ValueError):
+        return None
+    for account_type, (lo, hi) in ACCOUNT_NUMBER_RANGES.items():
+        if lo <= n <= hi:
+            return account_type
+    return None
+
+
+# 12 comptes de base (is_system=true) — société canadienne QC (§4.1)
+DEFAULT_BASE_ACCOUNTS = [
+    {"account_number": "1000", "name": "Encaisse",                 "sub_type": "current_asset"},
+    {"account_number": "1100", "name": "Comptes clients",          "sub_type": "current_asset"},
+    {"account_number": "1200", "name": "TPS à recouvrer",          "sub_type": "tax_recoverable"},
+    {"account_number": "1210", "name": "TVQ à recouvrer",          "sub_type": "tax_recoverable"},
+    {"account_number": "2000", "name": "Comptes fournisseurs",     "sub_type": "current_liability"},
+    {"account_number": "2100", "name": "TPS à payer",              "sub_type": "tax_payable"},
+    {"account_number": "2110", "name": "TVQ à payer",              "sub_type": "tax_payable"},
+    {"account_number": "3000", "name": "Capital-actions",          "sub_type": "share_capital"},
+    {"account_number": "3100", "name": "Apport du propriétaire",   "sub_type": "contributed_capital"},
+    {"account_number": "3200", "name": "Bénéfices non répartis",   "sub_type": "retained_earnings"},
+    {"account_number": "4000", "name": "Revenus de services",      "sub_type": "operating_revenue"},
+    {"account_number": "5900", "name": "Dépenses diverses",        "sub_type": "operating_expense"},
+]
+
+# Numérotation des comptes de dépenses par catégorie ARC (§4.2).
+# "other" est couvert par 5900 (Dépenses diverses) ci-dessus.
+EXPENSE_ACCOUNT_NUMBERS = {
+    "office_expenses":     "5000",
+    "office_supplies":     "5010",
+    "professional_fees":   "5020",
+    "bank_charges":        "5030",
+    "subscriptions":       "5040",
+    "advertising":         "5100",
+    "meals_entertainment": "5110",
+    "rent":                "5200",
+    "utilities":           "5210",
+    "insurance":           "5220",
+    "repairs_maintenance": "5230",
+    "travel":              "5300",
+    "vehicle_expenses":    "5310",
+    "delivery":            "5320",
+    "salaries":            "5400",
+    "subcontracts":        "5410",
+    "management_fees":     "5420",
+}
+
+
+def _build_default_accounts(organization_id: str, user_id: str) -> list:
+    """Retourne les 29 comptes du plan par défaut (12 base + 17 dépenses),
+    scopés org, is_system=true. Comptes de dépenses générés depuis
+    EXPENSE_CATEGORIES (§4.3) pour rester synchronisés avec la feature #3."""
+    now = datetime.now(timezone.utc).isoformat()
+    accounts = []
+
+    def _make(account_number, name, sub_type, expense_category_code=None):
+        account_type = _account_type_for_number(account_number)
+        return {
+            "id": str(uuid.uuid4()),
+            "organization_id": organization_id,
+            "created_by_user_id": user_id,
+            "account_number": account_number,
+            "name": name,
+            "account_type": account_type,
+            "sub_type": sub_type,
+            "normal_balance": _normal_balance_for_type(account_type),
+            "is_active": True,
+            "is_system": True,
+            "expense_category_code": expense_category_code,
+            "description": "",
+            "created_at": now,
+        }
+
+    for base in DEFAULT_BASE_ACCOUNTS:
+        accounts.append(_make(base["account_number"], base["name"], base["sub_type"]))
+
+    for cat in EXPENSE_CATEGORIES:
+        code = cat["code"]
+        if code == "other":
+            continue  # couvert par 5900
+        number = EXPENSE_ACCOUNT_NUMBERS.get(code)
+        if not number:
+            continue
+        accounts.append(_make(number, cat["label_fr"], "operating_expense",
+                              expense_category_code=code))
+
+    return accounts
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.
