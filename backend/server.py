@@ -1561,7 +1561,10 @@ def migrate_organizations_v1():
 def migrate_general_ledger_v1():
     """Idempotente. Safe à chaque boot (feature #12).
     1. Backfill des champs fiscaux sur company_settings (défaut 31 déc.).
-    2. Backfill accounting:read/write dans role_permissions des orgs existantes.
+    2. Backfill accounting:read/write dans role_permissions des orgs existantes,
+       one-shot par org (flag persisté `ledger_perms_backfilled`, spec §8.2) :
+       ne s'exécute qu'au 1er passage, pour ne pas ré-imposer une perm qu'un
+       owner aurait volontairement retirée après coup.
     3. Indexes des nouvelles collections.
     Le plan comptable par défaut est seedé au 1er accès GL (lazy, PAS ici)."""
     # 1. Champs fiscaux — n'écrase jamais une valeur existante
@@ -1574,22 +1577,29 @@ def migrate_general_ledger_v1():
         {"$set": {"fiscal_year_end_day": 31}}
     )
     # 2. Backfill perms accounting (accountant → read+write ; viewer → read)
-    for org in db.organizations.find({}, {"id": 1, "role_permissions": 1}):
+    # One-shot par org via flag persisté `ledger_perms_backfilled` (spec §8.2).
+    # On ne backfill QUE les orgs qui n'ont jamais eu le flag, puis on le pose.
+    # Ainsi un owner qui retire volontairement accounting:* d'un rôle ensuite
+    # (via PUT /api/org/role-permissions) ne se le voit PAS ré-accordé au boot suivant.
+    for org in db.organizations.find(
+        {"ledger_perms_backfilled": {"$ne": True}},
+        {"id": 1, "role_permissions": 1},
+    ):
         rp = org.get("role_permissions") or {}
-        changed = False
         acc = set(rp.get("accountant", []))
         if "accounting:read" not in acc or "accounting:write" not in acc:
             acc.update({"accounting:read", "accounting:write"})
             rp["accountant"] = sorted(acc)
-            changed = True
         vw = set(rp.get("viewer", []))
         if "accounting:read" not in vw:
             vw.add("accounting:read")
             rp["viewer"] = sorted(vw)
-            changed = True
-        if changed:
-            db.organizations.update_one({"id": org["id"]},
-                                        {"$set": {"role_permissions": rp}})
+        # Pose le flag one-shot même si rien n'a changé : le backfill ne doit
+        # tourner qu'une seule fois par org, indépendamment de l'état des perms.
+        db.organizations.update_one(
+            {"id": org["id"]},
+            {"$set": {"role_permissions": rp, "ledger_perms_backfilled": True}},
+        )
     # 3. Indexes idempotents
     db.chart_of_accounts.create_index(
         [("organization_id", 1), ("account_number", 1)], unique=True)

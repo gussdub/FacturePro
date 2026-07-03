@@ -199,3 +199,50 @@ class TestMigrateGeneralLedgerV1:
             assert cs["fiscal_year_end_month"] == 3  # respecté
         finally:
             self._cleanup(org_id)
+
+    def test_sets_one_shot_flag(self):
+        # Le 1er passage pose le flag persisté `ledger_perms_backfilled` (spec §8.2).
+        org_id = self._make_org_and_settings()
+        try:
+            migrate_general_ledger_v1()
+            org = server_db.organizations.find_one({"id": org_id})
+            assert org.get("ledger_perms_backfilled") is True
+        finally:
+            self._cleanup(org_id)
+
+    def test_owner_removal_not_reimposed_on_reboot(self):
+        # Régression : après le 1er backfill, un owner retire volontairement
+        # accounting:* d'un rôle. Un boot suivant (re-run de la migration) NE
+        # doit PAS le ré-accorder, car le flag one-shot est déjà posé (spec §8.2).
+        org_id = self._make_org_and_settings()
+        try:
+            migrate_general_ledger_v1()  # 1er passage : perms ajoutées + flag posé
+            # L'owner retire volontairement accounting:* du comptable et du lecteur.
+            server_db.organizations.update_one(
+                {"id": org_id},
+                {"$set": {"role_permissions": {"accountant": [], "viewer": []}}},
+            )
+            migrate_general_ledger_v1()  # reboot : ne doit rien ré-imposer
+            org = server_db.organizations.find_one({"id": org_id})
+            rp = org["role_permissions"]
+            assert "accounting:read" not in rp["accountant"]
+            assert "accounting:write" not in rp["accountant"]
+            assert "accounting:read" not in rp["viewer"]
+        finally:
+            self._cleanup(org_id)
+
+    def test_flag_skips_already_backfilled_org(self):
+        # Une org qui a déjà le flag (jamais touchée par le backfill) garde ses
+        # perms telles quelles même vides — le backfill la saute entièrement.
+        org_id = self._make_org_and_settings()
+        server_db.organizations.update_one(
+            {"id": org_id}, {"$set": {"ledger_perms_backfilled": True}}
+        )
+        try:
+            migrate_general_ledger_v1()
+            org = server_db.organizations.find_one({"id": org_id})
+            rp = org["role_permissions"]
+            assert rp["accountant"] == []
+            assert rp["viewer"] == []
+        finally:
+            self._cleanup(org_id)
