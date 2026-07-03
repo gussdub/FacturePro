@@ -482,6 +482,196 @@ function ContributionTab() {
   );
 }
 
+async function downloadPdf(url, filename) {
+  const resp = await axios.get(url, { responseType: 'blob' });
+  const blobUrl = window.URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' }));
+  const a = document.createElement('a');
+  a.href = blobUrl; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
+
+function TrialBalanceTab() {
+  const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
+  const [data, setData] = useState(null);
+  const load = () => axios.get(`${BACKEND_URL}/api/ledger/trial-balance?as_of=${asOf}`)
+    .then(r => setData(r.data)).catch(() => {});
+  useEffect(() => { load(); }, [asOf]);
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+        <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)}
+               style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} />
+        <button onClick={() => downloadPdf(
+          `${BACKEND_URL}/api/ledger/trial-balance/pdf?as_of=${asOf}`,
+          `balance-verification-${asOf}.pdf`)} style={{
+          background: '#00A08C', color: '#fff', border: 'none', padding: '6px 14px',
+          borderRadius: 6, cursor: 'pointer' }}>Télécharger PDF</button>
+        {data && (
+          <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 13,
+            background: data.balanced ? '#ecfdf5' : '#fef2f2',
+            color: data.balanced ? '#059669' : '#dc2626' }}>
+            {data.balanced ? 'Équilibrée' : 'Déséquilibrée'}</span>
+        )}
+      </div>
+      {data && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+          <thead><tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+            <th style={{ padding: 8 }}>Compte</th>
+            <th style={{ padding: 8, textAlign: 'right' }}>Débit</th>
+            <th style={{ padding: 8, textAlign: 'right' }}>Crédit</th></tr></thead>
+          <tbody>
+            {data.accounts.map(a => (
+              <tr key={a.account_number} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                <td style={{ padding: 8 }}>{a.account_number} — {a.name}</td>
+                <td style={{ padding: 8, textAlign: 'right' }}>
+                  {a.debit_balance ? a.debit_balance.toFixed(2) + ' $' : ''}</td>
+                <td style={{ padding: 8, textAlign: 'right' }}>
+                  {a.credit_balance ? a.credit_balance.toFixed(2) + ' $' : ''}</td>
+              </tr>
+            ))}
+            <tr style={{ fontWeight: 700, borderTop: '2px solid #1f2937' }}>
+              <td style={{ padding: 8 }}>Total</td>
+              <td style={{ padding: 8, textAlign: 'right' }}>{data.total_debit.toFixed(2)} $</td>
+              <td style={{ padding: 8, textAlign: 'right' }}>{data.total_credit.toFixed(2)} $</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function BalanceSheetTab() {
+  const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
+  const [data, setData] = useState(null);
+  const load = () => axios.get(`${BACKEND_URL}/api/ledger/balance-sheet?as_of=${asOf}`)
+    .then(r => setData(r.data)).catch(() => {});
+  useEffect(() => { load(); }, [asOf]);
+  const Section = ({ title, rows, total }) => (
+    <div style={{ marginBottom: 16 }}>
+      <h3 style={{ fontSize: 15, borderBottom: '1px solid #e5e7eb', paddingBottom: 4 }}>{title}</h3>
+      {rows.map(r => (
+        <div key={r.account_number} style={{ display: 'flex', justifyContent: 'space-between',
+          padding: '4px 0', fontSize: 14 }}>
+          <span>{r.account_number} — {r.name}</span><span>{r.balance.toFixed(2)} $</span>
+        </div>
+      ))}
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700,
+        borderTop: '1px solid #1f2937', paddingTop: 4, marginTop: 4 }}>
+        <span>Total</span><span>{total.toFixed(2)} $</span></div>
+    </div>
+  );
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+        <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)}
+               style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} />
+        <button onClick={() => downloadPdf(
+          `${BACKEND_URL}/api/ledger/balance-sheet/pdf?as_of=${asOf}`, `bilan-${asOf}.pdf`)}
+          style={{ background: '#00A08C', color: '#fff', border: 'none', padding: '6px 14px',
+            borderRadius: 6, cursor: 'pointer' }}>Télécharger PDF</button>
+        {data && (
+          <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 13,
+            background: data.balanced ? '#ecfdf5' : '#fef2f2',
+            color: data.balanced ? '#059669' : '#dc2626' }}>
+            {data.balanced ? 'Équilibré' : 'Déséquilibré'}</span>
+        )}
+      </div>
+      {data && (
+        <>
+          <Section title="Actif" rows={data.assets.accounts} total={data.assets.total} />
+          <Section title="Passif" rows={data.liabilities.accounts} total={data.liabilities.total} />
+          <div style={{ marginBottom: 16 }}>
+            <h3 style={{ fontSize: 15, borderBottom: '1px solid #e5e7eb', paddingBottom: 4 }}>
+              Capitaux propres</h3>
+            {data.equity.accounts.map(r => (
+              <div key={r.account_number} style={{ display: 'flex',
+                justifyContent: 'space-between', padding: '4px 0', fontSize: 14 }}>
+                <span>{r.account_number} — {r.name}</span><span>{r.balance.toFixed(2)} $</span>
+              </div>
+            ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0',
+              fontSize: 14, fontStyle: 'italic' }}>
+              <span>Résultat net de l'exercice</span>
+              <span>{data.equity.net_income_current_year.toFixed(2)} $</span></div>
+            {/* Note Clôture annuelle (spec §7.2.1) */}
+            <div style={{ background: '#FEF3C7', border: '1px solid #F59E0B',
+              borderRadius: 6, padding: '8px 12px', marginTop: 8, fontSize: 12,
+              color: '#92400E' }}>
+              « Résultat net de l'exercice » est <strong>dérivé</strong> de l'exercice
+              courant. La <strong>clôture annuelle</strong> (virement vers Bénéfices non
+              répartis 3200) doit être passée manuellement <strong>à ou après la fin
+              d'exercice</strong>, jamais en cours d'exercice. Sans elle, le bilan de
+              l'exercice suivant sera <strong>déséquilibré</strong>.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700,
+              borderTop: '1px solid #1f2937', paddingTop: 4, marginTop: 4 }}>
+              <span>Total capitaux propres</span><span>{data.equity.total.toFixed(2)} $</span></div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700,
+            fontSize: 15, borderTop: '2px solid #1f2937', paddingTop: 8 }}>
+            <span>Total passif + capitaux propres</span>
+            <span>{data.total_liabilities_and_equity.toFixed(2)} $</span></div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LedgerDetailTab() {
+  const [accounts, setAccounts] = useState([]);
+  const [accountId, setAccountId] = useState('');
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/ledger/accounts?active=true`)
+      .then(r => setAccounts(r.data)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!accountId) { setData(null); return; }
+    axios.get(`${BACKEND_URL}/api/ledger/general-ledger?account_id=${accountId}`)
+      .then(r => setData(r.data)).catch(() => {});
+  }, [accountId]);
+  return (
+    <div>
+      <select value={accountId} onChange={e => setAccountId(e.target.value)}
+              style={{ padding: 8, marginBottom: 16, border: '1px solid #d1d5db', borderRadius: 6 }}>
+        <option value="">— choisir un compte —</option>
+        {accounts.map(a => (
+          <option key={a.id} value={a.id}>{a.account_number} — {a.name}</option>
+        ))}
+      </select>
+      {data && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+          <thead><tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+            <th style={{ padding: 8 }}>Date</th><th style={{ padding: 8 }}>N°</th>
+            <th style={{ padding: 8 }}>Description</th>
+            <th style={{ padding: 8, textAlign: 'right' }}>Débit</th>
+            <th style={{ padding: 8, textAlign: 'right' }}>Crédit</th>
+            <th style={{ padding: 8, textAlign: 'right' }}>Solde</th></tr></thead>
+          <tbody>
+            <tr><td colSpan={5} style={{ padding: 8, fontStyle: 'italic' }}>Solde d'ouverture</td>
+              <td style={{ padding: 8, textAlign: 'right' }}>{data.opening_balance.toFixed(2)} $</td></tr>
+            {data.lines.map((ln, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                <td style={{ padding: 8 }}>{ln.entry_date}</td>
+                <td style={{ padding: 8, fontFamily: 'monospace' }}>{ln.entry_number}</td>
+                <td style={{ padding: 8 }}>{ln.description}</td>
+                <td style={{ padding: 8, textAlign: 'right' }}>{ln.debit ? ln.debit.toFixed(2) + ' $' : ''}</td>
+                <td style={{ padding: 8, textAlign: 'right' }}>{ln.credit ? ln.credit.toFixed(2) + ' $' : ''}</td>
+                <td style={{ padding: 8, textAlign: 'right' }}>{ln.running_balance.toFixed(2)} $</td>
+              </tr>
+            ))}
+            <tr style={{ fontWeight: 700, borderTop: '2px solid #1f2937' }}>
+              <td colSpan={5} style={{ padding: 8 }}>Solde de clôture</td>
+              <td style={{ padding: 8, textAlign: 'right' }}>{data.closing_balance.toFixed(2)} $</td></tr>
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 export default function LedgerPage() {
   const [tab, setTab] = useState('accounts');
   return (
@@ -504,6 +694,9 @@ export default function LedgerPage() {
         {tab === 'journal' && <JournalTab />}
         {tab === 'opening' && <OpeningTab />}
         {tab === 'contribution' && <ContributionTab />}
+        {tab === 'ledger' && <LedgerDetailTab />}
+        {tab === 'trial' && <TrialBalanceTab />}
+        {tab === 'balancesheet' && <BalanceSheetTab />}
       </div>
     </div>
   );
