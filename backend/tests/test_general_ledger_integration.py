@@ -682,3 +682,42 @@ class TestOwnerContribution:
             "amount": -100.0, "date": "2026-06-20",
         })
         assert r.status_code == 400
+
+    def test_cash_override_must_be_asset(self, client, owner_headers):
+        # Concern #4 (review T8) : le formulaire guidé contraint cash → asset.
+        # Pointer cash_account_id vers un compte non-actif (ici 2000, liability)
+        # doit être refusé (400), même si l'écriture serait équilibrée.
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": 5000.0, "date": "2026-06-20",
+            "cash_account_id": by_num["2000"]["id"],  # Comptes fournisseurs = liability
+        })
+        assert r.status_code == 400, r.text
+        assert "asset" in r.text
+
+    def test_equity_override_must_be_equity(self, client, owner_headers):
+        # Concern #4 (review T8) : le formulaire guidé contraint equity → equity.
+        # Pointer equity_account_id vers un compte non-capitaux-propres (ici 1000,
+        # asset) doit être refusé (400).
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": 5000.0, "date": "2026-06-20",
+            "equity_account_id": by_num["1000"]["id"],  # Encaisse = asset
+        })
+        assert r.status_code == 400, r.text
+        assert "equity" in r.text
+
+    def test_equity_override_accepts_other_equity_account(self, client, owner_headers):
+        # Un override vers un AUTRE compte de capitaux propres (3200 BNR) reste
+        # accepté : la contrainte porte sur le type, pas sur le numéro exact.
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/owner-contribution", headers=owner_headers, json={
+            "amount": 1000.0, "date": "2026-06-20",
+            "equity_account_id": by_num["3200"]["id"],  # Bénéfices non répartis = equity
+        })
+        assert r.status_code == 201, r.text
+        by_line = {l["account_number"]: l for l in r.json()["lines"]}
+        assert by_line["1000"]["debit"] == 1000.0
+        assert by_line["3200"]["credit"] == 1000.0
+        client.post(f"/api/ledger/entries/{r.json()['id']}/reverse",
+                    headers=owner_headers, json={})
