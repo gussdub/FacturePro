@@ -1581,6 +1581,14 @@ def _validate_entry_balance(lines: list) -> None:
     for ln in lines:
         d = round(float(ln.get("debit", 0) or 0), 2)
         c = round(float(ln.get("credit", 0) or 0), 2)
+        # Rejette les valeurs non finies (inf/-inf/nan) AVANT tout contrôle
+        # d'équilibre. Sinon abs(inf-inf)=nan et nan>0.005 est False → l'écriture
+        # est réputée équilibrée et une ligne inf est persistée en status='posted',
+        # empoisonnant définitivement _account_balance (bilan/balance de vérif =
+        # inf/nan permanents). Point de convergence partagé par le journal manuel,
+        # l'ouverture, l'apport et la contre-passation (défense en profondeur).
+        if not math.isfinite(d) or not math.isfinite(c):
+            raise HTTPException(400, "Débit et crédit doivent être des montants finis")
         if d < 0 or c < 0:
             raise HTTPException(400, "Débit et crédit doivent être >= 0")
         if (d > 0) == (c > 0):
@@ -2907,6 +2915,12 @@ def owner_contribution(
         amount = round(float(body.get("amount", 0) or 0), 2)
     except (TypeError, ValueError):
         raise HTTPException(400, "Montant invalide")
+    # float('Infinity') / '1e400' sont des float valides : inf<=0 est False, donc
+    # le garde-fou amount<=0 ci-dessous les laisse passer. On les rejette ici avant
+    # de construire les lignes (défense au point d'entrée ; le filet _validate_entry_balance
+    # attrape aussi ce cas au point de convergence).
+    if not math.isfinite(amount):
+        raise HTTPException(400, "Le montant doit être un nombre fini")
     if amount <= 0:
         raise HTTPException(400, "Le montant doit être supérieur à 0")
 

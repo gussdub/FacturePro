@@ -429,6 +429,24 @@ class TestValidateEntryBalance:
             {"debit": 0.0, "credit": 100.0},
         ])
 
+    def test_infinite_debit_credit_rejected(self):
+        # Régression T8 : une paire inf/inf est "équilibrée" au sens abs(inf-inf)=nan,
+        # nan>0.005 est False → sans garde-fou math.isfinite, l'écriture passait et
+        # empoisonnait _account_balance de façon permanente. Doit lever 400.
+        for lines in (
+            [{"debit": float("inf"), "credit": 0.0},
+             {"debit": 0.0, "credit": float("inf")}],
+            [{"debit": float("-inf"), "credit": 0.0},
+             {"debit": 0.0, "credit": float("-inf")}],
+            [{"debit": float("nan"), "credit": 0.0},
+             {"debit": 0.0, "credit": float("nan")}],
+            [{"debit": float("inf"), "credit": 0.0},
+             {"debit": 0.0, "credit": 100.0}],
+        ):
+            with pytest.raises(_HTTPExc) as e:
+                _validate_entry_balance(lines)
+            assert e.value.status_code == 400
+
 
 class TestAccountBalance:
     """Garde-fou de régression pour _account_balance — la fonction qui alimente
