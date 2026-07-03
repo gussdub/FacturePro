@@ -1205,6 +1205,7 @@ PERMISSIONS_EDITABLE = [
     "bank:read",       "bank:write",
     "receipts:scan",
     "settings:read",   "settings:write",  # infos entreprise, num fiscaux, province, %
+    "accounting:read", "accounting:write",  # feature #12 — grand livre
 ]
 
 PERMISSIONS_OWNER_ONLY = [
@@ -1218,6 +1219,7 @@ DEFAULT_ROLE_PERMISSIONS = {
         "expenses:read", "invoices:read", "quotes:read",
         "clients:read", "products:read", "employees:read",
         "reports:read", "bank:read", "settings:read",
+        "accounting:read",
     ],
 }
 
@@ -1528,6 +1530,13 @@ def migrate_organizations_v1():
         viewer = list(rp.get("viewer", []))
         if "settings:read" not in viewer:
             viewer.append("settings:read"); changed = True
+        # Feature #12 — accounting:read/write (comptable) ; accounting:read (lecteur).
+        # N'ajoute que si absent (respecte les personnalisations owner comme le backfill settings).
+        for p in ("accounting:read", "accounting:write"):
+            if p not in acc:
+                acc.append(p); changed = True
+        if "accounting:read" not in viewer:
+            viewer.append("accounting:read"); changed = True
         if changed:
             rp["accountant"] = acc
             rp["viewer"] = viewer

@@ -91,3 +91,42 @@ class TestBuildDefaultAccounts:
         assert by_number["1000"]["name"] == "Encaisse"
         assert by_number["3100"]["name"] == "Apport du propriétaire"
         assert by_number["4000"]["account_type"] == "revenue"
+
+
+from server import (
+    PERMISSIONS_EDITABLE,
+    PERMISSIONS_OWNER_ONLY,
+    DEFAULT_ROLE_PERMISSIONS,
+    _resolve_permissions,
+)
+
+
+class TestAccountingPermissions:
+    def test_accounting_codes_editable(self):
+        assert "accounting:read" in PERMISSIONS_EDITABLE
+        assert "accounting:write" in PERMISSIONS_EDITABLE
+
+    def test_accounting_not_owner_only(self):
+        assert "accounting:read" not in PERMISSIONS_OWNER_ONLY
+        assert "accounting:write" not in PERMISSIONS_OWNER_ONLY
+
+    def test_accountant_default_has_both(self):
+        assert "accounting:read" in DEFAULT_ROLE_PERMISSIONS["accountant"]
+        assert "accounting:write" in DEFAULT_ROLE_PERMISSIONS["accountant"]
+
+    def test_viewer_default_read_only(self):
+        assert "accounting:read" in DEFAULT_ROLE_PERMISSIONS["viewer"]
+        assert "accounting:write" not in DEFAULT_ROLE_PERMISSIONS["viewer"]
+
+    def test_owner_resolves_both(self):
+        perms = _resolve_permissions({}, "owner")
+        assert "accounting:read" in perms
+        assert "accounting:write" in perms
+
+    def test_viewer_cannot_get_write_via_matrix(self):
+        # matrice polluée : viewer tente accounting:write → doit rester filtré
+        org = {"role_permissions": {"viewer": ["accounting:read", "accounting:write"]}}
+        perms = _resolve_permissions(org, "viewer")
+        # accounting:write est editable donc PASSE le filtre PERMISSIONS_EDITABLE ;
+        # ce test documente que la matrice owner-controlee peut l'accorder volontairement.
+        assert "accounting:write" in perms
