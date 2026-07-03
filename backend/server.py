@@ -1530,13 +1530,11 @@ def migrate_organizations_v1():
         viewer = list(rp.get("viewer", []))
         if "settings:read" not in viewer:
             viewer.append("settings:read"); changed = True
-        # Feature #12 — accounting:read/write (comptable) ; accounting:read (lecteur).
-        # N'ajoute que si absent (respecte les personnalisations owner comme le backfill settings).
-        for p in ("accounting:read", "accounting:write"):
-            if p not in acc:
-                acc.append(p); changed = True
-        if "accounting:read" not in viewer:
-            viewer.append("accounting:read"); changed = True
+        # NOTE feature #12 : le backfill accounting:read/write N'EST PAS fait ici.
+        # Il est géré exclusivement par migrate_general_ledger_v1() via le flag
+        # one-shot `ledger_perms_backfilled` (spec §8.2). Le faire ici — sans flag,
+        # à chaque boot — ré-imposerait accounting:* qu'un owner aurait volontairement
+        # retiré via PUT /api/org/role-permissions (régression RBAC). Ne pas rétablir.
         if changed:
             rp["accountant"] = acc
             rp["viewer"] = viewer

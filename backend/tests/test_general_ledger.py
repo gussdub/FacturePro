@@ -133,7 +133,11 @@ class TestAccountingPermissions:
         assert "accounting:write" in perms
 
 
-from server import migrate_general_ledger_v1, db as server_db
+from server import (
+    migrate_general_ledger_v1,
+    migrate_organizations_v1,
+    db as server_db,
+)
 
 
 class TestMigrateGeneralLedgerV1:
@@ -212,17 +216,53 @@ class TestMigrateGeneralLedgerV1:
 
     def test_owner_removal_not_reimposed_on_reboot(self):
         # Régression : après le 1er backfill, un owner retire volontairement
-        # accounting:* d'un rôle. Un boot suivant (re-run de la migration) NE
-        # doit PAS le ré-accorder, car le flag one-shot est déjà posé (spec §8.2).
+        # accounting:* d'un rôle. Un boot suivant NE doit PAS le ré-accorder.
+        #
+        # IMPORTANT : ce test enchaîne migrate_organizations_v1() PUIS
+        # migrate_general_ledger_v1() dans l'ordre réel du startup
+        # (server.py:5777 puis 5780). C'est indispensable : migrate_organizations_v1
+        # tourne EN PREMIER à chaque boot, et un backfill accounting inconditionnel
+        # y ré-imposerait la perm en contournant le flag one-shot de
+        # migrate_general_ledger_v1. Tester la GL en isolation masquait la régression.
         org_id = self._make_org_and_settings()
         try:
-            migrate_general_ledger_v1()  # 1er passage : perms ajoutées + flag posé
+            # 1er boot : les deux migrations tournent, perms ajoutées + flag posé.
+            migrate_organizations_v1()
+            migrate_general_ledger_v1()
             # L'owner retire volontairement accounting:* du comptable et du lecteur.
             server_db.organizations.update_one(
                 {"id": org_id},
                 {"$set": {"role_permissions": {"accountant": [], "viewer": []}}},
             )
-            migrate_general_ledger_v1()  # reboot : ne doit rien ré-imposer
+            # Reboot : ordre réel du seed_data. Ni l'une ni l'autre ne doit
+            # ré-imposer accounting:* (flag one-shot déjà posé + plus de backfill
+            # accounting inconditionnel dans migrate_organizations_v1).
+            migrate_organizations_v1()
+            migrate_general_ledger_v1()
+            org = server_db.organizations.find_one({"id": org_id})
+            rp = org["role_permissions"]
+            assert "accounting:read" not in rp["accountant"]
+            assert "accounting:write" not in rp["accountant"]
+            assert "accounting:read" not in rp["viewer"]
+        finally:
+            self._cleanup(org_id)
+
+    def test_organizations_migration_does_not_reimpose_accounting_on_reboot(self):
+        # Cible directement la cause racine du review : migrate_organizations_v1()
+        # (qui tourne en premier au boot) NE doit PAS ré-ajouter accounting:* à une
+        # org déjà backfillée dont l'owner a retiré la perm. Sans le fix, ce backfill
+        # jumeau inconditionnel réintroduisait accounting:read/write et accounting:read.
+        org_id = self._make_org_and_settings()
+        try:
+            # Org déjà passée par le backfill GL (flag posé), owner a tout retiré.
+            server_db.organizations.update_one(
+                {"id": org_id},
+                {"$set": {
+                    "ledger_perms_backfilled": True,
+                    "role_permissions": {"accountant": [], "viewer": []},
+                }},
+            )
+            migrate_organizations_v1()  # tourne en premier au boot — ne doit rien re-imposer
             org = server_db.organizations.find_one({"id": org_id})
             rp = org["role_permissions"]
             assert "accounting:read" not in rp["accountant"]
