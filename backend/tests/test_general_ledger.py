@@ -333,6 +333,58 @@ class TestRequireEntryDate:
             assert e.value.status_code == 400, bad
 
 
+class TestSnapshotLinesActiveGuard:
+    """_snapshot_lines refuse un compte inactif/introuvable (spec §4 invariant,
+    lignes 132/334). Re-exécuté au POST, il empêche qu'un brouillon créé avec un
+    compte actif puis désactivé se fige en référençant un compte inactif."""
+
+    def _org(self):
+        return f"gl-snap-{uuid.uuid4().hex[:8]}"
+
+    def _insert_account(self, org_id, account_id, is_active=True, number="1000",
+                        name="Encaisse"):
+        server_db.chart_of_accounts.insert_one({
+            "id": account_id, "organization_id": org_id,
+            "account_number": number, "name": name, "is_active": is_active,
+        })
+
+    def _cleanup(self, org_id):
+        server_db.chart_of_accounts.delete_many({"organization_id": org_id})
+
+    def test_active_account_snapshots_number_and_name(self):
+        org_id = self._org()
+        cash, rev = "a-cash", "a-rev"
+        try:
+            self._insert_account(org_id, cash, number="1000", name="Encaisse")
+            self._insert_account(org_id, rev, number="4000", name="Ventes")
+            enriched = _snapshot_lines(org_id, [
+                {"account_id": cash, "debit": 100.0, "credit": 0.0},
+                {"account_id": rev, "debit": 0.0, "credit": 100.0},
+            ])
+            assert enriched[0]["account_number"] == "1000"
+            assert enriched[0]["account_name"] == "Encaisse"
+            assert enriched[1]["account_number"] == "4000"
+        finally:
+            self._cleanup(org_id)
+
+    def test_inactive_account_rejected_at_snapshot(self):
+        # Simule le POST d'un brouillon dont un compte a été désactivé entre-temps.
+        org_id = self._org()
+        cash, rev = "a-cash", "a-rev"
+        try:
+            self._insert_account(org_id, cash, is_active=True, number="1000")
+            self._insert_account(org_id, rev, is_active=False,  # désactivé
+                                 number="4000", name="Ventes")
+            with pytest.raises(_HTTPExc) as e:
+                _snapshot_lines(org_id, [
+                    {"account_id": cash, "debit": 100.0, "credit": 0.0},
+                    {"account_id": rev, "debit": 0.0, "credit": 100.0},
+                ])
+            assert e.value.status_code == 400
+        finally:
+            self._cleanup(org_id)
+
+
 class TestValidateEntryBalance:
     def test_balanced_ok(self):
         lines = [

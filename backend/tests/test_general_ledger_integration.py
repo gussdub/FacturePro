@@ -254,6 +254,14 @@ class TestJournalEntries:
         by_num = {a["account_number"]: a for a in accounts}
         return by_num
 
+    def _free_expense_number(self, by_num):
+        """Un numéro 5xxx libre (compte de dépense). Évite les collisions 409 avec
+        les comptes système/seed et les résidus de runs précédents non supprimables."""
+        for n in range(5600, 5999):
+            if str(n) not in by_num:
+                return str(n)
+        raise AssertionError("aucun numéro 5xxx libre pour le test")
+
     def _balanced_body(self, by_num, amount=250.0, status="posted"):
         return {
             "entry_date": "2026-06-15",
@@ -461,3 +469,94 @@ class TestJournalEntries:
         # nettoie proprement par une vraie contre-passation
         client.post(f"/api/ledger/entries/{entry_id}/reverse",
                     headers=owner_headers, json={})
+
+    # ── [COMPTA] fix #2 : post re-valide 'compte actif' (spec §4 invariant) ──
+
+    def test_post_rejects_draft_referencing_deactivated_account(
+            self, client, owner_headers):
+        """Un brouillon créé avec un compte actif, puis ce compte désactivé, ne
+        doit PAS être postable — post_entry re-exécute _snapshot_lines et lève 400.
+        """
+        by_num = self._accounts(client, owner_headers)
+        # Compte de dépense non-système, désactivable. Numéro 5xxx libre.
+        acc = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": self._free_expense_number(by_num),
+            "name": "Dépense temporaire", "sub_type": "operating_expense",
+        })
+        assert acc.status_code == 201, acc.text
+        acc_id = acc.json()["id"]
+        entry_id = None
+        try:
+            # Brouillon équilibré : Dr 5xxx / Cr 1000 (Encaisse système).
+            draft = client.post("/api/ledger/entries", headers=owner_headers, json={
+                "entry_date": "2026-06-20", "description": "Brouillon compte à désactiver",
+                "status": "draft",
+                "lines": [
+                    {"account_id": acc_id, "debit": 40.0, "credit": 0},
+                    {"account_id": by_num["1000"]["id"], "debit": 0, "credit": 40.0},
+                ],
+            })
+            assert draft.status_code == 201, draft.text
+            entry_id = draft.json()["id"]
+            # Désactive le compte APRÈS création du brouillon.
+            dz = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"is_active": False})
+            assert dz.status_code == 200, dz.text
+            # Le post doit maintenant échouer (compte inactif référencé).
+            rp = client.post(f"/api/ledger/entries/{entry_id}/post",
+                             headers=owner_headers)
+            assert rp.status_code == 400, rp.text
+            # L'écriture reste 'draft' (pas figée sur un compte inactif).
+            still = client.get(f"/api/ledger/entries/{entry_id}",
+                               headers=owner_headers).json()
+            assert still["status"] == "draft"
+        finally:
+            if entry_id:
+                client.delete(f"/api/ledger/entries/{entry_id}", headers=owner_headers)
+            # Réactive puis supprime le compte (pas de ligne postée dessus).
+            client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                       json={"is_active": True})
+            client.delete(f"/api/ledger/accounts/{acc_id}", headers=owner_headers)
+
+    def test_post_refreshes_snapshot_number_and_name(self, client, owner_headers):
+        """Bonus : le post re-snapshot number/name → un compte renommé pendant le
+        brouillon voit son nom à jour figé au post (état courant, actif)."""
+        by_num = self._accounts(client, owner_headers)
+        # Numéro 5xxx unique par run : ce test poste une écriture sur le compte,
+        # donc il ne peut plus être supprimé après (seulement désactivé). Réutiliser
+        # un numéro fixe casserait l'idempotence du test (409 au 2e run).
+        num = self._free_expense_number(by_num)
+        acc = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": num, "name": "Ancien nom",
+            "sub_type": "operating_expense",
+        })
+        assert acc.status_code == 201, acc.text
+        acc_id = acc.json()["id"]
+        entry_id = None
+        try:
+            draft = client.post("/api/ledger/entries", headers=owner_headers, json={
+                "entry_date": "2026-06-21", "description": "Brouillon renommage",
+                "status": "draft",
+                "lines": [
+                    {"account_id": acc_id, "debit": 30.0, "credit": 0},
+                    {"account_id": by_num["1000"]["id"], "debit": 0, "credit": 30.0},
+                ],
+            })
+            assert draft.status_code == 201, draft.text
+            entry_id = draft.json()["id"]
+            client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                       json={"name": "Nouveau nom"})
+            posted = client.post(f"/api/ledger/entries/{entry_id}/post",
+                                 headers=owner_headers)
+            assert posted.status_code == 200, posted.text
+            line = next(l for l in posted.json()["lines"]
+                        if l["account_id"] == acc_id)
+            assert line["account_name"] == "Nouveau nom"
+        finally:
+            # L'écriture est postée → immuable ; on la contre-passe pour nettoyer.
+            if entry_id:
+                client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                            headers=owner_headers, json={})
+            # Compte porte des lignes postées → non supprimable ; on le désactive.
+            client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                       json={"is_active": False})

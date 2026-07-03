@@ -2707,10 +2707,17 @@ def post_entry(
     if entry["status"] != "draft":
         raise HTTPException(400, "Seule une écriture brouillon peut être postée")
     _validate_entry_balance(entry["lines"])
+    # Re-valide la garantie 'compte actif' au POST (spec §4 invariant, lignes 132/334) :
+    # un brouillon créé avec un compte actif puis désactivé avant le post ne doit PAS
+    # se figer en référençant un compte inactif. _snapshot_lines lève 400 si un compte
+    # est inactif/introuvable, et re-dénormalise number/name (reflète l'état courant).
+    enriched = _snapshot_lines(current_user.organization_id, entry["lines"])
     now = datetime.now(timezone.utc).isoformat()
     db.journal_entries.update_one(
         {"id": entry_id, "organization_id": current_user.organization_id},
-        {"$set": {"status": "posted", "posted_at": now}})
+        {"$set": {"status": "posted", "posted_at": now, "lines": enriched,
+                  "total_debit": round(sum(l["debit"] for l in enriched), 2),
+                  "total_credit": round(sum(l["credit"] for l in enriched), 2)}})
     return db.journal_entries.find_one(
         {"id": entry_id, "organization_id": current_user.organization_id}, {"_id": 0})
 
