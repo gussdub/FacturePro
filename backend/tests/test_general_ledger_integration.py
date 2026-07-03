@@ -721,3 +721,66 @@ class TestOwnerContribution:
         assert by_line["3200"]["credit"] == 1000.0
         client.post(f"/api/ledger/entries/{r.json()['id']}/reverse",
                     headers=owner_headers, json={})
+
+
+class TestTrialBalance:
+    def _accounts(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        return {a["account_number"]: a for a in accounts}
+
+    def test_trial_balance_balanced(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        # une écriture équilibrée
+        r = client.post("/api/ledger/entries", headers=owner_headers, json={
+            "entry_date": "2026-05-10", "description": "TB test", "status": "posted",
+            "lines": [
+                {"account_id": by_num["1000"]["id"], "debit": 1200.0, "credit": 0},
+                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 1200.0},
+            ],
+        })
+        entry_id = r.json()["id"]
+        try:
+            tb = client.get("/api/ledger/trial-balance?as_of=2026-12-31",
+                            headers=owner_headers).json()
+            assert tb["balanced"] is True
+            assert round(tb["total_debit"], 2) == round(tb["total_credit"], 2)
+            # comptes à solde nul exclus
+            for a in tb["accounts"]:
+                assert (a["debit_balance"] > 0) or (a["credit_balance"] > 0)
+        finally:
+            client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                        headers=owner_headers, json={})
+
+    def _cash_debit(self, client, owner_headers, as_of):
+        tb = client.get(f"/api/ledger/trial-balance?as_of={as_of}",
+                        headers=owner_headers).json()
+        row = next((a for a in tb["accounts"]
+                    if a["account_number"] == "1000"), None)
+        return round(row["debit_balance"] - row["credit_balance"], 2) if row else 0.0
+
+    def test_as_of_excludes_future_entries(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        # Delta-based : robuste à un solde 1000 non nul laissé par d'autres tests
+        # du module (isolation partielle). L'invariant testé est que l'écriture
+        # datée 2027 n'ajoute RIEN au solde net au 2026-12-31 (borne as_of, §7.1).
+        cash_asof_before = self._cash_debit(client, owner_headers, "2026-12-31")
+        cash_future_before = self._cash_debit(client, owner_headers, "2027-12-31")
+        r = client.post("/api/ledger/entries", headers=owner_headers, json={
+            "entry_date": "2027-01-15", "description": "Future", "status": "posted",
+            "lines": [
+                {"account_id": by_num["1000"]["id"], "debit": 999.0, "credit": 0},
+                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 999.0},
+            ],
+        })
+        entry_id = r.json()["id"]
+        try:
+            # au 2026-12-31 : l'écriture 2027 est exclue → aucun changement de solde
+            cash_asof = self._cash_debit(client, owner_headers, "2026-12-31")
+            assert round(cash_asof - cash_asof_before, 2) == 0.0
+            # au 2027-12-31 : l'écriture 2027 compte → +999 sur Encaisse (delta à
+            # as_of identique pour isoler la SEULE contribution de cette écriture)
+            cash_future = self._cash_debit(client, owner_headers, "2027-12-31")
+            assert round(cash_future - cash_future_before, 2) == 999.0
+        finally:
+            client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                        headers=owner_headers, json={})

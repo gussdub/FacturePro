@@ -2503,6 +2503,55 @@ def _apply_ledger_no_store(response: Response) -> None:
         response.headers[k] = v
 
 
+def _trial_balance_rows(organization_id: str, as_of: str = None) -> dict:
+    """Construit la balance de vérification (§7.1). Chaque compte apparaît dans
+    la colonne de son solde net ; comptes à solde 0 exclus.
+
+    [COMPTA] Le net par compte est calculé via _account_balance, qui compte
+    TOUTES les écritures posted (origines contre-passées + miroirs restent
+    posted → net zéro). Un compte à solde normal débiteur avec net ≥ 0 va en
+    colonne débit ; un net négatif (rare : compte de contra) bascule en crédit,
+    et inversement. Somme(débits) doit égaler Somme(crédits) : c'est l'invariant
+    'balanced' — s'il casse, un déséquilibre partie double s'est glissé ailleurs."""
+    # Comptes actifs + inactifs ayant des lignes (on scanne tous les comptes de
+    # l'org ; ceux à solde 0 sont exclus plus bas).
+    accounts = list(db.chart_of_accounts.find(
+        {"organization_id": organization_id}, {"_id": 0}))
+    rows = []
+    total_debit = 0.0
+    total_credit = 0.0
+    for acc in accounts:
+        net = _account_balance(organization_id, acc["id"], acc["normal_balance"],
+                               as_of_date=as_of)
+        if abs(net) < 0.005:
+            continue
+        if acc["normal_balance"] == "debit":
+            debit_balance = net if net >= 0 else 0.0
+            credit_balance = -net if net < 0 else 0.0
+        else:
+            credit_balance = net if net >= 0 else 0.0
+            debit_balance = -net if net < 0 else 0.0
+        total_debit += debit_balance
+        total_credit += credit_balance
+        rows.append({
+            "account_number": acc["account_number"],
+            "name": acc["name"],
+            "account_type": acc["account_type"],
+            "debit_balance": round(debit_balance, 2),
+            "credit_balance": round(credit_balance, 2),
+        })
+    rows.sort(key=lambda r: r["account_number"])
+    total_debit = round(total_debit, 2)
+    total_credit = round(total_credit, 2)
+    return {
+        "as_of": as_of,
+        "accounts": rows,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
+        "balanced": abs(total_debit - total_credit) <= 0.01,
+    }
+
+
 @app.get("/api/ledger/accounts")
 def list_accounts(
     response: Response,
@@ -2960,6 +3009,23 @@ def owner_contribution(
             {"account_id": equity["id"], "debit": 0, "credit": amount},
         ],
         status="posted", entry_type="manual")
+
+
+@app.get("/api/ledger/trial-balance")
+def trial_balance(
+    response: Response,
+    as_of: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """Balance de vérification (§7.1) : net par compte, ventilé Dr/Cr selon le
+    solde normal, comptes à solde 0 exclus, invariant `balanced` (ΣDr == ΣCr).
+    `as_of` (ISO YYYY-MM-DD, inclusif) borne le calcul à cette date ; défaut =
+    aujourd'hui (UTC). [COMPTA] no-store : chiffre financier jamais mis en cache."""
+    _apply_ledger_no_store(response)
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    if not as_of:
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    return _trial_balance_rows(current_user.organization_id, as_of)
 
 
 # ─── Health ───
