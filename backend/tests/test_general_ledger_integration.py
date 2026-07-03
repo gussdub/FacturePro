@@ -246,3 +246,169 @@ class TestChartOfAccounts:
             assert r3.json()["sub_type"] == "fixed_asset"
         finally:
             client.delete(f"/api/ledger/accounts/{acc_id}", headers=owner_headers)
+
+
+class TestJournalEntries:
+    def _accounts(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        by_num = {a["account_number"]: a for a in accounts}
+        return by_num
+
+    def _balanced_body(self, by_num, amount=250.0, status="posted"):
+        return {
+            "entry_date": "2026-06-15",
+            "description": "Test écriture",
+            "status": status,
+            "lines": [
+                {"account_id": by_num["1000"]["id"], "debit": amount, "credit": 0},
+                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": amount},
+            ],
+        }
+
+    def test_post_balanced_entry_creates_je_number(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num))
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["entry_number"].startswith("JE-")
+        assert body["status"] == "posted"
+        assert body["posted_at"] is not None
+        assert round(body["total_debit"], 2) == round(body["total_credit"], 2)
+        # snapshot des lignes
+        assert body["lines"][0]["account_number"] == "1000"
+        client.delete(f"/api/ledger/entries/{body['id']}", headers=owner_headers)
+
+    def test_post_unbalanced_400(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        body = self._balanced_body(by_num)
+        body["lines"][1]["credit"] = 100.0  # déséquilibre
+        r = client.post("/api/ledger/entries", headers=owner_headers, json=body)
+        assert r.status_code == 400
+
+    def test_draft_then_post(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num, status="draft"))
+        assert r.status_code == 201
+        entry_id = r.json()["id"]
+        assert r.json()["status"] == "draft"
+        assert r.json()["posted_at"] is None
+        r2 = client.post(f"/api/ledger/entries/{entry_id}/post", headers=owner_headers)
+        assert r2.status_code == 200
+        assert r2.json()["status"] == "posted"
+        client.delete(f"/api/ledger/entries/{entry_id}", headers=owner_headers)
+
+    def test_put_on_posted_forbidden(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num))
+        entry_id = r.json()["id"]
+        try:
+            r2 = client.put(f"/api/ledger/entries/{entry_id}", headers=owner_headers,
+                            json={"description": "modifié"})
+            assert r2.status_code == 400
+            r3 = client.delete(f"/api/ledger/entries/{entry_id}", headers=owner_headers)
+            assert r3.status_code == 400  # posted → DELETE interdit
+        finally:
+            # reverse pour nettoyer proprement puis rien (piste d'audit)
+            pass
+
+    def test_reverse_creates_mirror(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num, amount=333.0))
+        entry_id = r.json()["id"]
+        r2 = client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                         headers=owner_headers, json={})
+        assert r2.status_code == 201, r2.text
+        rev = r2.json()
+        assert rev["entry_type"] == "reversal"
+        assert rev["status"] == "posted"           # le miroir est POSTED
+        assert rev["reverses_entry_id"] == entry_id
+        # lignes inversées : ce qui était débit devient crédit
+        assert rev["lines"][0]["credit"] == 333.0
+        assert rev["lines"][0]["debit"] == 0
+        # origine : RESTE 'posted', SEUL le lien d'audit est posé (pas de statut 'reversed')
+        origin = client.get(f"/api/ledger/entries/{entry_id}",
+                            headers=owner_headers).json()
+        assert origin["status"] == "posted"        # ⚠️ reste posted, JAMAIS 'reversed'
+        assert origin["reversed_by_entry_id"] == rev["id"]
+
+    def test_reverse_nets_to_zero_and_stays_balanced(self, client, owner_headers):
+        """Le test qui manquait (§5.3) : Dr Encaisse 100 / Cr Revenus 100 →
+        solde Encaisse = 100 ; après contre-passation → Encaisse = 0 ET Revenus = 0
+        ET la balance de vérification reste équilibrée. C'est l'invariant net zéro
+        garanti par le fait que l'origine ET le miroir restent 'posted'.
+
+        NB : ce test consomme /api/ledger/trial-balance, endpoint livré en Task 9.
+        Tant qu'il n'existe pas, on skip (l'invariant net-zéro pur — sans passer par
+        la balance de vérification — est déjà couvert par TestAccountBalance côté
+        unitaire). Le test s'active automatiquement dès que Task 9 est livrée."""
+        by_num = self._accounts(client, owner_headers)
+        _probe = client.get("/api/ledger/trial-balance?as_of=2030-12-31",
+                            headers=owner_headers)
+        if _probe.status_code == 404 or "accounts" not in (_probe.json() or {}):
+            pytest.skip("Endpoint /api/ledger/trial-balance livré en Task 9 — "
+                        "invariant net-zéro déjà couvert unitairement (TestAccountBalance)")
+
+        def _bal(num, as_of="2030-12-31"):
+            tb = client.get(f"/api/ledger/trial-balance?as_of={as_of}",
+                            headers=owner_headers).json()
+            row = next((a for a in tb["accounts"]
+                        if a["account_number"] == num), None)
+            if not row:
+                return 0.0
+            return round(row["debit_balance"] - row["credit_balance"], 2)
+
+        cash0 = _bal("1000")
+        rev0 = _bal("4000")
+        # Dr Encaisse (1000) 100 / Cr Revenus (4000) 100
+        r = client.post("/api/ledger/entries", headers=owner_headers, json={
+            "entry_date": "2029-06-15", "description": "Vente à contre-passer",
+            "status": "posted",
+            "lines": [
+                {"account_id": by_num["1000"]["id"], "debit": 100.0, "credit": 0},
+                {"account_id": by_num["4000"]["id"], "debit": 0, "credit": 100.0},
+            ],
+        })
+        entry_id = r.json()["id"]
+        # après post : Encaisse +100 (débit), Revenus +100 (crédit → -100 en net Dr-Cr)
+        assert round(_bal("1000") - cash0, 2) == 100.0
+        assert round(_bal("4000") - rev0, 2) == -100.0
+        # contre-passation
+        r2 = client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                         headers=owner_headers, json={"entry_date": "2029-06-16"})
+        assert r2.status_code == 201, r2.text
+        # net zéro : les deux comptes reviennent EXACTEMENT à leur solde d'avant
+        assert round(_bal("1000") - cash0, 2) == 0.0   # Encaisse nette = 0
+        assert round(_bal("4000") - rev0, 2) == 0.0    # Revenus nets = 0
+        # balance de vérification toujours équilibrée
+        tb = client.get("/api/ledger/trial-balance?as_of=2030-12-31",
+                        headers=owner_headers).json()
+        assert tb["balanced"] is True
+        assert round(tb["total_debit"], 2) == round(tb["total_credit"], 2)
+
+    def test_reverse_twice_forbidden(self, client, owner_headers):
+        """Double contre-passation interdite : le 2e reverse sur la même origine
+        (reversed_by_entry_id déjà posé) → 400."""
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num, amount=42.0))
+        entry_id = r.json()["id"]
+        r1 = client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                         headers=owner_headers, json={})
+        assert r1.status_code == 201
+        r2 = client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                         headers=owner_headers, json={})
+        assert r2.status_code == 400   # déjà contre-passée
+
+    def test_reverse_non_posted_400(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num, status="draft"))
+        entry_id = r.json()["id"]
+        r2 = client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                         headers=owner_headers, json={})
+        assert r2.status_code == 400
+        client.delete(f"/api/ledger/entries/{entry_id}", headers=owner_headers)

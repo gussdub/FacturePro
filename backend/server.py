@@ -1603,6 +1603,83 @@ def _account_balance(organization_id: str, account_id: str, normal_balance: str,
     return round(total_credit - total_debit, 2)
 
 
+def _next_entry_number(organization_id: str, prefix: str = "JE") -> str:
+    """Attribue un numéro d'écriture atomique par org (§3.3).
+    Zéro race via find_one_and_update $inc upsert."""
+    from pymongo import ReturnDocument
+    counter_id = f"{organization_id}:journal_entry"
+    doc = db.ledger_counters.find_one_and_update(
+        {"id": counter_id},
+        {"$inc": {"value": 1},
+         "$setOnInsert": {"organization_id": organization_id,
+                          "counter_type": "journal_entry"}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return f"{prefix}-{doc['value']:04d}"
+
+
+def _snapshot_lines(organization_id: str, lines: list) -> list:
+    """Valide que chaque account_id est actif + même org, et dénormalise
+    account_number/account_name sur chaque ligne. Retourne les lignes enrichies."""
+    enriched = []
+    for ln in lines:
+        account_id = ln.get("account_id")
+        acc = db.chart_of_accounts.find_one({
+            "id": account_id, "organization_id": organization_id, "is_active": True,
+        }, {"_id": 0})
+        if not acc:
+            raise HTTPException(400, f"Compte inactif ou introuvable : {account_id}")
+        enriched.append({
+            "line_id": str(uuid.uuid4()),
+            "account_id": account_id,
+            "account_number": acc["account_number"],
+            "account_name": acc["name"],
+            "debit": round(float(ln.get("debit", 0) or 0), 2),
+            "credit": round(float(ln.get("credit", 0) or 0), 2),
+            "line_description": ln.get("line_description"),
+        })
+    return enriched
+
+
+def _create_journal_entry(organization_id: str, user_id: str, entry_date: str,
+                          description: str, lines: list, status: str = "posted",
+                          reference: str = None, entry_type: str = "manual",
+                          reverses_entry_id: str = None,
+                          entry_number: str = None) -> dict:
+    """Factory interne d'écriture (partagée par journal manuel, ouverture,
+    apport, contre-passation). Valide l'équilibre + snapshot les lignes."""
+    _validate_entry_balance(lines)
+    enriched = _snapshot_lines(organization_id, lines)
+    total_debit = round(sum(l["debit"] for l in enriched), 2)
+    total_credit = round(sum(l["credit"] for l in enriched), 2)
+    now = datetime.now(timezone.utc).isoformat()
+    if entry_number is None:
+        entry_number = _next_entry_number(organization_id)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": organization_id,
+        "created_by_user_id": user_id,
+        "entry_number": entry_number,
+        "entry_date": entry_date,
+        "description": description,
+        "reference": reference,
+        "entry_type": entry_type,
+        "status": status,
+        "lines": enriched,
+        "total_debit": total_debit,
+        "total_credit": total_credit,
+        "reverses_entry_id": reverses_entry_id,
+        "reversed_by_entry_id": None,
+        "source_type": None,
+        "source_id": None,
+        "created_at": now,
+        "posted_at": now if status == "posted" else None,
+    }
+    db.journal_entries.insert_one(dict(doc))
+    return {k: v for k, v in doc.items() if k != "_id"}
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.
@@ -2503,6 +2580,169 @@ def delete_account(
         raise HTTPException(400, "Compte utilisé par des écritures — désactivez-le plutôt")
     db.chart_of_accounts.delete_one(
         {"id": account_id, "organization_id": current_user.organization_id})
+    return
+
+
+@app.get("/api/ledger/entries")
+def list_entries(
+    start: str = None, end: str = None, account_id: str = None, status: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    query = {"organization_id": current_user.organization_id}
+    if status:
+        query["status"] = status
+    if account_id:
+        query["lines.account_id"] = account_id
+    if start or end:
+        df = {}
+        if start:
+            df["$gte"] = start
+        if end:
+            df["$lte"] = end
+        query["entry_date"] = df
+    cursor = db.journal_entries.find(query, {"_id": 0}) \
+        .sort([("entry_date", -1), ("entry_number", -1)])
+    return list(cursor)
+
+
+@app.get("/api/ledger/entries/{entry_id}")
+def get_entry(
+    entry_id: str,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    entry = db.journal_entries.find_one({
+        "id": entry_id, "organization_id": current_user.organization_id,
+    }, {"_id": 0})
+    if not entry:
+        raise HTTPException(404, "Écriture introuvable")
+    return entry
+
+
+@app.post("/api/ledger/entries", status_code=201)
+def create_entry(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    status = body.get("status", "draft")
+    if status not in ("draft", "posted"):
+        raise HTTPException(400, "status doit être 'draft' ou 'posted'")
+    return _create_journal_entry(
+        current_user.organization_id, current_user.id,
+        entry_date=body.get("entry_date"),
+        description=(body.get("description") or "").strip(),
+        lines=body.get("lines") or [],
+        status=status,
+        reference=body.get("reference"),
+        entry_type="manual",
+    )
+
+
+@app.put("/api/ledger/entries/{entry_id}")
+def update_entry(
+    entry_id: str,
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    entry = db.journal_entries.find_one({
+        "id": entry_id, "organization_id": current_user.organization_id,
+    }, {"_id": 0})
+    if not entry:
+        raise HTTPException(404, "Écriture introuvable")
+    if entry["status"] == "posted":
+        raise HTTPException(400, "Écriture figée — contre-passez-la")
+    lines = body.get("lines", entry["lines"])
+    _validate_entry_balance(lines)
+    enriched = _snapshot_lines(current_user.organization_id, lines)
+    set_fields = {
+        "entry_date": body.get("entry_date", entry["entry_date"]),
+        "description": (body.get("description", entry["description"]) or "").strip(),
+        "reference": body.get("reference", entry["reference"]),
+        "lines": enriched,
+        "total_debit": round(sum(l["debit"] for l in enriched), 2),
+        "total_credit": round(sum(l["credit"] for l in enriched), 2),
+    }
+    db.journal_entries.update_one(
+        {"id": entry_id, "organization_id": current_user.organization_id},
+        {"$set": set_fields})
+    return db.journal_entries.find_one(
+        {"id": entry_id, "organization_id": current_user.organization_id}, {"_id": 0})
+
+
+@app.post("/api/ledger/entries/{entry_id}/post")
+def post_entry(
+    entry_id: str,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    entry = db.journal_entries.find_one({
+        "id": entry_id, "organization_id": current_user.organization_id,
+    }, {"_id": 0})
+    if not entry:
+        raise HTTPException(404, "Écriture introuvable")
+    if entry["status"] != "draft":
+        raise HTTPException(400, "Seule une écriture brouillon peut être postée")
+    _validate_entry_balance(entry["lines"])
+    now = datetime.now(timezone.utc).isoformat()
+    db.journal_entries.update_one(
+        {"id": entry_id, "organization_id": current_user.organization_id},
+        {"$set": {"status": "posted", "posted_at": now}})
+    return db.journal_entries.find_one(
+        {"id": entry_id, "organization_id": current_user.organization_id}, {"_id": 0})
+
+
+@app.post("/api/ledger/entries/{entry_id}/reverse", status_code=201)
+def reverse_entry(
+    entry_id: str,
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    entry = db.journal_entries.find_one({
+        "id": entry_id, "organization_id": current_user.organization_id,
+    }, {"_id": 0})
+    if not entry:
+        raise HTTPException(404, "Écriture introuvable")
+    if entry["status"] != "posted":
+        raise HTTPException(400, "Seule une écriture postée peut être contre-passée")
+    if entry.get("reversed_by_entry_id"):
+        # Déjà contre-passée : empêche la double contre-passation (§5.3).
+        raise HTTPException(400, "Écriture déjà contre-passée")
+    # Miroir exact : débits ↔ crédits inversés, ligne par ligne.
+    mirror_lines = [
+        {"account_id": ln["account_id"], "debit": ln["credit"], "credit": ln["debit"],
+         "line_description": ln.get("line_description")}
+        for ln in entry["lines"]
+    ]
+    rev_date = body.get("entry_date") or datetime.now(timezone.utc).date().isoformat()
+    rev_desc = body.get("description") or f"Contre-passation de {entry['entry_number']}"
+    # Le miroir est une NOUVELLE écriture 'posted'. L'origine reste 'posted'.
+    # Les deux comptent dans _account_balance → net zéro automatique (§5.2/§5.3).
+    reversal = _create_journal_entry(
+        current_user.organization_id, current_user.id,
+        entry_date=rev_date, description=rev_desc, lines=mirror_lines,
+        status="posted", entry_type="reversal", reverses_entry_id=entry_id)
+    # On pose UNIQUEMENT le lien d'audit sur l'origine. On NE change PAS son status
+    # (surtout pas vers un 'reversed' qui l'exclurait du solde → double effet, bug).
+    db.journal_entries.update_one(
+        {"id": entry_id, "organization_id": current_user.organization_id},
+        {"$set": {"reversed_by_entry_id": reversal["id"]}})
+    return reversal
+
+
+@app.delete("/api/ledger/entries/{entry_id}", status_code=204)
+def delete_entry(
+    entry_id: str,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    entry = db.journal_entries.find_one({
+        "id": entry_id, "organization_id": current_user.organization_id,
+    }, {"_id": 0})
+    if not entry:
+        raise HTTPException(404, "Écriture introuvable")
+    if entry["status"] == "posted":
+        raise HTTPException(400, "Écriture figée — seuls les brouillons sont supprimables")
+    db.journal_entries.delete_one(
+        {"id": entry_id, "organization_id": current_user.organization_id})
     return
 
 
