@@ -259,7 +259,7 @@ class TestOrgMeEndpoint:
         cu = body["current_user"]
         assert cu["role"] == "owner"
         # Owner has all permissions (editable + owner-only)
-        for code in ["expenses:read", "settings:manage", "team:manage"]:
+        for code in ["expenses:read", "settings:write", "team:manage"]:
             assert code in cu["permissions"]
         assert isinstance(body["members"], list)
         assert any(m["id"] == cu["id"] for m in body["members"])
@@ -1268,7 +1268,7 @@ class TestTask10MultiMemberHelpers:
 
 class TestPermissionEnforcement:
     """Task 11 — settings/billing/team endpoints must reject viewers/accountants
-    without the required permission (settings:manage / billing:manage /
+    without the required permission (settings:write / billing:manage /
     team:manage). Verifies that require_permission gates work end-to-end."""
 
     def _create_viewer_headers(self, client, owner_headers, monkeypatch):
@@ -1331,14 +1331,44 @@ class TestPermissionEnforcement:
         finally:
             self._cleanup_user(email)
 
-    def test_viewer_cannot_access_settings(self, client, owner_headers, monkeypatch):
+    def test_viewer_can_read_but_not_write_settings(self, client, owner_headers, monkeypatch):
+        # feature #11.1 : viewer a settings:read par defaut (peut voir) mais pas
+        # settings:write (ne peut pas modifier).
         vh, email = self._create_viewer_headers(client, owner_headers, monkeypatch)
         try:
             r = client.get("/api/settings/company", headers=vh)
-            assert r.status_code == 403
+            assert r.status_code == 200, r.text
             r2 = client.put("/api/settings/company", headers=vh,
                             json={"company_name": "hacked"})
             assert r2.status_code == 403
+            assert "settings:write" in r2.json()["detail"]
+        finally:
+            self._cleanup_user(email)
+
+    def _create_accountant_headers(self, client, owner_headers, monkeypatch):
+        monkeypatch.setattr(server_module, "_send_invitation_email",
+                            lambda *a, **kw: True)
+        server_module._ACCEPT_INVITE_RATE.clear()
+        email = f"acc-perm-{uuid.uuid4().hex[:8]}@example.com"
+        r = client.post("/api/org/invitations", headers=owner_headers,
+                        json={"email": email, "role": "accountant"})
+        assert r.status_code == 201, r.text
+        token = server_module.db.invitations.find_one({"id": r.json()["id"]})["token"]
+        r2 = client.post("/api/auth/accept-invite", json={
+            "token": token, "password": "accpass", "pipeda_consent": True,
+        })
+        assert r2.status_code == 200, r2.text
+        return {"Authorization": f"Bearer {r2.json()['access_token']}"}, email
+
+    def test_accountant_can_read_and_write_settings(self, client, owner_headers, monkeypatch):
+        # feature #11.1 : comptable a settings:read + settings:write par defaut.
+        ah, email = self._create_accountant_headers(client, owner_headers, monkeypatch)
+        try:
+            r = client.get("/api/settings/company", headers=ah)
+            assert r.status_code == 200, r.text
+            r2 = client.put("/api/settings/company", headers=ah,
+                            json={"phone": "555-1234"})
+            assert r2.status_code == 200, r2.text
         finally:
             self._cleanup_user(email)
 

@@ -1204,20 +1204,20 @@ PERMISSIONS_EDITABLE = [
     "reports:read",
     "bank:read",       "bank:write",
     "receipts:scan",
+    "settings:read",   "settings:write",  # infos entreprise, num fiscaux, province, %
 ]
 
 PERMISSIONS_OWNER_ONLY = [
-    "settings:manage",  # company_info, entity_type, province, home/vehicle %
     "billing:manage",   # Stripe subscription + customer portal
     "team:manage",      # invite, remove, change role, edit permissions
 ]
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "accountant": list(PERMISSIONS_EDITABLE),  # tout coche par defaut
+    "accountant": list(PERMISSIONS_EDITABLE),  # tout coche par defaut (incl. settings read+write)
     "viewer": [
         "expenses:read", "invoices:read", "quotes:read",
         "clients:read", "products:read", "employees:read",
-        "reports:read", "bank:read",
+        "reports:read", "bank:read", "settings:read",
     ],
 }
 
@@ -1395,6 +1395,26 @@ def migrate_organizations_v1():
                 }}]
             )
 
+    # Backfill idempotent : permissions settings ajoutées après coup (feature #11.1).
+    # Comptable → settings:read + settings:write ; Lecteur → settings:read.
+    # N'ajoute que si absent (respecte les personnalisations owner sur les autres codes).
+    perms_backfilled = 0
+    for org in db.organizations.find({}, {"id": 1, "role_permissions": 1}):
+        rp = org.get("role_permissions") or {}
+        changed = False
+        acc = list(rp.get("accountant", []))
+        for p in ("settings:read", "settings:write"):
+            if p not in acc:
+                acc.append(p); changed = True
+        viewer = list(rp.get("viewer", []))
+        if "settings:read" not in viewer:
+            viewer.append("settings:read"); changed = True
+        if changed:
+            rp["accountant"] = acc
+            rp["viewer"] = viewer
+            db.organizations.update_one({"id": org["id"]}, {"$set": {"role_permissions": rp}})
+            perms_backfilled += 1
+
     # Indexes idempotents
     db.organizations.create_index("id", unique=True)
     db.organizations.create_index("owner_id")
@@ -1406,6 +1426,8 @@ def migrate_organizations_v1():
 
     if users_without_org:
         print(f"MIGRATION organizations_v1 : {len(users_without_org)} orgs creees")
+    if perms_backfilled:
+        print(f"MIGRATION settings perms : {perms_backfilled} orgs mises a jour")
 
 
 # ─── Auth Dependencies ───
@@ -3842,7 +3864,7 @@ def get_exchange_rates(date: str = None):
 
 # ─── Settings ───
 @app.get("/api/settings/company")
-def get_settings(current_user: CurrentUser = Depends(require_permission("settings:manage"))):
+def get_settings(current_user: CurrentUser = Depends(require_permission("settings:read"))):
     # Feature #11 — company_settings est scopé par organization_id (multi-tenant).
     # Fallback pre-migration : accepter les docs legacy sans organization_id keyés
     # sur user_id du owner (via _org_scope).
@@ -3874,7 +3896,7 @@ def get_settings(current_user: CurrentUser = Depends(require_permission("setting
 @app.put("/api/settings/company")
 def update_settings(
     settings_data: dict,
-    current_user: CurrentUser = Depends(require_permission("settings:manage"))
+    current_user: CurrentUser = Depends(require_permission("settings:write"))
 ):
     settings_data.pop("_id", None)
     settings_data.pop("user_id", None)

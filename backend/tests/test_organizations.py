@@ -23,12 +23,20 @@ class TestPermissionConstants:
         for code in ["expenses:read", "expenses:write", "invoices:read", "invoices:write",
                      "quotes:read", "quotes:write", "clients:read", "clients:write",
                      "products:read", "products:write", "employees:read", "employees:write",
-                     "reports:read", "bank:read", "bank:write", "receipts:scan"]:
+                     "reports:read", "bank:read", "bank:write", "receipts:scan",
+                     "settings:read", "settings:write"]:
             assert code in PERMISSIONS_EDITABLE, f"Missing editable code: {code}"
 
     def test_owner_only_codes_present(self):
-        for code in ["settings:manage", "billing:manage", "team:manage"]:
+        for code in ["billing:manage", "team:manage"]:
             assert code in PERMISSIONS_OWNER_ONLY
+
+    def test_settings_split_is_editable_not_owner_only(self):
+        # feature #11.1 : settings:read/write sont maintenant activables dans la matrice
+        assert "settings:read" in PERMISSIONS_EDITABLE
+        assert "settings:write" in PERMISSIONS_EDITABLE
+        assert "settings:manage" not in PERMISSIONS_OWNER_ONLY
+        assert "settings:manage" not in PERMISSIONS_EDITABLE
 
     def test_no_overlap_editable_owner_only(self):
         assert set(PERMISSIONS_EDITABLE).isdisjoint(set(PERMISSIONS_OWNER_ONLY))

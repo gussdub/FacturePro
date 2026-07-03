@@ -106,7 +106,14 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
-- **2026-07-01 — Organisations multi-tenant (feature #11)** *(implémenté et testé localement ; T0→T18 tous committés en local. NON DÉPLOYÉ EN PROD : `git push origin main` (Task 18 Step 4) et la vérification post-deploy (Task 18 Step 5 + 6b) restent à faire manuellement par l'humain. Origin/main tip = `985eeca` ; local main est ahead de 30 commits.)*
+- **2026-07-03 — Split settings:read/write dans le RBAC (feature #11.1)**
+  - `settings:manage` (owner-only) découpé en `settings:read` + `settings:write`, tous deux **activables dans la matrice** des rôles
+  - Défauts : comptable = read+write ; lecteur = read seul. `billing:manage` et `team:manage` restent owner-only
+  - GET `/api/settings/company` → `settings:read` ; PUT → `settings:write` (fix bonus : le logo sidebar chargeait via GET settings, donc invisible pour non-owner avant)
+  - Migration idempotente backfill dans `migrate_organizations_v1` : ajoute settings:read/write aux orgs existantes (comptable) + settings:read (lecteur), sans toucher aux autres perso owner
+  - Frontend : onglet Entreprise gaté sur `settings:read` (sinon message), bouton Sauvegarder gaté sur `settings:write` (sinon bandeau « Lecture seule »), nav Paramètres gatée sur `settings:read`, matrice UI expose le groupe « Paramètres »
+
+- **2026-07-01 — Organisations multi-tenant (feature #11)**
   - Nouvelles collections : `organizations` (subscription Stripe + role_permissions + scan quota) et `invitations` (link signé Resend TTL 7j single-use)
   - Nouveau modèle Pydantic `CurrentUser` (id + email + organization_id + role + permissions) résolu à chaque requête via `get_current_user_with_access` refactoré
   - Dependency `require_permission("code")` appliquée sur ~60 endpoints métier ; toutes les queries filtrent par `organization_id` au lieu de `user_id` (avec fallback transitoire `$or` pendant 4 semaines)
@@ -116,7 +123,7 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Anti-lockout owner : `owner_id` immutable, impossible de changer son rôle, impossible de le retirer, impossible pour lui de se retirer lui-même
   - Frontend : `AuthContext` expose `permissions`, `role`, `organization`, `hasPermission()` ; nouveau `<RouteGuard permission="...">` wrapper ; sidebar filtre par permission ; onglet « Équipe » dans SettingsPage (membres + invitations + matrice UI groupée par domaine) ; page publique `/accept-invite` avec form password + PIPEDA checkbox
   - Sécurité : `_resolve_permissions` filtre à `PERMISSIONS_EDITABLE` (codes owner-only jamais accordés via matrice, codes inconnus ignorés) ; token invitation `secrets.token_urlsafe(32)` ~256 bits d'entropie ; `bcrypt.checkpw` constant-time sur `/accept-invite` ; jamais de token/password dans les logs
-  - Limites v1 : custom roles, SSO/SAML, audit log endpoint, 2FA, multi-org par user, transfert d'ownership, facturation pro-rata ; abonnement Stripe reste flat $15 CAD/mois par org, quota scan reçus reste 200/org/mois (partagé org-wide)
+  - Limites v1 : custom roles, SSO/SAML, audit log endpoint, 2FA, multi-org par user, facturation pro-rata ; abonnement Stripe reste flat $15 CAD/mois par org, quota scan reçus 400/org/mois (partagé org-wide ; transfert d'ownership ajouté après coup — cf. `/api/org/transfer-ownership`)
   - Tests : ~15 unitaires + ~35 intégration = **~50 nouveaux tests**, 0 régression
   - Spec : `docs/superpowers/specs/2026-07-01-multi-tenant-organizations-design.md`
   - Plan : `docs/superpowers/plans/2026-07-01-multi-tenant-organizations.md`

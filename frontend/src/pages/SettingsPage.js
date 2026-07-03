@@ -29,6 +29,8 @@ const SettingsPage = () => {
   const [invitations, setInvitations] = useState([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const { hasPermission, user: currentUser, role: currentUserRole } = useAuth();
+  const canViewSettings = hasPermission('settings:read');
+  const canEditSettings = hasPermission('settings:write');
 
   const fetchOrgData = useCallback(async () => {
     setOrgLoading(true);
@@ -138,6 +140,7 @@ const SettingsPage = () => {
 
       {/* Barre d'onglets */}
       <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e5e7eb', marginBottom: 24 }}>
+        {canViewSettings && (
         <button
           type="button"
           onClick={() => setActiveTab('company')}
@@ -152,6 +155,7 @@ const SettingsPage = () => {
         >
           Entreprise
         </button>
+        )}
         {hasPermission('team:manage') && (
           <button
             type="button"
@@ -188,7 +192,13 @@ const SettingsPage = () => {
         />
       )}
 
-      {activeTab === 'company' && (
+      {activeTab === 'company' && !canViewSettings && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#6b7280' }}>
+          Vous n'avez pas l'autorisation de voir les paramètres de l'entreprise.
+        </div>
+      )}
+
+      {activeTab === 'company' && canViewSettings && (
       <form onSubmit={handleSubmit}>
         {/* Logo Upload Section */}
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
@@ -469,13 +479,20 @@ const SettingsPage = () => {
           </div>
         </div>
 
-        <div style={{ textAlign: 'center' }}>
-          <button type="submit" disabled={saving} data-testid="save-settings-btn" style={{
-            background: saving ? '#9ca3af' : 'linear-gradient(135deg, #10b981, #047857)',
-            color: 'white', border: 'none', padding: '16px 32px', borderRadius: '12px',
-            cursor: saving ? 'not-allowed' : 'pointer', fontSize: '16px', fontWeight: '700'
-          }}>{saving ? 'Sauvegarde...' : 'Sauvegarder tous les parametres'}</button>
-        </div>
+        {canEditSettings ? (
+          <div style={{ textAlign: 'center' }}>
+            <button type="submit" disabled={saving} data-testid="save-settings-btn" style={{
+              background: saving ? '#9ca3af' : 'linear-gradient(135deg, #10b981, #047857)',
+              color: 'white', border: 'none', padding: '16px 32px', borderRadius: '12px',
+              cursor: saving ? 'not-allowed' : 'pointer', fontSize: '16px', fontWeight: '700'
+            }}>{saving ? 'Sauvegarde...' : 'Sauvegarder tous les parametres'}</button>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, padding: 12,
+                        background: '#f8fafc', borderRadius: 8 }}>
+            🔒 Lecture seule — vous n'avez pas l'autorisation de modifier les paramètres.
+          </div>
+        )}
       </form>
       )}
 
