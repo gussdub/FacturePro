@@ -162,10 +162,18 @@ function JournalTab() {
   };
   useEffect(() => { load(); }, []);
 
-  const totalDebit = lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0);
-  const totalCredit = lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
+  // Le compteur live doit refléter EXACTEMENT ce qui sera envoyé au backend :
+  // submit() ne garde que les lignes ayant un compte sélectionné. Compter les
+  // lignes sans compte fausserait l'indicateur (montant tapé sur une ligne
+  // « — compte — » → compteur « équilibré » mais l'écriture postée serait
+  // déséquilibrée / < 2 lignes → 400 backend). On dérive tout du même sous-ensemble.
+  const validLines = lines.filter(l => l.account_id);
+  const totalDebit = validLines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0);
+  const totalCredit = validLines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0);
   const diff = Math.round((totalDebit - totalCredit) * 100) / 100;
-  const balanced = Math.abs(diff) < 0.005 && totalDebit > 0;
+  // Équilibré = >= 2 lignes valides ET Dr = Cr (à 0,005 $) ET total > 0.
+  // Mêmes invariants que _validate_entry_balance côté backend (§5.1).
+  const balanced = validLines.length >= 2 && Math.abs(diff) < 0.005 && totalDebit > 0;
 
   const setLine = (i, field, value) => {
     const next = [...lines];
@@ -182,7 +190,9 @@ function JournalTab() {
     try {
       await axios.post(`${BACKEND_URL}/api/ledger/entries`, {
         entry_date: entryDate, description, status,
-        lines: lines.filter(l => l.account_id).map(l => ({
+        // Même sous-ensemble que le compteur d'équilibre (validLines) : ce qui est
+        // affiché comme équilibré est exactement ce qui est envoyé.
+        lines: validLines.map(l => ({
           account_id: l.account_id,
           debit: parseFloat(l.debit) || 0,
           credit: parseFloat(l.credit) || 0,
