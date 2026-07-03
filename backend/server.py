@@ -1372,10 +1372,89 @@ _NORMAL_BALANCE_BY_TYPE = {
     "expense": "debit",
 }
 
+# Vocabulaire fermé des sous-types par type de compte (§3.1 spec). Verrouillé
+# pour que le regroupement du bilan (T9 : actif court terme vs immobilisations,
+# passif court terme vs long terme, etc.) consomme une valeur connue et jamais
+# un sub_type libre qui casserait silencieusement le regroupement. None reste
+# permis (compte sans sous-type). Un sub_type doit être cohérent avec le type.
+ACCOUNT_SUB_TYPES = {
+    "asset":     {"current_asset", "fixed_asset", "tax_recoverable", "other_asset"},
+    "liability": {"current_liability", "long_term_liability", "tax_payable",
+                  "other_liability"},
+    "equity":    {"share_capital", "contributed_capital", "retained_earnings",
+                  "other_equity"},
+    "revenue":   {"operating_revenue", "other_revenue"},
+    "expense":   {"operating_expense", "cost_of_goods_sold", "other_expense"},
+}
+
 
 def _normal_balance_for_type(account_type: str) -> str:
     """Solde normal dérivé du type de compte (§3.1 spec)."""
     return _NORMAL_BALANCE_BY_TYPE.get(account_type, "debit")
+
+
+def _validate_sub_type(account_type: str, sub_type) -> str:
+    """Valide sub_type contre le vocabulaire fermé du type (§3.1). None accepté
+    (compte sans sous-type). Raise HTTPException(400) si inconnu ou incohérent
+    avec le type de compte. Retourne le sub_type normalisé (strip)."""
+    if sub_type is None:
+        return None
+    if not isinstance(sub_type, str):
+        raise HTTPException(400, "sub_type invalide")
+    sub_type = sub_type.strip()
+    if sub_type == "":
+        return None
+    allowed = ACCOUNT_SUB_TYPES.get(account_type, set())
+    if sub_type not in allowed:
+        raise HTTPException(
+            400,
+            f"sub_type '{sub_type}' invalide pour un compte {account_type}. "
+            f"Valeurs permises : {', '.join(sorted(allowed))}")
+    return sub_type
+
+
+# Codes de catégorie de dépense canoniques (feature #3). "other" est mappé sur
+# 5900 (Dépenses diverses) et ne doit pas être porté explicitement par un compte.
+_EXPENSE_CATEGORY_CODES = {c["code"] for c in EXPENSE_CATEGORIES if c["code"] != "other"}
+
+
+def _validate_expense_category_code(organization_id, account_type, sub_type,
+                                    expense_category_code, exclude_account_id=None):
+    """Verrouille expense_category_code pour garder l'auto-posting (§10.2)
+    DÉTERMINISTE. Le mapping dépense→compte est
+    `chart_of_accounts.expense_category_code == expense.category_code` sans table
+    de mapping (§4.2) : deux comptes portant le MÊME code → routage ambigu et
+    DOUBLE COMPTAGE au P&L/T2125. Règles :
+      - None/'' accepté (compte sans mapping) ;
+      - seulement sur un compte de type 'expense' (le mapping cible les 5xxx) ;
+      - doit être un code canonique EXPENSE_CATEGORIES (hors 'other') ;
+      - UNIQUE par org : aucun autre compte de l'org ne porte déjà ce code.
+    Raise HTTPException(400/409). Retourne le code normalisé (ou None)."""
+    if expense_category_code is None:
+        return None
+    if not isinstance(expense_category_code, str):
+        raise HTTPException(400, "expense_category_code invalide")
+    code = expense_category_code.strip()
+    if code == "":
+        return None
+    if account_type != "expense":
+        raise HTTPException(
+            400, "expense_category_code n'est permis que sur un compte de dépense (5xxx)")
+    if code not in _EXPENSE_CATEGORY_CODES:
+        raise HTTPException(
+            400, f"expense_category_code '{code}' inconnu (catégorie ARC invalide)")
+    dup_query = {
+        "organization_id": organization_id,
+        "expense_category_code": code,
+    }
+    if exclude_account_id:
+        dup_query["id"] = {"$ne": exclude_account_id}
+    if db.chart_of_accounts.find_one(dup_query):
+        raise HTTPException(
+            409,
+            f"expense_category_code '{code}' déjà attribué à un autre compte de "
+            f"l'organisation (unicité requise pour l'auto-posting)")
+    return code
 
 
 def _account_type_for_number(account_number) -> str:
@@ -2286,6 +2365,10 @@ def create_account(
     })
     if existing:
         raise HTTPException(409, "Un compte porte déjà ce numéro")
+    sub_type = _validate_sub_type(account_type, body.get("sub_type"))
+    expense_category_code = _validate_expense_category_code(
+        current_user.organization_id, account_type, sub_type,
+        body.get("expense_category_code"))
     doc = {
         "id": str(uuid.uuid4()),
         "organization_id": current_user.organization_id,
@@ -2293,11 +2376,11 @@ def create_account(
         "account_number": account_number,
         "name": name,
         "account_type": account_type,
-        "sub_type": body.get("sub_type"),
+        "sub_type": sub_type,
         "normal_balance": _normal_balance_for_type(account_type),
         "is_active": True,
         "is_system": False,
-        "expense_category_code": body.get("expense_category_code"),
+        "expense_category_code": expense_category_code,
         "description": (body.get("description") or "").strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -2325,11 +2408,15 @@ def update_account(
             raise HTTPException(400, "name ne peut être vide")
         set_fields["name"] = name
     if "sub_type" in body:
-        set_fields["sub_type"] = body["sub_type"]
+        set_fields["sub_type"] = _validate_sub_type(
+            acc["account_type"], body["sub_type"])
     if "description" in body:
         set_fields["description"] = (body.get("description") or "").strip()
     if "expense_category_code" in body:
-        set_fields["expense_category_code"] = body["expense_category_code"]
+        set_fields["expense_category_code"] = _validate_expense_category_code(
+            current_user.organization_id, acc["account_type"],
+            set_fields.get("sub_type", acc.get("sub_type")),
+            body["expense_category_code"], exclude_account_id=account_id)
     if "is_active" in body:
         want_active = bool(body["is_active"])
         if acc.get("is_system") and not want_active:

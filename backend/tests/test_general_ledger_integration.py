@@ -150,3 +150,99 @@ class TestChartOfAccounts:
             assert r3.json()["name"] == "Mobilier de bureau"
         finally:
             client.delete(f"/api/ledger/accounts/{acc_id}", headers=owner_headers)
+
+    # ── [COMPTA] fix #1 : expense_category_code verrouillé (auto-posting §10.2) ──
+
+    def test_create_expense_account_rejects_duplicate_category_code(
+            self, client, owner_headers):
+        # Le seed a déjà mappé "rent" sur le compte système 5200. Un 2e compte
+        # 5xxx portant le même code casserait le mapping dépense→compte (double
+        # comptage P&L/T2125) → doit être refusé (409).
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "5250", "name": "Loyer entrepôt",
+            "sub_type": "operating_expense", "expense_category_code": "rent",
+        })
+        assert r.status_code == 409, r.text
+
+    def test_create_rejects_unknown_category_code(self, client, owner_headers):
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "5251", "name": "Bidon",
+            "sub_type": "operating_expense", "expense_category_code": "not_a_code",
+        })
+        assert r.status_code == 400, r.text
+
+    def test_create_rejects_category_code_on_non_expense(self, client, owner_headers):
+        # Un compte d'actif ne doit pas porter un expense_category_code.
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1550", "name": "Actif bidon",
+            "sub_type": "current_asset", "expense_category_code": "rent",
+        })
+        assert r.status_code == 400, r.text
+
+    def test_put_rejects_duplicate_category_code(self, client, owner_headers):
+        # Créer un compte de dépense sans code, puis tenter de lui coller un code
+        # déjà pris par un compte système → 409.
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "5252", "name": "Dépense libre",
+            "sub_type": "operating_expense",
+        })
+        acc_id = r.json()["id"]
+        try:
+            r2 = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"expense_category_code": "utilities"})
+            assert r2.status_code == 409, r2.text
+            # ré-attribuer son PROPRE code (idempotent) doit rester possible
+            r3 = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"expense_category_code": None})
+            assert r3.status_code == 200, r3.text
+        finally:
+            client.delete(f"/api/ledger/accounts/{acc_id}", headers=owner_headers)
+
+    # ── [COMPTA] fix #2 : sub_type contraint au vocabulaire (regroupement bilan) ──
+
+    def test_create_rejects_unknown_sub_type(self, client, owner_headers):
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1560", "name": "Actif exotique",
+            "sub_type": "totally_made_up",
+        })
+        assert r.status_code == 400, r.text
+
+    def test_create_rejects_sub_type_incoherent_with_type(self, client, owner_headers):
+        # current_liability sur un compte d'ACTIF (1xxx) → incohérent → 400.
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1561", "name": "Actif mal typé",
+            "sub_type": "current_liability",
+        })
+        assert r.status_code == 400, r.text
+
+    def test_create_accepts_valid_sub_type_and_none(self, client, owner_headers):
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1562", "name": "Équipement lourd",
+            "sub_type": "fixed_asset",
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["sub_type"] == "fixed_asset"
+        client.delete(f"/api/ledger/accounts/{r.json()['id']}", headers=owner_headers)
+        r2 = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1563", "name": "Sans sous-type",
+        })
+        assert r2.status_code == 201, r2.text
+        assert r2.json()["sub_type"] is None
+        client.delete(f"/api/ledger/accounts/{r2.json()['id']}", headers=owner_headers)
+
+    def test_put_rejects_unknown_sub_type(self, client, owner_headers):
+        r = client.post("/api/ledger/accounts", headers=owner_headers, json={
+            "account_number": "1564", "name": "Actif à modifier",
+            "sub_type": "current_asset",
+        })
+        acc_id = r.json()["id"]
+        try:
+            r2 = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"sub_type": "nonsense"})
+            assert r2.status_code == 400, r2.text
+            r3 = client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
+                            json={"sub_type": "fixed_asset"})
+            assert r3.status_code == 200, r3.text
+            assert r3.json()["sub_type"] == "fixed_asset"
+        finally:
+            client.delete(f"/api/ledger/accounts/{acc_id}", headers=owner_headers)
