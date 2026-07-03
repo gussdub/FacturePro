@@ -3303,6 +3303,28 @@ def _ledger_pdf_money(value):
     return _t2125_format_money(value)
 
 
+def _ledger_pdf_unmapped_section(unmapped_accounts):
+    """[COMPTA] (fix reviewer #4) Construit la section « Comptes non mappés »
+    à afficher UNIQUEMENT quand l'endpoint JSON signale des orphelins
+    (unmapped_accounts non vide). Un compte non mappé = une ligne posted qui
+    réfère un account_id absent du plan comptable ; il fait basculer `balanced`
+    à false SANS apparaître dans la liste des comptes (les sections n'itèrent
+    que sur chart_of_accounts). Sans cette section, un PDF « DÉSÉQUILIBRÉE »
+    n'expliquerait PAS pourquoi. On rend ici VERBATIM le diagnostic du JSON
+    (account_id + Dr/Cr cumulés) — aucun recalcul de solde. Retourne
+    (section_title, rows) ou None si aucun orphelin (cas sain : rien affiché,
+    comportement inchangé)."""
+    if not unmapped_accounts:
+        return None
+    rows = []
+    for u in unmapped_accounts:
+        d = u.get("debit", 0) or 0
+        c = u.get("credit", 0) or 0
+        side = _ledger_pdf_money(d) if d else _ledger_pdf_money(-c)
+        rows.append((f"Compte inconnu {u.get('account_id')}", side, False))
+    return ("Comptes non mappés (diagnostic — écritures orphelines)", rows)
+
+
 def _render_ledger_table_pdf(title, subtitle, sections, org_id):
     """Génère un PDF FR-CA générique (balance de vérification ou bilan).
     sections = liste de (titre_section, [(label, montant_str, is_total_bool), ...]).
@@ -3399,9 +3421,15 @@ def trial_balance_pdf(
     rows.append(("Total débits", _ledger_pdf_money(tb["total_debit"]), True))
     rows.append(("Total crédits", _ledger_pdf_money(tb["total_credit"]), True))
     equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
+    # [COMPTA] (fix reviewer #4) Si des orphelins expliquent un déséquilibre,
+    # on les rend VERBATIM depuis le JSON sous la balance principale.
+    sections = [(None, rows)]
+    unmapped_section = _ledger_pdf_unmapped_section(tb.get("unmapped_accounts"))
+    if unmapped_section:
+        sections.append(unmapped_section)
     pdf = _render_ledger_table_pdf(
         "Balance de vérification", f"Au {as_of} — Balance {equilibre}",
-        [(None, rows)], current_user.organization_id)
+        sections, current_user.organization_id)
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="balance-verification-{as_of}.pdf"',
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -3446,11 +3474,18 @@ def balance_sheet_pdf(
                         _ledger_pdf_money(bs["total_liabilities_and_equity"]), True))
 
     equilibre = "équilibré" if bs["balanced"] else "DÉSÉQUILIBRÉ"
+    # [COMPTA] (fix reviewer #4) Un orphelin (account_id hors plan) fait passer
+    # `balanced` à false sans figurer dans Actif/Passif/CP → on rend le
+    # diagnostic JSON VERBATIM pour expliquer un bilan DÉSÉQUILIBRÉ.
+    bs_sections = [("Actif", asset_rows), ("Passif", liab_rows),
+                   ("Capitaux propres", equity_rows)]
+    unmapped_section = _ledger_pdf_unmapped_section(bs.get("unmapped_accounts"))
+    if unmapped_section:
+        bs_sections.append(unmapped_section)
     pdf = _render_ledger_table_pdf(
         "Bilan — État de la situation financière",
         f"Au {as_of} — Bilan {equilibre}",
-        [("Actif", asset_rows), ("Passif", liab_rows),
-         ("Capitaux propres", equity_rows)],
+        bs_sections,
         current_user.organization_id)
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="bilan-{as_of}.pdf"',

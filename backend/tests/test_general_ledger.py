@@ -688,3 +688,35 @@ class TestCurrentFiscalYear:
         fy_start, fy_end = _current_fiscal_year(date(2026, 2, 10), 3, 31)
         assert fy_end == date(2026, 3, 31)
         assert fy_start == date(2025, 4, 1)
+
+
+from server import _ledger_pdf_unmapped_section
+
+
+class TestLedgerPdfUnmappedSection:
+    """[COMPTA] (fix reviewer #4) La section « Comptes non mappés » du PDF rend
+    VERBATIM le diagnostic `unmapped_accounts` du JSON, pour expliquer un état
+    DÉSÉQUILIBRÉ causé par une écriture orpheline (account_id hors plan)."""
+
+    def test_none_when_no_orphans(self):
+        # Cas sain : aucune section ajoutée, comportement PDF inchangé.
+        assert _ledger_pdf_unmapped_section([]) is None
+        assert _ledger_pdf_unmapped_section(None) is None
+
+    def test_lists_each_orphan_with_amount(self):
+        section = _ledger_pdf_unmapped_section([
+            {"account_id": "ghost-123", "debit": 30.0, "credit": 0.0},
+            {"account_id": "ghost-456", "debit": 0.0, "credit": 12.5},
+        ])
+        assert section is not None
+        title, rows = section
+        assert "non mapp" in title.lower()
+        assert len(rows) == 2
+        # chaque ligne référence l'account_id orphelin (aide au diagnostic)
+        labels = [r[0] for r in rows]
+        assert any("ghost-123" in l for l in labels)
+        assert any("ghost-456" in l for l in labels)
+        # le montant est rendu (Dr positif, Cr en négatif via le formatteur FR-CA)
+        assert rows[0][1]  # non vide
+        # aucune ligne n'est marquée comme total
+        assert all(r[2] is False for r in rows)

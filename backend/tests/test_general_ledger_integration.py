@@ -970,3 +970,49 @@ class TestLedgerPDF:
         assert r.status_code == 200, r.text
         assert r.headers["content-type"] == "application/pdf"
         assert r.content[:4] == b"%PDF"
+
+    def _org_id(self, client, owner_headers):
+        return client.get("/api/org/me", headers=owner_headers).json()["organization"]["id"]
+
+    def test_pdf_renders_with_orphan_line(self, client, owner_headers):
+        """[COMPTA] (fix reviewer #4) Une écriture posted orpheline (account_id
+        hors plan) fait passer `balanced` à false et alimente `unmapped_accounts`
+        dans le JSON. Les deux PDF (balance de vérif + bilan) doivent continuer à
+        se générer (200 + %PDF) — la section « Comptes non mappés » explique alors
+        le déséquilibre au lieu de le laisser inexpliqué. On injecte un orphelin
+        temporaire directement en base, on vérifie le rendu, puis on nettoie."""
+        org_id = self._org_id(client, owner_headers)
+        orphan_num = f"JE-ORPHAN-{uuid.uuid4().hex[:8]}"
+        # écriture ÉQUILIBRÉE en Dr/Cr mais référençant un account_id inexistant
+        server_module.db.journal_entries.insert_one({
+            "id": str(uuid.uuid4()),
+            "organization_id": org_id,
+            "entry_number": orphan_num,
+            "entry_date": "2026-06-01",
+            "entry_type": "manual",
+            "status": "posted",
+            "description": "orphan diagnostic test",
+            "lines": [
+                {"account_id": "ghost-account-does-not-exist",
+                 "debit": 30.0, "credit": 0.0},
+                {"account_id": "ghost-account-2-does-not-exist",
+                 "debit": 0.0, "credit": 30.0},
+            ],
+        })
+        try:
+            # le JSON signale bien l'orphelin
+            tb = client.get("/api/ledger/trial-balance?as_of=2026-12-31",
+                            headers=owner_headers).json()
+            assert any(u["account_id"] == "ghost-account-does-not-exist"
+                       for u in tb["unmapped_accounts"])
+            # les deux PDF se génèrent malgré l'orphelin
+            rp = client.get("/api/ledger/trial-balance/pdf?as_of=2026-12-31",
+                            headers=owner_headers)
+            assert rp.status_code == 200, rp.text
+            assert rp.content[:4] == b"%PDF"
+            rb = client.get("/api/ledger/balance-sheet/pdf?as_of=2026-12-31",
+                            headers=owner_headers)
+            assert rb.status_code == 200, rb.text
+            assert rb.content[:4] == b"%PDF"
+        finally:
+            server_module.db.journal_entries.delete_one({"entry_number": orphan_num})
