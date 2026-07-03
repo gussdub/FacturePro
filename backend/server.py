@@ -1550,6 +1550,59 @@ def _build_default_accounts(organization_id: str, user_id: str) -> list:
     return accounts
 
 
+def _validate_entry_balance(lines: list) -> None:
+    """Force la partie double (§5.1). Raise HTTPException(400) si invalide."""
+    if not lines or len(lines) < 2:
+        raise HTTPException(400, "Une écriture doit avoir au moins 2 lignes")
+    total_debit = 0.0
+    total_credit = 0.0
+    for ln in lines:
+        d = round(float(ln.get("debit", 0) or 0), 2)
+        c = round(float(ln.get("credit", 0) or 0), 2)
+        if d < 0 or c < 0:
+            raise HTTPException(400, "Débit et crédit doivent être >= 0")
+        if (d > 0) == (c > 0):
+            raise HTTPException(
+                400, "Chaque ligne doit avoir soit un débit soit un crédit, pas les deux")
+        total_debit += d
+        total_credit += c
+    if abs(round(total_debit, 2) - round(total_credit, 2)) > 0.005:
+        raise HTTPException(
+            400,
+            f"Écriture déséquilibrée : débits {total_debit:.2f} ≠ crédits {total_credit:.2f}")
+
+
+def _account_balance(organization_id: str, account_id: str, normal_balance: str,
+                     start_date: str = None, as_of_date: str = None) -> float:
+    """Solde d'un compte, orienté par le solde normal (§5.2).
+    Compte TOUTES les écritures status='posted', SANS EXCEPTION — y compris
+    les écritures d'origine contre-passées ET leurs miroirs de contre-passation
+    (les deux restent 'posted', cf. §5.3). Ne filtre JAMAIS sur reverses_entry_id
+    ni reversed_by_entry_id (champs d'audit seulement). Il n'existe pas de statut
+    'reversed' : une écriture contre-passée n'est pas retirée du solde, sinon
+    double effet → solde faux. Optionnellement borné [start_date, as_of_date]
+    (dates ISO 'YYYY-MM-DD' incluses)."""
+    match = {"organization_id": organization_id, "status": "posted",
+             "lines.account_id": account_id}
+    date_filter = {}
+    if start_date:
+        date_filter["$gte"] = start_date
+    if as_of_date:
+        date_filter["$lte"] = as_of_date
+    if date_filter:
+        match["entry_date"] = date_filter
+    total_debit = 0.0
+    total_credit = 0.0
+    for entry in db.journal_entries.find(match, {"_id": 0, "lines": 1}):
+        for ln in entry["lines"]:
+            if ln["account_id"] == account_id:
+                total_debit += float(ln.get("debit", 0) or 0)
+                total_credit += float(ln.get("credit", 0) or 0)
+    if normal_balance == "debit":
+        return round(total_debit - total_credit, 2)
+    return round(total_credit - total_debit, 2)
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.

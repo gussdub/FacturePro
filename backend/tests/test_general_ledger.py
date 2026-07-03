@@ -286,3 +286,52 @@ class TestMigrateGeneralLedgerV1:
             assert rp["viewer"] == []
         finally:
             self._cleanup(org_id)
+
+
+from server import _validate_entry_balance, _account_balance
+from fastapi import HTTPException as _HTTPExc
+
+
+class TestValidateEntryBalance:
+    def test_balanced_ok(self):
+        lines = [
+            {"debit": 100.0, "credit": 0.0},
+            {"debit": 0.0, "credit": 100.0},
+        ]
+        _validate_entry_balance(lines)  # no raise
+
+    def test_less_than_two_lines(self):
+        with pytest.raises(_HTTPExc) as e:
+            _validate_entry_balance([{"debit": 100.0, "credit": 0.0}])
+        assert e.value.status_code == 400
+
+    def test_unbalanced(self):
+        with pytest.raises(_HTTPExc) as e:
+            _validate_entry_balance([
+                {"debit": 100.0, "credit": 0.0},
+                {"debit": 0.0, "credit": 90.0},
+            ])
+        assert e.value.status_code == 400
+
+    def test_line_with_both_debit_and_credit(self):
+        with pytest.raises(_HTTPExc) as e:
+            _validate_entry_balance([
+                {"debit": 50.0, "credit": 50.0},
+                {"debit": 0.0, "credit": 0.0},
+            ])
+        assert e.value.status_code == 400
+
+    def test_negative_line(self):
+        with pytest.raises(_HTTPExc) as e:
+            _validate_entry_balance([
+                {"debit": -100.0, "credit": 0.0},
+                {"debit": 0.0, "credit": -100.0},
+            ])
+        assert e.value.status_code == 400
+
+    def test_tolerance_half_cent(self):
+        # écart 0,004 $ < 0,005 → accepté
+        _validate_entry_balance([
+            {"debit": 100.004, "credit": 0.0},
+            {"debit": 0.0, "credit": 100.0},
+        ])
