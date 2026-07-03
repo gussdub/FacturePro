@@ -2507,19 +2507,30 @@ def _trial_balance_rows(organization_id: str, as_of: str = None) -> dict:
     """Construit la balance de vérification (§7.1). Chaque compte apparaît dans
     la colonne de son solde net ; comptes à solde 0 exclus.
 
-    [COMPTA] Le net par compte est calculé via _account_balance, qui compte
-    TOUTES les écritures posted (origines contre-passées + miroirs restent
-    posted → net zéro). Un compte à solde normal débiteur avec net ≥ 0 va en
-    colonne débit ; un net négatif (rare : compte de contra) bascule en crédit,
-    et inversement. Somme(débits) doit égaler Somme(crédits) : c'est l'invariant
-    'balanced' — s'il casse, un déséquilibre partie double s'est glissé ailleurs."""
+    [COMPTA] Le net par compte (colonne `accounts`) est calculé via
+    _account_balance, qui compte TOUTES les écritures posted (origines
+    contre-passées + miroirs restent posted → net zéro). Un compte à solde
+    normal débiteur avec net ≥ 0 va en colonne débit ; un net négatif (rare :
+    compte de contra) bascule en crédit, et inversement.
+
+    [COMPTA] ROBUSTESSE (fix reviewer #1) : l'invariant `balanced` et les
+    totaux `total_debit`/`total_credit` sont dérivés des ÉCRITURES elles-mêmes
+    (Σ lines[].debit / Σ lines[].credit sur les entries posted ≤ as_of), la
+    SOURCE DE VÉRITÉ de la partie double — PAS de la somme des soldes de comptes.
+    Motivation : si une ligne posted réfère un account_id absent du plan
+    comptable (orphelin de migration, édition manuelle, code futur), l'ancienne
+    version qui itérait chart_of_accounts avalait SILENCIEUSEMENT son solde →
+    balance faussée sans aucune indication du compte manquant. En dérivant des
+    écritures, tout orphelin est désormais COMPTÉ (donc un vrai déséquilibre
+    partie double reste VISIBLE via `balanced=false`) et listé dans
+    `unmapped_accounts` pour diagnostic. Sur un jeu d'écritures équilibrées, la
+    somme des soldes de comptes == Σ Dr == Σ Cr : les deux méthodes coïncident."""
     # Comptes actifs + inactifs ayant des lignes (on scanne tous les comptes de
     # l'org ; ceux à solde 0 sont exclus plus bas).
     accounts = list(db.chart_of_accounts.find(
         {"organization_id": organization_id}, {"_id": 0}))
+    known_account_ids = {acc["id"] for acc in accounts}
     rows = []
-    total_debit = 0.0
-    total_credit = 0.0
     for acc in accounts:
         net = _account_balance(organization_id, acc["id"], acc["normal_balance"],
                                as_of_date=as_of)
@@ -2531,8 +2542,6 @@ def _trial_balance_rows(organization_id: str, as_of: str = None) -> dict:
         else:
             credit_balance = net if net >= 0 else 0.0
             debit_balance = -net if net < 0 else 0.0
-        total_debit += debit_balance
-        total_credit += credit_balance
         rows.append({
             "account_number": acc["account_number"],
             "name": acc["name"],
@@ -2541,14 +2550,41 @@ def _trial_balance_rows(organization_id: str, as_of: str = None) -> dict:
             "credit_balance": round(credit_balance, 2),
         })
     rows.sort(key=lambda r: r["account_number"])
+
+    # [COMPTA] Totaux et invariant dérivés des ÉCRITURES posted (source de vérité
+    # partie double), bornés à as_of inclusif comme _account_balance.
+    entry_match = {"organization_id": organization_id, "status": "posted"}
+    if as_of:
+        entry_match["entry_date"] = {"$lte": as_of}
+    total_debit = 0.0
+    total_credit = 0.0
+    unmapped = {}   # account_id orphelin -> {debit, credit} cumulés (diagnostic)
+    for entry in db.journal_entries.find(entry_match, {"_id": 0, "lines": 1}):
+        for ln in entry.get("lines", []):
+            d = float(ln.get("debit", 0) or 0)
+            c = float(ln.get("credit", 0) or 0)
+            total_debit += d
+            total_credit += c
+            acc_id = ln.get("account_id")
+            if acc_id not in known_account_ids:
+                agg = unmapped.setdefault(acc_id, {"debit": 0.0, "credit": 0.0})
+                agg["debit"] += d
+                agg["credit"] += c
     total_debit = round(total_debit, 2)
     total_credit = round(total_credit, 2)
+    unmapped_accounts = [
+        {"account_id": aid,
+         "debit": round(v["debit"], 2),
+         "credit": round(v["credit"], 2)}
+        for aid, v in sorted(unmapped.items())
+    ]
     return {
         "as_of": as_of,
         "accounts": rows,
         "total_debit": total_debit,
         "total_credit": total_credit,
         "balanced": abs(total_debit - total_credit) <= 0.01,
+        "unmapped_accounts": unmapped_accounts,
     }
 
 
@@ -3019,6 +3055,9 @@ def trial_balance(
 ):
     """Balance de vérification (§7.1) : net par compte, ventilé Dr/Cr selon le
     solde normal, comptes à solde 0 exclus, invariant `balanced` (ΣDr == ΣCr).
+    Les totaux/`balanced` sont dérivés des écritures posted (source de vérité
+    partie double) : un compte orphelin apparaît dans `unmapped_accounts` au lieu
+    d'être avalé silencieusement (fix reviewer #1).
     `as_of` (ISO YYYY-MM-DD, inclusif) borne le calcul à cette date ; défaut =
     aujourd'hui (UTC). [COMPTA] no-store : chiffre financier jamais mis en cache."""
     _apply_ledger_no_store(response)
