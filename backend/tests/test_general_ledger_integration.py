@@ -953,3 +953,20 @@ class TestGeneralLedgerDetail:
         r = client.get(f"/api/ledger/general-ledger?account_id={uuid.uuid4()}",
                        headers=owner_headers)
         assert r.status_code == 404
+
+
+class TestLedgerPDF:
+    def test_trial_balance_pdf(self, client, owner_headers):
+        r = client.get("/api/ledger/trial-balance/pdf?as_of=2026-12-31",
+                       headers=owner_headers)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/pdf"
+        assert "no-store" in r.headers.get("cache-control", "")
+        assert r.content[:4] == b"%PDF"
+
+    def test_balance_sheet_pdf(self, client, owner_headers):
+        r = client.get("/api/ledger/balance-sheet/pdf?as_of=2026-12-31",
+                       headers=owner_headers)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content[:4] == b"%PDF"

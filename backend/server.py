@@ -3297,6 +3297,167 @@ def general_ledger(
     }
 
 
+# ─── PDF Grand Livre (§7.3) : balance de vérification + bilan, FR-CA ───
+def _ledger_pdf_money(value):
+    """Format FR-CA (réutilise le formatteur T2125 : '85 000,00 $')."""
+    return _t2125_format_money(value)
+
+
+def _render_ledger_table_pdf(title, subtitle, sections, org_id):
+    """Génère un PDF FR-CA générique (balance de vérification ou bilan).
+    sections = liste de (titre_section, [(label, montant_str, is_total_bool), ...]).
+
+    [COMPTA] Rendu strict de ce que produisent les endpoints JSON (mêmes chiffres
+    dérivés des écritures posted, partie double) : ce helper ne recalcule aucun
+    solde, il met en page. L'équilibre (`balanced`) est déjà porté par le
+    sous-titre. Toutes les strings user-supplied (raison sociale, noms de comptes)
+    sont échappées via html.escape avant ReportLab (anti-injection markup)."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from html import escape as html_escape
+
+    teal = HexColor("#008F7A")
+    dark = HexColor("#1f2937")
+    gray = HexColor("#6b7280")
+
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    company_name = html_escape(settings.get("company_name") or "(sans nom)")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+                            leftMargin=0.6 * inch, rightMargin=0.6 * inch)
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("T", parent=styles["Heading1"], fontSize=18,
+                                 textColor=teal, spaceAfter=4)
+    h2_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12,
+                              textColor=dark, spaceBefore=10, spaceAfter=4)
+    small_style = ParagraphStyle("S", parent=styles["Normal"], fontSize=9,
+                                 textColor=gray, leading=11)
+
+    elements = [
+        Paragraph(html_escape(title), title_style),
+        Paragraph(f"<b>{company_name}</b> &nbsp;·&nbsp; {html_escape(subtitle)}",
+                  small_style),
+        Paragraph(
+            f"Généré le {datetime.now(timezone.utc).strftime('%Y-%m-%d à %H:%M UTC')} "
+            "— État non audité, usage interne", small_style),
+        Spacer(1, 0.2 * inch),
+    ]
+
+    for section_title, rows in sections:
+        if section_title:
+            elements.append(Paragraph(html_escape(section_title), h2_style))
+        table_data = [[html_escape(str(label)), amount_str]
+                      for (label, amount_str, _) in rows]
+        if not table_data:
+            table_data = [["(aucun)", ""]]
+        t = Table(table_data, colWidths=[5.0 * inch, 2.0 * inch])
+        style = [
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("TEXTCOLOR", (0, 0), (-1, -1), dark),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.25, HexColor("#e5e7eb")),
+        ]
+        for i, (_, _, is_total) in enumerate(rows):
+            if is_total:
+                style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+                style.append(("LINEABOVE", (0, i), (-1, i), 0.75, dark))
+        t.setStyle(TableStyle(style))
+        elements.append(t)
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf.read()
+
+
+@app.get("/api/ledger/trial-balance/pdf")
+def trial_balance_pdf(
+    as_of: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """PDF de la balance de vérification (§7.1/§7.3). Mêmes chiffres que
+    l'endpoint JSON (dérivés des écritures posted). [COMPTA] no-store : chiffre
+    financier jamais mis en cache."""
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    if not as_of:
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    tb = _trial_balance_rows(current_user.organization_id, as_of)
+    rows = []
+    for a in tb["accounts"]:
+        amount = a["debit_balance"] if a["debit_balance"] > 0 else -a["credit_balance"]
+        side = "Dr" if a["debit_balance"] > 0 else "Cr"
+        rows.append((f"{a['account_number']} — {a['name']} ({side})",
+                     _ledger_pdf_money(abs(amount)), False))
+    rows.append(("Total débits", _ledger_pdf_money(tb["total_debit"]), True))
+    rows.append(("Total crédits", _ledger_pdf_money(tb["total_credit"]), True))
+    equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
+    pdf = _render_ledger_table_pdf(
+        "Balance de vérification", f"Au {as_of} — Balance {equilibre}",
+        [(None, rows)], current_user.organization_id)
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="balance-verification-{as_of}.pdf"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
+@app.get("/api/ledger/balance-sheet/pdf")
+def balance_sheet_pdf(
+    as_of: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """PDF du bilan / état de la situation financière (§7.2/§7.3). Mêmes chiffres
+    que l'endpoint JSON (Actif = Passif + Capitaux propres, résultat net de
+    l'exercice dérivé). [COMPTA] no-store : chiffre financier jamais mis en
+    cache."""
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    if not as_of:
+        as_of = datetime.now(timezone.utc).date().isoformat()
+    # balance_sheet() exige un paramètre Response (positionnel) : on lui passe un
+    # Response jetable, seul le corps JSON nous intéresse ici.
+    bs = balance_sheet(response=Response(), as_of=as_of, current_user=current_user)
+
+    asset_rows = [(f"{a['account_number']} — {a['name']}",
+                   _ledger_pdf_money(a["balance"]), False)
+                  for a in bs["assets"]["accounts"]]
+    asset_rows.append(("Total de l'actif", _ledger_pdf_money(bs["total_assets"]), True))
+
+    liab_rows = [(f"{a['account_number']} — {a['name']}",
+                  _ledger_pdf_money(a["balance"]), False)
+                 for a in bs["liabilities"]["accounts"]]
+    liab_rows.append(("Total du passif",
+                      _ledger_pdf_money(bs["liabilities"]["total"]), True))
+
+    equity_rows = [(f"{a['account_number']} — {a['name']}",
+                    _ledger_pdf_money(a["balance"]), False)
+                   for a in bs["equity"]["accounts"]]
+    equity_rows.append(("Résultat net de l'exercice",
+                        _ledger_pdf_money(bs["equity"]["net_income_current_year"]), False))
+    equity_rows.append(("Total des capitaux propres",
+                        _ledger_pdf_money(bs["equity"]["total"]), True))
+    equity_rows.append(("Total passif + capitaux propres",
+                        _ledger_pdf_money(bs["total_liabilities_and_equity"]), True))
+
+    equilibre = "équilibré" if bs["balanced"] else "DÉSÉQUILIBRÉ"
+    pdf = _render_ledger_table_pdf(
+        "Bilan — État de la situation financière",
+        f"Au {as_of} — Bilan {equilibre}",
+        [("Actif", asset_rows), ("Passif", liab_rows),
+         ("Capitaux propres", equity_rows)],
+        current_user.organization_id)
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="bilan-{as_of}.pdf"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
 # ─── Health ───
 @app.get("/")
 def root():
