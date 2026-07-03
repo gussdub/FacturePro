@@ -722,6 +722,28 @@ def _parse_iso_date(s):
             return None
 
 
+def _require_entry_date(value) -> str:
+    """Valide et NORMALISE une entry_date comptable (§4 modèle, ligne 94 spec).
+
+    Contrairement à _parse_iso_date qui tolère et retourne None en silence, ici
+    on EXIGE une date ISO calendaire valide et on lève HTTPException(400) sinon.
+    On renvoie toujours la forme canonique 'YYYY-MM-DD' — jamais avec composante
+    horaire — pour que TOUTE requête de solde bornée par date ($gte/$lte contre
+    entry_date, cf. _account_balance / trial-balance ?as_of=) compare des chaînes
+    homogènes. Une entry_date None/malformée stockée casserait silencieusement les
+    états financiers datés (compte sous-estimé → balance de vérification fausse)."""
+    # Rejette d'emblée les non-chaînes (ex. entry_date: 42 dans le JSON) : sans ça,
+    # _parse_iso_date lève un TypeError non capturé (→ 500 au lieu d'un 400 propre).
+    if not isinstance(value, str):
+        raise HTTPException(
+            400, "entry_date requise et doit être une date ISO 'YYYY-MM-DD' valide")
+    d = _parse_iso_date(value)
+    if d is None:
+        raise HTTPException(
+            400, "entry_date requise et doit être une date ISO 'YYYY-MM-DD' valide")
+    return d.isoformat()
+
+
 def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower):
     """Score 1-3 pour un candidat invoice. Retourne (score, date_diff_days, amount_diff)."""
     outstanding = _get_invoice_outstanding(inv)
@@ -2628,9 +2650,10 @@ def create_entry(
     status = body.get("status", "draft")
     if status not in ("draft", "posted"):
         raise HTTPException(400, "status doit être 'draft' ou 'posted'")
+    entry_date = _require_entry_date(body.get("entry_date"))
     return _create_journal_entry(
         current_user.organization_id, current_user.id,
-        entry_date=body.get("entry_date"),
+        entry_date=entry_date,
         description=(body.get("description") or "").strip(),
         lines=body.get("lines") or [],
         status=status,
@@ -2655,8 +2678,9 @@ def update_entry(
     lines = body.get("lines", entry["lines"])
     _validate_entry_balance(lines)
     enriched = _snapshot_lines(current_user.organization_id, lines)
+    entry_date = _require_entry_date(body.get("entry_date", entry["entry_date"]))
     set_fields = {
-        "entry_date": body.get("entry_date", entry["entry_date"]),
+        "entry_date": entry_date,
         "description": (body.get("description", entry["description"]) or "").strip(),
         "reference": body.get("reference", entry["reference"]),
         "lines": enriched,
@@ -2713,7 +2737,8 @@ def reverse_entry(
          "line_description": ln.get("line_description")}
         for ln in entry["lines"]
     ]
-    rev_date = body.get("entry_date") or datetime.now(timezone.utc).date().isoformat()
+    rev_date = _require_entry_date(
+        body.get("entry_date") or datetime.now(timezone.utc).date().isoformat())
     rev_desc = body.get("description") or f"Contre-passation de {entry['entry_number']}"
     # Le miroir est une NOUVELLE écriture 'posted'. L'origine reste 'posted'.
     # Les deux comptent dans _account_balance → net zéro automatique (§5.2/§5.3).

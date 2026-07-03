@@ -412,3 +412,52 @@ class TestJournalEntries:
                          headers=owner_headers, json={})
         assert r2.status_code == 400
         client.delete(f"/api/ledger/entries/{entry_id}", headers=owner_headers)
+
+    # ── [COMPTA] fix #1 : entry_date exigée + validée (spec §4 ligne 94) ──
+
+    def test_create_rejects_missing_entry_date(self, client, owner_headers):
+        # Sans entry_date, l'écriture serait invisible des soldes datés (as_of=).
+        by_num = self._accounts(client, owner_headers)
+        body = self._balanced_body(by_num)
+        del body["entry_date"]
+        r = client.post("/api/ledger/entries", headers=owner_headers, json=body)
+        assert r.status_code == 400, r.text
+
+    def test_create_rejects_null_entry_date(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        body = self._balanced_body(by_num)
+        body["entry_date"] = None
+        r = client.post("/api/ledger/entries", headers=owner_headers, json=body)
+        assert r.status_code == 400, r.text
+
+    def test_create_rejects_malformed_entry_date(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        for bad in ("15/06/2026", "not-a-date", "2026-13-40", 42):
+            body = self._balanced_body(by_num)
+            body["entry_date"] = bad
+            r = client.post("/api/ledger/entries", headers=owner_headers, json=body)
+            assert r.status_code == 400, f"{bad!r} → {r.status_code} {r.text}"
+
+    def test_create_normalises_datetime_entry_date_to_date_only(
+            self, client, owner_headers):
+        # Une composante horaire est normalisée → 'YYYY-MM-DD' (comparaisons $gte/$lte
+        # de solde homogènes). Sinon un compte pourrait être sous-estimé.
+        by_num = self._accounts(client, owner_headers)
+        body = self._balanced_body(by_num)
+        body["entry_date"] = "2026-06-15T10:30:00Z"
+        r = client.post("/api/ledger/entries", headers=owner_headers, json=body)
+        assert r.status_code == 201, r.text
+        assert r.json()["entry_date"] == "2026-06-15"
+        client.delete(f"/api/ledger/entries/{r.json()['id']}", headers=owner_headers)
+
+    def test_reverse_rejects_malformed_entry_date(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/entries", headers=owner_headers,
+                        json=self._balanced_body(by_num, amount=55.0))
+        entry_id = r.json()["id"]
+        r2 = client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                         headers=owner_headers, json={"entry_date": "pas-une-date"})
+        assert r2.status_code == 400, r2.text
+        # nettoie proprement par une vraie contre-passation
+        client.post(f"/api/ledger/entries/{entry_id}/reverse",
+                    headers=owner_headers, json={})

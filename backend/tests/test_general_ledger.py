@@ -289,7 +289,48 @@ class TestMigrateGeneralLedgerV1:
 
 
 from server import _validate_entry_balance, _account_balance
+from server import _require_entry_date, _snapshot_lines
 from fastapi import HTTPException as _HTTPExc
+
+
+class TestRequireEntryDate:
+    """entry_date DOIT être une date ISO 'YYYY-MM-DD' valide, exigée et normalisée
+    (spec §4 ligne 94). Sans ça, une écriture posted+équilibrée avec entry_date
+    None/malformée serait stockée telle quelle : toute requête de solde bornée par
+    date ($gte/$lte contre entry_date, ex. trial-balance ?as_of=) l'EXCLURAIT en
+    silence → compte sous-estimé → balance de vérification faussement déséquilibrée.
+    """
+
+    def test_valid_iso_date_passthrough(self):
+        assert _require_entry_date("2026-06-15") == "2026-06-15"
+
+    def test_normalises_datetime_to_date_only(self):
+        # Une composante horaire casserait les comparaisons de chaînes $gte/$lte.
+        assert _require_entry_date("2026-06-15T10:30:00Z") == "2026-06-15"
+        assert _require_entry_date("2026-06-15T10:30:00+00:00") == "2026-06-15"
+
+    def test_none_rejected(self):
+        with pytest.raises(_HTTPExc) as e:
+            _require_entry_date(None)
+        assert e.value.status_code == 400
+
+    def test_empty_string_rejected(self):
+        with pytest.raises(_HTTPExc) as e:
+            _require_entry_date("")
+        assert e.value.status_code == 400
+
+    def test_malformed_string_rejected(self):
+        for bad in ("not-a-date", "2026-13-40", "15/06/2026", "2026-06"):
+            with pytest.raises(_HTTPExc) as e:
+                _require_entry_date(bad)
+            assert e.value.status_code == 400, bad
+
+    def test_non_string_rejected_as_400_not_500(self):
+        # entry_date: 42 dans le JSON ne doit pas exploser en TypeError (500).
+        for bad in (42, 3.14, {}, [], True):
+            with pytest.raises(_HTTPExc) as e:
+                _require_entry_date(bad)
+            assert e.value.status_code == 400, bad
 
 
 class TestValidateEntryBalance:
