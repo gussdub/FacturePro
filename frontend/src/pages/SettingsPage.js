@@ -368,6 +368,11 @@ const SettingsPage = () => {
               <option value="NT">Territoires du Nord-Ouest</option>
             </select>
           </div>
+          {/* Feature #12.1 — % bureau à domicile + véhicule : mécanismes T2125,
+              pertinents uniquement pour les travailleurs autonomes non incorporés.
+              Masqués pour une société par actions (voir aussi onglet T2125 caché). */}
+          {(settings.entity_type || 'sole_proprietor') === 'sole_proprietor' && (
+          <>
           <div style={{ marginTop: 16 }}>
             <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
               Bureau à domicile — % surface utilisée pour l'entreprise
@@ -410,6 +415,8 @@ const SettingsPage = () => {
               Ex: 12 000 km commerciaux / 30 000 km total = 40. Mettre 0 si véhicule purement commercial.
             </div>
           </div>
+          </>
+          )}
         </div>
 
         {/* Tax Numbers */}

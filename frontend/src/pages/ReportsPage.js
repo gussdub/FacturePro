@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BACKEND_URL } from '../config';
 import T2125ReportSection from '../components/T2125ReportSection';
@@ -420,6 +420,22 @@ function PnlReportSection() {
 
 function ReportsPage() {
   const [activeTab, setActiveTab] = useState('sales_tax');
+  // Feature #12.1 — le T2125 ne concerne que les travailleurs autonomes non
+  // incorporés ; on cache l'onglet pour une société par actions.
+  const [entityType, setEntityType] = useState('sole_proprietor');
+  const showT2125 = entityType === 'sole_proprietor';
+
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/settings/company`)
+      .then(r => setEntityType(r.data?.entity_type || 'sole_proprietor'))
+      .catch(() => {});
+  }, []);
+
+  // Si l'onglet actif devient invalide (T2125 caché pour une société), replier
+  // sur le rapport TPS/TVQ.
+  useEffect(() => {
+    if (activeTab === 't2125' && !showT2125) setActiveTab('sales_tax');
+  }, [activeTab, showT2125]);
 
   const tabStyle = (isActive) => ({
     padding: '10px 18px',
@@ -445,14 +461,16 @@ function ReportsPage() {
           onClick={() => setActiveTab('pnl')}>
           État des résultats (P&L)
         </button>
-        <button style={tabStyle(activeTab === 't2125')}
-          onClick={() => setActiveTab('t2125')}>
-          Déclaration T2125
-        </button>
+        {showT2125 && (
+          <button style={tabStyle(activeTab === 't2125')}
+            onClick={() => setActiveTab('t2125')}>
+            Déclaration T2125
+          </button>
+        )}
       </div>
       {activeTab === 'sales_tax' && <SalesTaxReportSection />}
       {activeTab === 'pnl' && <PnlReportSection />}
-      {activeTab === 't2125' && <T2125ReportSection />}
+      {activeTab === 't2125' && showT2125 && <T2125ReportSection />}
     </div>
   );
 }
