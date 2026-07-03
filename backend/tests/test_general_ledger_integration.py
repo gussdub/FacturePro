@@ -560,3 +560,86 @@ class TestJournalEntries:
             # Compte porte des lignes postées → non supprimable ; on le désactive.
             client.put(f"/api/ledger/accounts/{acc_id}", headers=owner_headers,
                        json={"is_active": False})
+
+
+class TestOpeningBalance:
+    @pytest.fixture(autouse=True)
+    def _clean_ob(self, client, owner_headers):
+        """Supprime toute écriture OB existante avant chaque test (isolation)."""
+        server_module.db.journal_entries.delete_many({
+            "organization_id": self._org_id(client, owner_headers),
+            "entry_type": "opening",
+        })
+        server_module.db.company_settings.update_many(
+            {}, {"$unset": {"ledger_start_date": ""}})
+        yield
+
+    def _org_id(self, client, owner_headers):
+        return client.get("/api/org/me", headers=owner_headers).json()["organization"]["id"]
+
+    def _accounts(self, client, owner_headers):
+        accounts = client.get("/api/ledger/accounts", headers=owner_headers).json()
+        return {a["account_number"]: a for a in accounts}
+
+    def test_post_balanced_creates_ob(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/opening-balance", headers=owner_headers, json={
+            "opening_date": "2026-01-01",
+            "balances": [
+                {"account_id": by_num["1000"]["id"], "debit": 5000.0, "credit": 0},
+                {"account_id": by_num["3200"]["id"], "debit": 0, "credit": 5000.0},
+            ],
+        })
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["entry_number"] == "OB-0001"
+        assert body["entry_type"] == "opening"
+        assert body["status"] == "posted"
+        # ledger_start_date posée
+        g = client.get("/api/ledger/opening-balance", headers=owner_headers).json()
+        assert g["exists"] is True
+        assert g["opening_date"] == "2026-01-01"
+
+    def test_post_unbalanced_400(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        r = client.post("/api/ledger/opening-balance", headers=owner_headers, json={
+            "opening_date": "2026-01-01",
+            "balances": [
+                {"account_id": by_num["1000"]["id"], "debit": 5000.0, "credit": 0},
+                {"account_id": by_num["3200"]["id"], "debit": 0, "credit": 4000.0},
+            ],
+        })
+        assert r.status_code == 400
+
+    def test_second_post_409(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        payload = {
+            "opening_date": "2026-01-01",
+            "balances": [
+                {"account_id": by_num["1000"]["id"], "debit": 5000.0, "credit": 0},
+                {"account_id": by_num["3200"]["id"], "debit": 0, "credit": 5000.0},
+            ],
+        }
+        r1 = client.post("/api/ledger/opening-balance", headers=owner_headers, json=payload)
+        assert r1.status_code == 201
+        r2 = client.post("/api/ledger/opening-balance", headers=owner_headers, json=payload)
+        assert r2.status_code == 409
+
+    def test_put_replaces(self, client, owner_headers):
+        by_num = self._accounts(client, owner_headers)
+        client.post("/api/ledger/opening-balance", headers=owner_headers, json={
+            "opening_date": "2026-01-01",
+            "balances": [
+                {"account_id": by_num["1000"]["id"], "debit": 5000.0, "credit": 0},
+                {"account_id": by_num["3200"]["id"], "debit": 0, "credit": 5000.0},
+            ],
+        })
+        r = client.put("/api/ledger/opening-balance", headers=owner_headers, json={
+            "opening_date": "2026-01-01",
+            "balances": [
+                {"account_id": by_num["1000"]["id"], "debit": 8000.0, "credit": 0},
+                {"account_id": by_num["3200"]["id"], "debit": 0, "credit": 8000.0},
+            ],
+        })
+        assert r.status_code == 200
+        assert r.json()["total_debit"] == 8000.0

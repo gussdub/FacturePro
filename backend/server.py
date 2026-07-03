@@ -2778,6 +2778,78 @@ def delete_entry(
     return
 
 
+# ─── Assistant bilan d'ouverture (§7) ───
+
+@app.get("/api/ledger/opening-balance")
+def get_opening_balance(
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    entry = db.journal_entries.find_one({
+        "organization_id": current_user.organization_id, "entry_type": "opening",
+    }, {"_id": 0})
+    settings = db.company_settings.find_one(
+        {"organization_id": current_user.organization_id}, {"_id": 0}) or {}
+    return {
+        "exists": entry is not None,
+        "opening_date": settings.get("ledger_start_date"),
+        "entry": entry,
+    }
+
+
+@app.post("/api/ledger/opening-balance", status_code=201)
+def create_opening_balance(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    existing = db.journal_entries.find_one({
+        "organization_id": current_user.organization_id, "entry_type": "opening",
+    })
+    if existing:
+        raise HTTPException(409, "Bilan d'ouverture déjà saisi — modifiez-le")
+    opening_date = body.get("opening_date")
+    if not opening_date:
+        raise HTTPException(400, "opening_date requise")
+    entry = _create_journal_entry(
+        current_user.organization_id, current_user.id,
+        entry_date=opening_date, description="Bilan d'ouverture",
+        lines=body.get("balances") or [], status="posted",
+        entry_type="opening", entry_number="OB-0001")
+    db.company_settings.update_one(
+        {"organization_id": current_user.organization_id},
+        {"$set": {"ledger_start_date": opening_date}})
+    return entry
+
+
+@app.put("/api/ledger/opening-balance")
+def update_opening_balance(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    existing = db.journal_entries.find_one({
+        "organization_id": current_user.organization_id, "entry_type": "opening",
+    }, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Aucun bilan d'ouverture à modifier")
+    opening_date = body.get("opening_date") or existing["entry_date"]
+    _validate_entry_balance(body.get("balances") or [])
+    enriched = _snapshot_lines(current_user.organization_id, body.get("balances") or [])
+    db.journal_entries.update_one(
+        {"id": existing["id"], "organization_id": current_user.organization_id},
+        {"$set": {
+            "entry_date": opening_date,
+            "lines": enriched,
+            "total_debit": round(sum(l["debit"] for l in enriched), 2),
+            "total_credit": round(sum(l["credit"] for l in enriched), 2),
+        }})
+    db.company_settings.update_one(
+        {"organization_id": current_user.organization_id},
+        {"$set": {"ledger_start_date": opening_date}})
+    return db.journal_entries.find_one(
+        {"id": existing["id"], "organization_id": current_user.organization_id},
+        {"_id": 0})
+
+
 # ─── Health ───
 @app.get("/")
 def root():
