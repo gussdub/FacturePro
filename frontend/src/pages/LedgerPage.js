@@ -491,6 +491,41 @@ async function downloadPdf(url, filename) {
   window.URL.revokeObjectURL(blobUrl);
 }
 
+// [COMPTA] Diagnostic orphelins — mêmes lignes que le PDF (unmapped_accounts).
+// Une ligne d'écriture posted qui référence un account_id absent du plan comptable
+// n'apparaît dans aucune colonne/section de compte, mais EST comptée dans les totaux
+// (source de vérité partie double). Sans ce bloc, l'écran afficherait des totaux que
+// la somme visuelle des lignes ne reconstitue pas — et un « Déséquilibré » sans cause
+// affichée. On rend donc le diagnostic à l'écran, à l'identique du PDF.
+function UnmappedAccountsNotice({ unmapped }) {
+  if (!unmapped || unmapped.length === 0) return null;
+  return (
+    <div style={{ background: '#FEF2F2', border: '1px solid #DC2626', borderRadius: 6,
+      padding: '8px 12px', marginTop: 12, fontSize: 12, color: '#991B1B' }}>
+      <strong>Comptes hors plan (orphelins)</strong> — {unmapped.length} compte(s)
+      référencé(s) par des écritures mais absent(s) du plan comptable. Leurs montants
+      sont inclus dans les totaux mais n'apparaissent dans aucune ligne ci-dessus, ce
+      qui explique tout écart entre la somme visuelle des colonnes et les totaux, et un
+      éventuel « Déséquilibré ». À corriger (réassocier ou recréer le compte).
+      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 6, fontSize: 12 }}>
+        <thead><tr style={{ textAlign: 'left' }}>
+          <th style={{ padding: 4 }}>account_id</th>
+          <th style={{ padding: 4, textAlign: 'right' }}>Débit</th>
+          <th style={{ padding: 4, textAlign: 'right' }}>Crédit</th></tr></thead>
+        <tbody>
+          {unmapped.map(u => (
+            <tr key={u.account_id}>
+              <td style={{ padding: 4, fontFamily: 'monospace' }}>{u.account_id}</td>
+              <td style={{ padding: 4, textAlign: 'right' }}>{u.debit.toFixed(2)} $</td>
+              <td style={{ padding: 4, textAlign: 'right' }}>{u.credit.toFixed(2)} $</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function TrialBalanceTab() {
   const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
   const [data, setData] = useState(null);
@@ -538,6 +573,7 @@ function TrialBalanceTab() {
           </tbody>
         </table>
       )}
+      {data && <UnmappedAccountsNotice unmapped={data.unmapped_accounts} />}
     </div>
   );
 }
@@ -613,6 +649,7 @@ function BalanceSheetTab() {
             fontSize: 15, borderTop: '2px solid #1f2937', paddingTop: 8 }}>
             <span>Total passif + capitaux propres</span>
             <span>{data.total_liabilities_and_equity.toFixed(2)} $</span></div>
+          <UnmappedAccountsNotice unmapped={data.unmapped_accounts} />
         </>
       )}
     </div>
