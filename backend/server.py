@@ -1131,7 +1131,7 @@ app.add_middleware(
 class User(BaseModel):
     id: str
     email: str
-    company_name: str
+    company_name: Optional[str] = None  # None pour les membres invités (le nom vit sur l'organisation)
     is_active: bool = True
     subscription_status: str = "trial"
     trial_end_date: Optional[str] = None

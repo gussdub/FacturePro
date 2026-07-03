@@ -462,6 +462,33 @@ class TestAcceptInvite:
         finally:
             self._cleanup_user(email)
 
+    def test_invited_user_can_login_afterwards(self, client, owner_headers, monkeypatch):
+        # Regression : un membre invite (company_name=None) doit pouvoir se
+        # RECONNECTER via /api/auth/login. Le modele User exigeait company_name:str
+        # -> User(**user) crashait en 500 -> le frontend affichait "mot de passe
+        # incorrect". company_name est maintenant Optional.
+        email = f"accept-login-{uuid.uuid4().hex[:8]}@example.com"
+        _, token = self._create_pending_invitation(
+            client, owner_headers, email, "accountant", monkeypatch)
+        try:
+            r = client.post("/api/auth/accept-invite", json={
+                "token": token, "password": "loginpass123", "pipeda_consent": True,
+            })
+            assert r.status_code == 200, r.text
+            # Le vrai test : login apres coup (token expire / logout)
+            r2 = client.post("/api/auth/login", json={
+                "email": email, "password": "loginpass123",
+            })
+            assert r2.status_code == 200, r2.text
+            assert "access_token" in r2.json()
+            # Mauvais mot de passe -> 401 (pas 500)
+            r3 = client.post("/api/auth/login", json={
+                "email": email, "password": "wrong",
+            })
+            assert r3.status_code == 401
+        finally:
+            self._cleanup_user(email)
+
     def test_missing_pipeda_consent_rejected(self, client, owner_headers,
                                               monkeypatch):
         email = f"accept-nopipeda-{uuid.uuid4().hex[:8]}@example.com"
