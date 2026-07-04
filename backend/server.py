@@ -12,7 +12,6 @@ import logging
 import jwt
 import bcrypt
 import resend
-import requests as http_requests
 from datetime import date, datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -5913,6 +5912,17 @@ def create_expense_from_tx(tx_id: str, body: dict,
         {"id": tx_id, **_org_scope(current_user)},
         {"$set": {"status": "matched", "match_kind": "expense",
                   "match_id": expense_doc["id"], "matched_at": now}})
+    # [GL P2 — audit fix] Une dépense créée depuis une transaction bancaire doit
+    # être comptabilisée comme n'importe quelle dépense (parité avec create_expense).
+    # Opt-in par org, idempotent, _safe_autopost avale toute erreur.
+    org_id = current_user.organization_id
+    _settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if _settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        _safe_autopost(
+            lambda: _autopost_expense(org_id, current_user.id, expense_doc),
+            "expenses", expense_doc["id"], {"organization_id": org_id},
+            legacy_user_id=current_user.id)
     return {"expense": clean_doc(expense_doc),
             "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))}
 
@@ -5972,6 +5982,22 @@ def create_invoice_from_tx(tx_id: str, body: dict,
         {"$set": {"status": "matched", "match_kind": "invoice_payment",
                   "match_id": invoice_doc["payments"][0]["id"],
                   "invoice_id": invoice_doc["id"], "matched_at": now}})
+    # [GL P2 — audit fix] La facture (status='paid' avec paiement embarqué) créée
+    # depuis une transaction bancaire doit générer les DEUX écritures : revenu
+    # (Dr A/R / Cr Revenus) + encaissement (Dr Encaisse / Cr A/R). Parité avec
+    # update_invoice_status + add_invoice_payment. Opt-in, idempotent, safe.
+    org_id = current_user.organization_id
+    _settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if _settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        _org = {"organization_id": org_id}
+        _safe_autopost(
+            lambda: _autopost_invoice_revenue(org_id, current_user.id, invoice_doc),
+            "invoices", invoice_doc["id"], _org, legacy_user_id=current_user.id)
+        _pay = invoice_doc["payments"][0]
+        _safe_autopost(
+            lambda: _autopost_payment(org_id, current_user.id, invoice_doc, _pay),
+            "invoices", invoice_doc["id"], _org, legacy_user_id=current_user.id)
     return {"invoice": clean_doc(invoice_doc),
             "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))}
 
