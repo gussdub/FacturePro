@@ -516,6 +516,51 @@ def test_switch_5000km_end_to_end_after_edit(auth_headers):
         _cleanup_vehicle(vid)
 
 
+def test_edit_trip_to_missing_rate_year_blocks_allocation(auth_headers):
+    # Problème [CALCUL] #2 (couverture) : éditer un trajet VERS une année sans taux
+    # (PUT trip_date 2027-*, absente de MILEAGE_RATES) doit re-dériver allocation=None
+    # + rate_missing_year — JAMAIS un montant deviné à partir de l'ancien taux 2026.
+    # Le chemin est mutualisé avec la création via _mileage_enrich_trip (prouvé à la
+    # POST), mais l'invariant « edit → année absente → allocation None » n'était pas
+    # vérifié explicitement au PUT. On le prouve ici de bout en bout via HTTP, en
+    # nettoyant le rappel écrit pour ne pas salir le seed org.
+    vid = _dedicated_vehicle(auth_headers, "T6 edit vers annee sans taux")
+    org_id = client.get("/api/org/me", headers=auth_headers).json()["organization"]["id"]
+    reminder_id = f"{org_id}:2027"
+    db.mileage_rate_reminders.delete_one({"id": reminder_id})  # état propre
+    try:
+        # Création en 2026 (taux présent) : allocation calculée normalement.
+        created = _create_trip(auth_headers, vid, trip_date="2026-05-01",
+                               one_way_km=100, round_trip=False)
+        tid = created["trip"]["id"]
+        assert created["allocation"] is not None
+        assert created["allocation"]["amount_cad"] == round(100 * 0.73, 2)
+        # Édition VERS 2027 (aucun taux) : allocation re-dérivée à None, aucun montant deviné.
+        r = client.put(f"/api/mileage/trips/{tid}",
+                       json=_new_trip_payload(vid, trip_date="2027-05-01",
+                                              one_way_km=100, round_trip=False),
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["trip"]["trip_date"] == "2027-05-01"
+        assert body["allocation"] is None          # AUCUN montant deviné après l'edit
+        assert body["rate_missing_year"] == 2027
+        assert body["running_total_km"] == 100.0   # cumul km toujours tenu
+        # Le rappel annuel est réellement écrit pour l'org (enforcement, pas simple flag).
+        rem = db.mileage_rate_reminders.find_one({"id": reminder_id})
+        assert rem is not None
+        assert rem["year"] == 2027
+        assert rem["organization_id"] == org_id
+        # GET par id : recalcul identique (stable, toujours None — jamais figé sur 2026).
+        got = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert got.status_code == 200, got.text
+        assert got.json()["allocation"] is None
+        assert got.json()["rate_missing_year"] == 2027
+    finally:
+        db.mileage_rate_reminders.delete_one({"id": reminder_id})
+        _cleanup_vehicle(vid)
+
+
 def test_delete_trip(auth_headers):
     vid = _dedicated_vehicle(auth_headers, "T6 delete")
     try:
