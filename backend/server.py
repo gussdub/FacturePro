@@ -3528,6 +3528,8 @@ def update_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
+    if entry.get("entry_type") == "auto":
+        raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] == "posted":
         raise HTTPException(400, "Écriture figée — contre-passez-la")
     lines = body.get("lines", entry["lines"])
@@ -3559,6 +3561,8 @@ def post_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
+    if entry.get("entry_type") == "auto":
+        raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] != "draft":
         raise HTTPException(400, "Seule une écriture brouillon peut être postée")
     _validate_entry_balance(entry["lines"])
@@ -3588,6 +3592,8 @@ def reverse_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
+    if entry.get("entry_type") == "auto":
+        raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] != "posted":
         raise HTTPException(400, "Seule une écriture postée peut être contre-passée")
     if entry.get("reversed_by_entry_id"):
@@ -3612,6 +3618,8 @@ def delete_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
+    if entry.get("entry_type") == "auto":
+        raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] == "posted":
         raise HTTPException(400, "Écriture figée — seuls les brouillons sont supprimables")
     db.journal_entries.delete_one(

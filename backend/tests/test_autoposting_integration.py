@@ -1075,3 +1075,193 @@ class TestFixT9LegacyDocMarking:
             server_module.db.expenses.delete_many({"user_id": uidB})
             _cleanup(uidA, orgA)
             _cleanup(uidB, orgB)
+
+
+# ─── Tâche 10 — Verrou endpoints manuels (entry_type=="auto" → 400) ───
+
+_AUTO_LOCK_MSG = "Écriture générée automatiquement — modifiez le document source"
+
+
+def _account_id_by_number(client, headers, number):
+    """Renvoie l'id du compte au n° donné (seed lazy du plan au 1er accès)."""
+    r = client.get("/api/ledger/accounts", headers=headers)
+    assert r.status_code == 200, r.text
+    for acc in r.json():
+        if acc["account_number"] == number:
+            return acc["id"]
+    raise AssertionError(f"compte {number} introuvable")
+
+
+def _posted_auto_entry(client, org_id, headers):
+    """Pose une écriture auto (entry_type='auto', posted) via le hook facture
+    draft→sent, et renvoie (inv_id, auto_entry)."""
+    inv = _create_draft_invoice(client, headers)
+    r = _set_status(client, headers, inv["id"], "sent")
+    assert r.status_code == 200, r.text
+    live = _live_revenue_entries(org_id, inv["id"])
+    assert len(live) == 1, "1 écriture de revenu auto attendue"
+    entry = live[0]
+    assert entry["entry_type"] == "auto"
+    assert entry["status"] == "posted"
+    return inv["id"], entry
+
+
+class TestManualEndpointsLockAutoEntries:
+    """Tâche 10 — les 4 endpoints manuels refusent (400) toute mutation d'une
+    écriture entry_type='auto' (décision #4). Message exact ; le document source
+    reste le seul point de mutation."""
+
+    def test_put_on_auto_entry_returns_400(self, client):
+        uid, org_id, h = _setup_org(client, "t10put")
+        try:
+            _, entry = _posted_auto_entry(client, org_id, h)
+            r = client.put(f"/api/ledger/entries/{entry['id']}", headers=h,
+                           json={"description": "hack"})
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == _AUTO_LOCK_MSG
+            # L'écriture n'a PAS été mutée.
+            fresh = server_module.db.journal_entries.find_one(
+                {"id": entry["id"], "organization_id": org_id}, {"_id": 0})
+            assert fresh["description"] != "hack"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_post_on_auto_entry_returns_400(self, client):
+        uid, org_id, h = _setup_org(client, "t10post")
+        try:
+            _, entry = _posted_auto_entry(client, org_id, h)
+            r = client.post(f"/api/ledger/entries/{entry['id']}/post", headers=h)
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == _AUTO_LOCK_MSG
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_reverse_on_auto_entry_returns_400(self, client):
+        uid, org_id, h = _setup_org(client, "t10rev")
+        try:
+            _, entry = _posted_auto_entry(client, org_id, h)
+            r = client.post(f"/api/ledger/entries/{entry['id']}/reverse",
+                            headers=h, json={})
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == _AUTO_LOCK_MSG
+            # Aucune contre-passation manuelle n'a été créée : l'auto reste vivant.
+            live = _live_revenue_entries(org_id, entry["source_id"])
+            assert len(live) == 1
+            assert live[0].get("reversed_by_entry_id") is None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_on_auto_entry_returns_400(self, client):
+        uid, org_id, h = _setup_org(client, "t10del")
+        try:
+            _, entry = _posted_auto_entry(client, org_id, h)
+            r = client.delete(f"/api/ledger/entries/{entry['id']}", headers=h)
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == _AUTO_LOCK_MSG
+            # L'écriture existe toujours.
+            assert server_module.db.journal_entries.find_one(
+                {"id": entry["id"], "organization_id": org_id}) is not None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_auto_guard_fires_before_posted_check(self, client):
+        # L'auto est aussi 'posted' : sans le verrou auto, PUT/DELETE renverraient
+        # le message 'Écriture figée' (check status). Le verrou auto doit primer →
+        # message AUTO, pas le message figée. Discrimine l'ordre des gardes.
+        uid, org_id, h = _setup_org(client, "t10order")
+        try:
+            _, entry = _posted_auto_entry(client, org_id, h)
+            r_put = client.put(f"/api/ledger/entries/{entry['id']}", headers=h,
+                               json={"description": "x"})
+            assert r_put.status_code == 400
+            assert r_put.json()["detail"] == _AUTO_LOCK_MSG
+            r_del = client.delete(f"/api/ledger/entries/{entry['id']}", headers=h)
+            assert r_del.status_code == 400
+            assert r_del.json()["detail"] == _AUTO_LOCK_MSG
+        finally:
+            _cleanup(uid, org_id)
+
+    # ── Non-régression Phase 1 : les écritures 'manual' restent pleinement gérables ──
+
+    def test_manual_draft_put_and_delete_still_work(self, client):
+        uid, org_id, h = _setup_org(client, "t10man1")
+        try:
+            cash = _account_id_by_number(client, h, "1000")
+            capital = _account_id_by_number(client, h, "3100")
+            r = client.post("/api/ledger/entries", headers=h, json={
+                "entry_date": "2026-06-15", "description": "Manuel test",
+                "status": "draft",
+                "lines": [
+                    {"account_id": cash, "debit": 50.0, "credit": 0.0},
+                    {"account_id": capital, "debit": 0.0, "credit": 50.0},
+                ],
+            })
+            assert r.status_code == 201, r.text
+            eid = r.json()["id"]
+            assert r.json()["entry_type"] == "manual"
+            # PUT (brouillon éditable — comportement Phase 1 inchangé).
+            r_put = client.put(f"/api/ledger/entries/{eid}", headers=h,
+                               json={"description": "Manuel édité"})
+            assert r_put.status_code == 200, r_put.text
+            assert r_put.json()["description"] == "Manuel édité"
+            # DELETE (brouillon supprimable).
+            r_del = client.delete(f"/api/ledger/entries/{eid}", headers=h)
+            assert r_del.status_code == 204, r_del.text
+            assert server_module.db.journal_entries.find_one(
+                {"id": eid, "organization_id": org_id}) is None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_manual_post_and_reverse_still_work(self, client):
+        uid, org_id, h = _setup_org(client, "t10man2")
+        try:
+            cash = _account_id_by_number(client, h, "1000")
+            capital = _account_id_by_number(client, h, "3100")
+            r = client.post("/api/ledger/entries", headers=h, json={
+                "entry_date": "2026-06-15", "description": "Manuel à poster",
+                "status": "draft",
+                "lines": [
+                    {"account_id": cash, "debit": 75.0, "credit": 0.0},
+                    {"account_id": capital, "debit": 0.0, "credit": 75.0},
+                ],
+            })
+            assert r.status_code == 201, r.text
+            eid = r.json()["id"]
+            # POST (brouillon manuel → posté ; comportement Phase 1 inchangé).
+            r_post = client.post(f"/api/ledger/entries/{eid}/post", headers=h)
+            assert r_post.status_code == 200, r_post.text
+            assert r_post.json()["status"] == "posted"
+            # REVERSE (contre-passation manuelle Phase 1 toujours possible).
+            r_rev = client.post(f"/api/ledger/entries/{eid}/reverse", headers=h,
+                                json={})
+            assert r_rev.status_code == 201, r_rev.text
+            mirror = r_rev.json()
+            assert mirror["reverses_entry_id"] == eid
+            # Origine reste posted + liée au miroir (invariant Phase 1).
+            origin = server_module.db.journal_entries.find_one(
+                {"id": eid, "organization_id": org_id}, {"_id": 0})
+            assert origin["status"] == "posted"
+            assert origin["reversed_by_entry_id"] == mirror["id"]
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_internal_autopost_reversal_still_works(self, client):
+        # Non-régression critique : le verrou HTTP ne doit PAS bloquer la
+        # contre-passation INTERNE de l'auto-posting (_unpost_source_entry via
+        # _reverse_entry_internal). sent→draft doit contre-passer le revenu auto.
+        uid, org_id, h = _setup_org(client, "t10int")
+        try:
+            inv_id, entry = _posted_auto_entry(client, org_id, h)
+            # sent → draft : hook interne contre-passe l'écriture auto.
+            r = _set_status(client, h, inv_id, "draft")
+            assert r.status_code == 200, r.text
+            # Plus d'écriture vivante (contre-passée en interne).
+            assert _live_revenue_entries(org_id, inv_id) == []
+            # Un miroir POSTED existe ; net zéro (invariant §5.2).
+            alle = _all_invoice_entries(org_id, inv_id)
+            assert len(alle) == 2, "origine + miroir"
+            net = _net_by_number(org_id, alle)
+            assert all(abs(v) <= 0.005 for v in net.values()), \
+                f"net non nul après contre-passation interne: {net}"
+        finally:
+            _cleanup(uid, org_id)
