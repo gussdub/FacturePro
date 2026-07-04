@@ -4300,6 +4300,17 @@ def autopost_repair(
     lancé sur un doc déjà réparé entre-temps. Aucune exception ne remonte
     (décision #6) : l'endpoint renvoie toujours 200 avec le décompte.
 
+    [COMPTA] (fix reviewer #1) Gate sur `autopost_enabled`, exactement comme les
+    hooks métier (§8.2, ex. server.py update_invoice_status). Rationnel : un
+    `autopost_error` ne peut avoir été posé QUE par un hook actif, donc pendant
+    une période où le flag était ON. Si l'org a depuis désactivé l'auto-posting,
+    /repair devient un no-op (`{repaired:0, still_failing:[]}`) — cohérent avec
+    la sémantique opt-in (décision #10) : flag OFF ⇒ aucune écriture auto (re)créée.
+    Aligne la sémantique de /repair sur celle des hooks (aucun re-post silencieux
+    quand l'org a explicitement coupé l'auto-posting). Le backfill (§7), lui,
+    reste indépendant du flag (action explicite one-shot, décision #8) — deux
+    portes distinctes assumées.
+
     Note : les paiements (source_type="invoice_payment") sont embarqués dans les
     factures ; leur `autopost_error` éventuel se pose sur la facture porteuse et
     se rejoue via le revenu de facture — le repair ne cible donc que `invoices`
@@ -4308,6 +4319,11 @@ def autopost_repair(
     org_id = current_user.organization_id
     scope = _org_scope(current_user)
     org_scope = {"organization_id": org_id}
+    # [COMPTA] (fix reviewer #1) no-op quand l'auto-posting est désactivé, à
+    # l'image des hooks métier gardés par `autopost_enabled` (décision #10).
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if not settings.get("autopost_enabled"):
+        return {"repaired": 0, "still_failing": []}
     _ensure_chart_seeded(org_id, current_user.id)
 
     repaired = 0

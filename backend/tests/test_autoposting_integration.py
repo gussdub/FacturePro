@@ -1572,6 +1572,55 @@ class TestAutopostStatusRepair:
         finally:
             _cleanup(uid, org_id)
 
+    def test_repair_noop_when_autopost_disabled(self, client):
+        # [COMPTA] (fix reviewer #1) Si l'org a désactivé l'auto-posting APRÈS
+        # avoir accumulé un autopost_error, /repair est un no-op (aligné sur la
+        # sémantique opt-in des hooks métier, décision #10) : il ne re-poste PAS,
+        # renvoie {repaired:0, still_failing:[]}, et l'autopost_error persiste.
+        uid, org_id, h = _setup_org(client, "t11disabled")
+        try:
+            # 1) autopost ON : crée une dépense dont le mapping échoue → pose un
+            #    autopost_error sans écriture vivante.
+            mp = pytest.MonkeyPatch()
+            try:
+                def _boom(*a, **k):
+                    raise RuntimeError("compte 5xxx introuvable")
+                mp.setattr(server_module, "_autopost_expense", _boom)
+                r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+                assert r.status_code == 200, r.text
+                exp = r.json()
+            finally:
+                mp.undo()
+            assert "autopost_error" in server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert _live_expense_entries(org_id, exp["id"]) == []
+
+            # 2) l'org désactive l'auto-posting.
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+
+            # 3) repair → no-op : rien réparé, rien re-posté, erreur intacte.
+            r_rep = client.post("/api/ledger/autopost/repair", headers=h)
+            assert r_rep.status_code == 200, r_rep.text
+            assert r_rep.json() == {"repaired": 0, "still_failing": []}
+            # AUCUNE écriture vivante recréée (flag OFF ⇒ pas de re-post).
+            assert _live_expense_entries(org_id, exp["id"]) == []
+            # l'autopost_error persiste (le trou reste diagnosticable via /status).
+            assert "autopost_error" in server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+
+            # 4) réactiver le flag → /repair rejoue et comble le trou.
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+            r_rep2 = client.post("/api/ledger/autopost/repair", headers=h)
+            assert r_rep2.status_code == 200, r_rep2.text
+            assert r_rep2.json()["repaired"] == 1
+            assert len(_live_expense_entries(org_id, exp["id"])) == 1
+        finally:
+            _cleanup(uid, org_id)
+
     def test_coverage_isolated_by_org(self, client):
         # Org B ne figure JAMAIS dans le coverage de A (isolation stricte).
         uidA, orgA, hA = _setup_org(client, "t11isoa")
