@@ -4482,6 +4482,16 @@ def add_invoice_payment(invoice_id: str, body: dict,
         {"id": invoice_id, **_org_scope(current_user)},
         {"$push": {"payments": payment}, "$set": {"status": new_status}}
     )
+    # [GL P2 — T8] Encaissement auto (§5.2), opt-in par org. Le recompute de statut
+    # ci-dessus (partial/paid) NE re-poste PAS le revenu : seul le PAIEMENT est posté
+    # ici (Dr 1000 / Cr 1100). _safe_autopost avale toute erreur → le POST reste 200.
+    org_id = current_user.organization_id
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        _safe_autopost(
+            lambda: _autopost_payment(org_id, current_user.id, invoice, payment),
+            "invoices", invoice_id, {"organization_id": org_id})
     fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     return _enrich_invoice(fresh)
 
@@ -4511,6 +4521,17 @@ def delete_invoice_payment(invoice_id: str, payment_id: str,
         {"id": invoice_id, **_org_scope(current_user)},
         {"$set": {"payments": payments, "status": new_status}}
     )
+    # [GL P2 — T8] Contre-passation auto de l'encaissement (§5.3), opt-in par org.
+    # _unpost_source_entry pose un miroir POSTED (net zéro 1000/1100) ; le revenu
+    # de la facture reste vivant. _safe_autopost avale toute erreur → DELETE 200.
+    org_id = current_user.organization_id
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        _safe_autopost(
+            lambda: _unpost_source_entry(
+                org_id, current_user.id, "invoice_payment", payment_id),
+            "invoices", invoice_id, {"organization_id": org_id})
     fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     return _enrich_invoice(fresh)
 

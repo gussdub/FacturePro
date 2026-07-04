@@ -8,6 +8,7 @@ Backend requis : MongoDB local (MONGO_URL/.env). TestClient monte l'app en
 process, aucun serveur externe sur :8000 n'est nécessaire.
 
 Tâche 7 — Hook PUT /api/invoices/{id}/status (table de transitions §5.5).
+Tâche 8 — Hooks paiements POST/DELETE (§5.2 encaissement / §5.3 contre-passation).
 """
 import sys as _sys
 import os as _os
@@ -88,6 +89,20 @@ def _set_status(client, headers, inv_id, status):
                       json={"status": status})
 
 
+def _add_payment(client, headers, inv_id, amount, date="2026-06-20",
+                 reference=None):
+    body = {"amount_cad": amount, "method": "transfer", "date": date}
+    if reference is not None:
+        body["reference"] = reference
+    return client.post(f"/api/invoices/{inv_id}/payments", headers=headers,
+                       json=body)
+
+
+def _delete_payment(client, headers, inv_id, payment_id):
+    return client.delete(f"/api/invoices/{inv_id}/payments/{payment_id}",
+                         headers=headers)
+
+
 def _live_revenue_entries(org_id, inv_id):
     """Écritures auto VIVANTES (non contre-passées) pour source=invoice/inv_id."""
     return list(server_module.db.journal_entries.find({
@@ -102,6 +117,23 @@ def _all_invoice_entries(org_id, inv_id):
     return list(server_module.db.journal_entries.find({
         "organization_id": org_id, "source_type": "invoice",
         "source_id": inv_id,
+    }, {"_id": 0}))
+
+
+def _live_payment_entries(org_id, payment_id):
+    """Écritures auto VIVANTES pour source=invoice_payment/payment_id."""
+    return list(server_module.db.journal_entries.find({
+        "organization_id": org_id, "source_type": "invoice_payment",
+        "source_id": payment_id, "entry_type": "auto",
+        "reversed_by_entry_id": None,
+    }, {"_id": 0}))
+
+
+def _all_payment_entries(org_id, payment_id):
+    """TOUTES les écritures auto (vivantes + miroirs) source=invoice_payment."""
+    return list(server_module.db.journal_entries.find({
+        "organization_id": org_id, "source_type": "invoice_payment",
+        "source_id": payment_id,
     }, {"_id": 0}))
 
 
@@ -241,5 +273,172 @@ class TestInvoiceStatusHook:
                 {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
             assert "autopost_error" in doc
             assert "boom" not in doc["autopost_error"]
+        finally:
+            _cleanup(uid, org_id)
+
+
+class TestPaymentHooks:
+    """Tâche 8 — POST/DELETE payments câblent l'encaissement (§5.2/§5.3)."""
+
+    def _sent_invoice(self, client, h, org_id):
+        """Facture QC passée à `sent` : revenu déjà posté (1 écriture)."""
+        inv = _create_draft_invoice(client, h)
+        r = _set_status(client, h, inv["id"], "sent")
+        assert r.status_code == 200, r.text
+        assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+        return inv
+
+    def test_post_payment_posts_encaissement(self, client):
+        # POST payment → 1 écriture d'encaissement Dr 1000 / Cr 1100 = amount_cad,
+        # équilibrée. Le recompute de statut (partial) ne re-poste PAS le revenu.
+        uid, org_id, h = _setup_org(client, "h")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], 50.0, reference="TX-100")
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["status"] == "partial"
+            pid = body["payments"][0]["id"]
+            # une seule écriture d'encaissement vivante
+            live = _live_payment_entries(org_id, pid)
+            assert len(live) == 1, "1 encaissement vivant attendu"
+            entry = live[0]
+            _assert_balanced_entry(org_id, entry)
+            net = _net_by_number(org_id, [entry])
+            assert net.get("1000") == 50.0, "Dr 1000 = amount_cad"
+            assert net.get("1100") == -50.0, "Cr 1100 = amount_cad"
+            assert entry.get("reference") == "TX-100"
+            # le recompute de statut ne crée PAS de 2e écriture de revenu
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1, \
+                "le recompute partial/paid ne re-poste pas le revenu"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_full_payment_two_live_entries(self, client):
+        # Facture passée `paid` via paiement complet → exactement 2 écritures
+        # vivantes (revenu + encaissement), 1 par source distincte.
+        uid, org_id, h = _setup_org(client, "i")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            total = round(float(inv["total"]), 2)
+            r = _add_payment(client, h, inv["id"], total)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["status"] == "paid"
+            pid = body["payments"][0]["id"]
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            assert len(_live_payment_entries(org_id, pid)) == 1
+            # exactement UNE écriture de revenu vivante encore (jamais re-postée)
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_payment_reverses_encaissement(self, client):
+        # DELETE payment → encaissement contre-passé (net zéro 1000/1100) ;
+        # l'écriture de revenu reste vivante.
+        uid, org_id, h = _setup_org(client, "j")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], 40.0)
+            pid = r.json()["payments"][0]["id"]
+            assert len(_live_payment_entries(org_id, pid)) == 1
+            r2 = _delete_payment(client, h, inv["id"], pid)
+            assert r2.status_code == 200, r2.text
+            # plus aucun encaissement vivant (contre-passé)
+            assert _live_payment_entries(org_id, pid) == []
+            # net zéro sur 1000 / 1100 (origine + miroir)
+            net = _net_by_number(org_id, _all_payment_entries(org_id, pid))
+            assert net.get("1000", 0.0) == 0.0
+            assert net.get("1100", 0.0) == 0.0
+            # le revenu reste intact et vivant
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_payment_hook_idempotent(self, client):
+        # Idempotence : re-poster le même payment.id → 1 seule écriture vivante.
+        uid, org_id, h = _setup_org(client, "k")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], 30.0)
+            pid = r.json()["payments"][0]["id"]
+            assert len(_live_payment_entries(org_id, pid)) == 1
+            # appel direct du mapping une 2e fois avec le même payment.id
+            payment = {"id": pid, "amount_cad": 30.0, "date": "2026-06-20"}
+            server_module._autopost_payment(org_id, uid, inv, payment)
+            assert len(_live_payment_entries(org_id, pid)) == 1, \
+                "2 appels avec le même payment.id → 1 écriture"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_payment_autopost_disabled_posts_nothing(self, client):
+        # autopost_enabled=False → POST payment ne crée AUCUNE écriture.
+        uid, org_id, h = _setup_org(client, "l", autopost_enabled=False)
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            r = _add_payment(client, h, inv["id"], 20.0)
+            assert r.status_code == 200, r.text
+            pid = r.json()["payments"][0]["id"]
+            assert _all_payment_entries(org_id, pid) == [], \
+                "autopost_enabled=False → aucun encaissement"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_payment_post_still_works_business(self, client):
+        # Non-régression métier : le POST enregistre bien le paiement et recalcule
+        # le statut même avec le hook branché.
+        uid, org_id, h = _setup_org(client, "m")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], 10.0)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["total_paid_cad"] == 10.0
+            assert len(body["payments"]) == 1
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_payment_autopost_failure_does_not_break_post(self, client, monkeypatch):
+        # Robustesse (§6.3) : si l'encaissement lève, le POST reste 200 et le
+        # paiement est bien enregistré (l'op métier ne doit JAMAIS échouer).
+        uid, org_id, h = _setup_org(client, "n")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+
+            def _boom(*a, **k):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(server_module, "_autopost_payment", _boom)
+            r = _add_payment(client, h, inv["id"], 15.0)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["total_paid_cad"] == 15.0
+            doc = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+            assert "boom" not in doc["autopost_error"]
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_payment_autopost_failure_does_not_break_delete(
+            self, client, monkeypatch):
+        # Robustesse : si la contre-passation lève, le DELETE reste 200 et le
+        # paiement est bien retiré.
+        uid, org_id, h = _setup_org(client, "o")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], 25.0)
+            pid = r.json()["payments"][0]["id"]
+
+            def _boom(*a, **k):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(server_module, "_unpost_source_entry", _boom)
+            r2 = _delete_payment(client, h, inv["id"], pid)
+            assert r2.status_code == 200, r2.text
+            fresh = client.get(f"/api/invoices/{inv['id']}", headers=h).json()
+            assert fresh["total_paid_cad"] == 0.0
+            assert len(fresh.get("payments", [])) == 0
         finally:
             _cleanup(uid, org_id)
