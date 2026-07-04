@@ -4219,6 +4219,127 @@ def balance_sheet_pdf(
     })
 
 
+# ─── Auto-posting — diagnostic (status) + réparation (repair), §8.1 (T11) ───
+
+def _autopost_coverage(organization_id: str, current_user: CurrentUser) -> dict:
+    """Compte la couverture d'auto-posting d'une org (spec §8.1), filtré org.
+
+    - `invoices_total_postable` : factures `status != draft` (accrual : le revenu
+      est comptabilisé dès que la facture quitte draft, §5.5).
+    - `invoices_posted` : parmi elles, celles ayant une écriture auto VIVANTE
+      (`_find_live_source_entry`, source_type="invoice").
+    - `expenses_total` : toutes les dépenses de l'org (une dépense est postable
+      dès sa création, §5.6 — pas d'état draft côté dépense).
+    - `expenses_posted` : parmi elles, celles ayant une écriture auto vivante
+      (source_type="expense").
+
+    Toujours borné par l'org (via `_org_scope`, qui couvre aussi les docs legacy
+    sans `organization_id`). Les écritures, elles, portent toujours l'org courante
+    (posées par `_post_source_entry`), donc `_find_live_source_entry` est scopé
+    par `organization_id` strict — aucune fuite cross-org."""
+    scope = _org_scope(current_user)
+    inv_total = inv_posted = 0
+    for inv in db.invoices.find(
+            {**scope, "status": {"$ne": "draft"}}, {"_id": 0, "id": 1}):
+        inv_total += 1
+        if _find_live_source_entry(organization_id, "invoice", inv["id"]):
+            inv_posted += 1
+    exp_total = exp_posted = 0
+    for exp in db.expenses.find(scope, {"_id": 0, "id": 1}):
+        exp_total += 1
+        if _find_live_source_entry(organization_id, "expense", exp["id"]):
+            exp_posted += 1
+    return {
+        "invoices_posted": inv_posted,
+        "invoices_total_postable": inv_total,
+        "expenses_posted": exp_posted,
+        "expenses_total": exp_total,
+    }
+
+
+@app.get("/api/ledger/autopost/status")
+def autopost_status(
+    response: Response,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """Diagnostic d'auto-posting (spec §8.1) : flag, compte de crédit dépense par
+    défaut, nombre de docs en erreur (`autopost_error` posé), et couverture par
+    type filtrée org. [COMPTA] no-store : jamais mis en cache."""
+    _apply_ledger_no_store(response)
+    scope = _org_scope(current_user)
+    settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
+    pending = (
+        db.invoices.count_documents(
+            {**scope, "autopost_error": {"$ne": None}})
+        + db.expenses.count_documents(
+            {**scope, "autopost_error": {"$ne": None}})
+    )
+    return {
+        "enabled": bool(settings.get("autopost_enabled", False)),
+        "expense_default_credit_account":
+            settings.get("expense_default_credit_account", "1000"),
+        "pending_errors": pending,
+        "coverage": _autopost_coverage(current_user.organization_id, current_user),
+    }
+
+
+@app.post("/api/ledger/autopost/repair")
+def autopost_repair(
+    response: Response,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    """Rejoue les posts des docs ayant un `autopost_error` (spec §8.1/§6.4).
+
+    Pour chaque facture/dépense en erreur (filtrée org), rappelle le mapping
+    approprié via `_safe_autopost` (invoice→`_autopost_invoice_revenue`,
+    expense→`_autopost_expense`). Au succès, `_safe_autopost` efface
+    `autopost_error` ; à l'échec, il le repose (le doc reste dans `still_failing`).
+
+    Idempotent et rejouable : `_post_source_entry` no-op si une écriture vivante
+    existe déjà (`_find_live_source_entry`) → aucun doublon même si repair est
+    lancé sur un doc déjà réparé entre-temps. Aucune exception ne remonte
+    (décision #6) : l'endpoint renvoie toujours 200 avec le décompte.
+
+    Note : les paiements (source_type="invoice_payment") sont embarqués dans les
+    factures ; leur `autopost_error` éventuel se pose sur la facture porteuse et
+    se rejoue via le revenu de facture — le repair ne cible donc que `invoices`
+    et `expenses` (les deux collections qui portent `autopost_error`)."""
+    _apply_ledger_no_store(response)
+    org_id = current_user.organization_id
+    scope = _org_scope(current_user)
+    org_scope = {"organization_id": org_id}
+    _ensure_chart_seeded(org_id, current_user.id)
+
+    repaired = 0
+    still_failing = []
+
+    for inv in db.invoices.find(
+            {**scope, "autopost_error": {"$ne": None}}, {"_id": 0}):
+        _safe_autopost(
+            lambda inv=inv: _autopost_invoice_revenue(org_id, current_user.id, inv),
+            "invoices", inv["id"], org_scope, legacy_user_id=current_user.id)
+        fresh = db.invoices.find_one(
+            {"id": inv["id"], **scope}, {"_id": 0, "autopost_error": 1})
+        if fresh and fresh.get("autopost_error"):
+            still_failing.append(inv["id"])
+        else:
+            repaired += 1
+
+    for exp in db.expenses.find(
+            {**scope, "autopost_error": {"$ne": None}}, {"_id": 0}):
+        _safe_autopost(
+            lambda exp=exp: _autopost_expense(org_id, current_user.id, exp),
+            "expenses", exp["id"], org_scope, legacy_user_id=current_user.id)
+        fresh = db.expenses.find_one(
+            {"id": exp["id"], **scope}, {"_id": 0, "autopost_error": 1})
+        if fresh and fresh.get("autopost_error"):
+            still_failing.append(exp["id"])
+        else:
+            repaired += 1
+
+    return {"repaired": repaired, "still_failing": still_failing}
+
+
 # ─── Health ───
 @app.get("/")
 def root():

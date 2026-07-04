@@ -1372,3 +1372,286 @@ class TestManualEndpointsLockAutoEntries:
             assert r_rev2.status_code == 201, r_rev2.text
         finally:
             _cleanup(uid, org_id)
+
+
+# ─── Tâche 11 — Endpoints /api/ledger/autopost/status + repair (§8.1) ───
+
+
+class TestAutopostStatusRepair:
+    """Tâche 11 — diagnostic de couverture (status) + réparation rejouable
+    (repair). Shape exact §8.1 ; coverage filtré par org ; repair idempotent."""
+
+    def test_status_shape_and_settings(self, client):
+        # Le status reflète le flag et le compte de crédit par défaut de l'org,
+        # avec le shape complet (spec §8.1).
+        uid, org_id, h = _setup_org(client, "t11shape")
+        try:
+            r = client.get("/api/ledger/autopost/status", headers=h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["enabled"] is True
+            assert body["expense_default_credit_account"] == "1000"
+            assert body["pending_errors"] == 0
+            cov = body["coverage"]
+            assert set(cov.keys()) == {
+                "invoices_posted", "invoices_total_postable",
+                "expenses_posted", "expenses_total",
+            }
+            assert cov == {
+                "invoices_posted": 0, "invoices_total_postable": 0,
+                "expenses_posted": 0, "expenses_total": 0,
+            }
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_status_coverage_one_of_two_invoices_posted(self, client):
+        # 2 factures postables (status != draft) ; une seule postée → 1/2.
+        uid, org_id, h = _setup_org(client, "t11cov")
+        try:
+            inv1 = _create_draft_invoice(client, h)
+            inv2 = _create_draft_invoice(client, h)
+            # inv1 postée (draft→sent poste le revenu), inv2 forcée en 'sent'
+            # SANS écriture (autopost désactivé le temps du 2e passage).
+            r1 = _set_status(client, h, inv1["id"], "sent")
+            assert r1.status_code == 200, r1.text
+            # inv2 : passer en sent sans poster → on désactive le flag le temps
+            # de la transition, puis on le rétablit.
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            r2 = _set_status(client, h, inv2["id"], "sent")
+            assert r2.status_code == 200, r2.text
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            r = client.get("/api/ledger/autopost/status", headers=h)
+            assert r.status_code == 200, r.text
+            cov = r.json()["coverage"]
+            assert cov["invoices_total_postable"] == 2, \
+                "2 factures non-draft = postables"
+            assert cov["invoices_posted"] == 1, "seule inv1 a une écriture vivante"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_draft_invoice_not_counted_postable(self, client):
+        # Une facture restée draft n'est PAS postable (accrual : pas de revenu).
+        uid, org_id, h = _setup_org(client, "t11draft")
+        try:
+            _create_draft_invoice(client, h)  # reste draft
+            r = client.get("/api/ledger/autopost/status", headers=h)
+            cov = r.json()["coverage"]
+            assert cov["invoices_total_postable"] == 0
+            assert cov["invoices_posted"] == 0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_status_expenses_coverage(self, client):
+        # 2 dépenses créées (autopost ON) → 2 postées / 2 total.
+        uid, org_id, h = _setup_org(client, "t11exp")
+        try:
+            _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            _create_expense(client, h, amount=50.0, gst=0.0, qst=0.0)
+            r = client.get("/api/ledger/autopost/status", headers=h)
+            cov = r.json()["coverage"]
+            assert cov["expenses_total"] == 2
+            assert cov["expenses_posted"] == 2
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_repair_replays_failed_expense(self, client):
+        # Simule un échec de post sur une dépense (autopost_error posé sans
+        # écriture vivante), puis repair → rejoue, efface l'erreur, 1 réparé.
+        uid, org_id, h = _setup_org(client, "t11rep")
+        try:
+            # Crée la dépense avec l'auto-post monkeypatché pour échouer, ce qui
+            # pose un autopost_error SANS écriture vivante.
+            mp = pytest.MonkeyPatch()
+            try:
+                def _boom(*a, **k):
+                    raise RuntimeError("compte 5xxx introuvable")
+                mp.setattr(server_module, "_autopost_expense", _boom)
+                r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+                assert r.status_code == 200, r.text
+                exp = r.json()
+            finally:
+                mp.undo()
+
+            # autopost_error posé, aucune écriture vivante.
+            doc = server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+            assert _live_expense_entries(org_id, exp["id"]) == []
+
+            # status → pending_errors == 1.
+            r_st = client.get("/api/ledger/autopost/status", headers=h)
+            assert r_st.json()["pending_errors"] == 1
+
+            # repair → rejoue (le mapping réel fonctionne maintenant).
+            r_rep = client.post("/api/ledger/autopost/repair", headers=h)
+            assert r_rep.status_code == 200, r_rep.text
+            body = r_rep.json()
+            assert body["repaired"] == 1
+            assert body["still_failing"] == []
+
+            # écriture vivante recréée, autopost_error effacé.
+            assert len(_live_expense_entries(org_id, exp["id"])) == 1
+            fresh = server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" not in fresh
+
+            # status → pending_errors == 0.
+            r_st2 = client.get("/api/ledger/autopost/status", headers=h)
+            assert r_st2.json()["pending_errors"] == 0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_repair_reports_still_failing(self, client):
+        # Si le post échoue TOUJOURS au repair (compte réellement introuvable),
+        # le doc reste dans still_failing et garde son autopost_error.
+        uid, org_id, h = _setup_org(client, "t11stillfail")
+        try:
+            mp = pytest.MonkeyPatch()
+            try:
+                def _boom(*a, **k):
+                    raise RuntimeError("boom")
+                mp.setattr(server_module, "_autopost_expense", _boom)
+                r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+                exp = r.json()
+                # repair pendant que le mapping échoue encore.
+                r_rep = client.post("/api/ledger/autopost/repair", headers=h)
+                assert r_rep.status_code == 200, r_rep.text
+                body = r_rep.json()
+                assert body["repaired"] == 0
+                assert exp["id"] in body["still_failing"]
+            finally:
+                mp.undo()
+            # l'erreur persiste (rien de vivant).
+            doc = server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_repair_replays_failed_invoice(self, client):
+        # Repair couvre aussi les factures (invoice→_autopost_invoice_revenue).
+        uid, org_id, h = _setup_org(client, "t11repinv")
+        try:
+            inv = _create_draft_invoice(client, h)
+            mp = pytest.MonkeyPatch()
+            try:
+                def _boom(*a, **k):
+                    raise RuntimeError("4000 introuvable")
+                mp.setattr(server_module, "_autopost_invoice_revenue", _boom)
+                r = _set_status(client, h, inv["id"], "sent")
+                assert r.status_code == 200, r.text
+            finally:
+                mp.undo()
+            doc = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+
+            r_rep = client.post("/api/ledger/autopost/repair", headers=h)
+            assert r_rep.status_code == 200, r_rep.text
+            assert r_rep.json()["repaired"] == 1
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            fresh = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" not in fresh
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_repair_idempotent_no_errors(self, client):
+        # repair sans aucune erreur en attente → repaired 0, still_failing vide.
+        uid, org_id, h = _setup_org(client, "t11noerr")
+        try:
+            r = client.post("/api/ledger/autopost/repair", headers=h)
+            assert r.status_code == 200, r.text
+            assert r.json() == {"repaired": 0, "still_failing": []}
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_coverage_isolated_by_org(self, client):
+        # Org B ne figure JAMAIS dans le coverage de A (isolation stricte).
+        uidA, orgA, hA = _setup_org(client, "t11isoa")
+        uidB, orgB, hB = _setup_org(client, "t11isob")
+        try:
+            # Org A : 1 facture postée + 1 dépense.
+            invA = _create_draft_invoice(client, hA)
+            _set_status(client, hA, invA["id"], "sent")
+            _create_expense(client, hA, amount=100.0, gst=0.0, qst=0.0)
+            # Org B : 3 factures postées + 2 dépenses (bruit).
+            for _ in range(3):
+                inv = _create_draft_invoice(client, hB)
+                _set_status(client, hB, inv["id"], "sent")
+            _create_expense(client, hB, amount=10.0, gst=0.0, qst=0.0)
+            _create_expense(client, hB, amount=20.0, gst=0.0, qst=0.0)
+
+            covA = client.get(
+                "/api/ledger/autopost/status", headers=hA).json()["coverage"]
+            assert covA["invoices_total_postable"] == 1, \
+                "coverage de A ne compte QUE ses propres factures"
+            assert covA["invoices_posted"] == 1
+            assert covA["expenses_total"] == 1
+            assert covA["expenses_posted"] == 1
+        finally:
+            _cleanup(uidA, orgA)
+            _cleanup(uidB, orgB)
+
+    def test_repair_isolated_by_org(self, client):
+        # Le repair de A ne rejoue JAMAIS un doc en erreur d'une autre org.
+        uidA, orgA, hA = _setup_org(client, "t11ripa")
+        uidB, orgB, hB = _setup_org(client, "t11ripb")
+        try:
+            # Org B a une dépense en erreur (autopost_error posé sans écriture).
+            mp = pytest.MonkeyPatch()
+            try:
+                def _boom(*a, **k):
+                    raise RuntimeError("boom")
+                mp.setattr(server_module, "_autopost_expense", _boom)
+                rB = _create_expense(client, hB, amount=100.0, gst=0.0, qst=0.0)
+                expB = rB.json()
+            finally:
+                mp.undo()
+            # Repair côté A → ne touche PAS la dépense de B.
+            r_rep = client.post("/api/ledger/autopost/repair", headers=hA)
+            assert r_rep.status_code == 200, r_rep.text
+            assert r_rep.json()["repaired"] == 0
+            assert expB["id"] not in r_rep.json()["still_failing"]
+            # La dépense de B garde son erreur (non touchée par le repair de A).
+            docB = server_module.db.expenses.find_one(
+                {"id": expB["id"], "organization_id": orgB}, {"_id": 0})
+            assert "autopost_error" in docB
+        finally:
+            _cleanup(uidA, orgA)
+            _cleanup(uidB, orgB)
+
+    def test_status_requires_read_permission(self, client):
+        # Le status exige accounting:read (RouteGuard Phase 1).
+        uid, org_id, h = _setup_org(client, "t11perm")
+        try:
+            # retire accounting:read au rôle viewer et bascule l'user en viewer.
+            server_module.db.users.update_one(
+                {"id": uid}, {"$set": {"role": "viewer"}})
+            server_module.db.organizations.update_one(
+                {"id": org_id},
+                {"$set": {"role_permissions.viewer": []}})
+            r = client.get("/api/ledger/autopost/status", headers=h)
+            assert r.status_code == 403, r.text
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_repair_requires_write_permission(self, client):
+        # Le repair exige accounting:write.
+        uid, org_id, h = _setup_org(client, "t11permw")
+        try:
+            server_module.db.users.update_one(
+                {"id": uid}, {"$set": {"role": "viewer"}})
+            server_module.db.organizations.update_one(
+                {"id": org_id},
+                {"$set": {"role_permissions.viewer": ["accounting:read"]}})
+            r = client.post("/api/ledger/autopost/repair", headers=h)
+            assert r.status_code == 403, r.text
+        finally:
+            _cleanup(uid, org_id)
