@@ -933,3 +933,97 @@ def test_writer_permission_enforced(auth_headers, viewer_headers):
                            headers=viewer_headers).status_code == 403
     finally:
         _cleanup_vehicle(vid)
+
+
+# ─── Task 10 : génération de dépense (par trajet + lot mensuel) + cascade ───
+#
+# Discipline d'isolation du fichier : véhicule DÉDIÉ par test (cumul YTD = 0) +
+# nettoyage en `finally`. On étend le nettoyage pour NE PAS SALIR le seed org avec
+# des dépenses générées : _cleanup_expenses_for_vehicle purge les dépenses
+# vehicle_expenses générées à partir des trajets du véhicule jetable.
+
+
+def _cleanup_generated_expenses(vehicle_id):
+    """Supprime les dépenses de kilométrage générées à partir des trajets du
+    véhicule jetable (avant que _cleanup_vehicle ne supprime les trajets, on lit
+    les expense_id encore rattachés ; on nettoie aussi par mileage_trip_ids au cas
+    où les trajets seraient déjà partis)."""
+    expense_ids = set()
+    for t in db.mileage_trips.find({"vehicle_id": vehicle_id}):
+        if t.get("expense_id"):
+            expense_ids.add(t["expense_id"])
+    if expense_ids:
+        db.expenses.delete_many({"id": {"$in": list(expense_ids)}})
+
+
+def test_generate_expense_per_trip(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T10 par trajet")
+    try:
+        created = _create_trip(auth_headers, vid, trip_date="2026-05-02",
+                               one_way_km=50, round_trip=True)
+        tid = created["trip"]["id"]  # distance 100, alloc 100*0.73 = 73.00 (sous 5000)
+        r = client.post(f"/api/mileage/trips/{tid}/generate-expense", headers=auth_headers)
+        assert r.status_code == 200, r.text
+        exp = r.json()["expense"]
+        assert exp["category_code"] == "vehicle_expenses"
+        assert exp["amount_cad"] == 73.00
+        assert exp["mileage_generated"] is True
+        assert tid in exp["mileage_trip_ids"]
+        # trajet marqué
+        trip = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers).json()["trip"]
+        assert trip["expense_id"] == exp["id"]
+        # 2e génération -> 400
+        r2 = client.post(f"/api/mileage/trips/{tid}/generate-expense", headers=auth_headers)
+        assert r2.status_code == 400
+    finally:
+        _cleanup_generated_expenses(vid)
+        _cleanup_vehicle(vid)
+
+
+def test_generate_monthly_batch(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T10 lot mensuel")
+    try:
+        t1 = _create_trip(auth_headers, vid, trip_date="2026-08-03",
+                          one_way_km=10, round_trip=False)
+        t2 = _create_trip(auth_headers, vid, trip_date="2026-08-20",
+                          one_way_km=20, round_trip=False)
+        r = client.post("/api/mileage/generate-expense",
+                        json={"year": 2026, "month": 8, "vehicle_id": vid},
+                        headers=auth_headers)
+        assert r.status_code == 200, r.text
+        exp = r.json()["expense"]
+        # 10*0.73 + 20*0.73 = 21.90
+        assert exp["amount_cad"] == round(30 * 0.73, 2)
+        ids = set(exp["mileage_trip_ids"])
+        assert t1["trip"]["id"] in ids and t2["trip"]["id"] in ids
+        # relancer le lot -> plus rien à facturer (trajets déjà liés exclus)
+        r2 = client.post("/api/mileage/generate-expense",
+                         json={"year": 2026, "month": 8, "vehicle_id": vid},
+                         headers=auth_headers)
+        assert r2.status_code == 400
+    finally:
+        _cleanup_generated_expenses(vid)
+        _cleanup_vehicle(vid)
+
+
+def test_delete_expense_releases_trips(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T10 cascade release")
+    try:
+        created = _create_trip(auth_headers, vid, trip_date="2026-09-05",
+                               one_way_km=15, round_trip=False)
+        tid = created["trip"]["id"]
+        gen = client.post(f"/api/mileage/trips/{tid}/generate-expense",
+                          headers=auth_headers).json()
+        eid = gen["expense"]["id"]
+        # supprimer la dépense libère le trajet
+        dr = client.delete(f"/api/expenses/{eid}", headers=auth_headers)
+        assert dr.status_code == 200
+        trip = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers).json()["trip"]
+        assert trip["expense_id"] is None
+        # re-générable
+        regen = client.post(f"/api/mileage/trips/{tid}/generate-expense",
+                            headers=auth_headers)
+        assert regen.status_code == 200
+    finally:
+        _cleanup_generated_expenses(vid)
+        _cleanup_vehicle(vid)

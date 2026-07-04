@@ -6672,6 +6672,10 @@ def delete_expense(expense_id: str, current_user: CurrentUser = Depends(require_
     exp = db.expenses.find_one({"id": expense_id, **_org_scope(current_user)}, {"_id": 0})
     if exp and exp.get("bank_transaction_id"):
         _release_bank_transaction(exp["bank_transaction_id"], _org_scope(current_user))
+    # Feature #13 (Task 10) — cascade : libère les trajets de carnet de route liés
+    # à cette dépense (unset expense_id → re-générable + re-éditable). Borné à l'org.
+    if exp and exp.get("mileage_generated"):
+        _release_mileage_trips(expense_id, _org_scope(current_user))
     # Feature #8 — cascade soft-delete du receipt file
     if exp and exp.get("receipt_file_id"):
         db.files.update_one(
@@ -7211,6 +7215,158 @@ def delete_mileage_trip(trip_id: str,
                             detail="Trajet lié à une dépense — détachez-la d'abord")
     db.mileage_trips.delete_one({**scope, "id": trip_id})
     return {"status": "deleted", "id": trip_id}
+
+
+# ─── Carnet de route / kilométrage — génération de dépense (feature #13, Task 10) ───
+#
+# Un trajet (ou un lot mensuel) matérialise UNE dépense `vehicle_expenses` (ligne
+# ARC 9281, 100 % déductible) dont le montant = somme des allocations $ recalculées
+# À LA VOLÉE (jamais lues d'un champ figé sur le trajet). Le calcul reste identique
+# au carnet : taux ARC de l'ANNÉE du trajet, split au seuil 5000 km cumulés par
+# personne+véhicule+année. Année sans taux → 400 (montant JAMAIS deviné, cf. spec).
+# La dépense porte `mileage_generated=True` + `mileage_trip_ids` (traçabilité), et
+# chaque trajet reçoit `expense_id` (verrou d'édition, T6). La suppression de la
+# dépense libère les trajets (cascade _release_mileage_trips, dans delete_expense).
+
+
+def _mileage_build_expense_for_trips(trip_docs, scope, current_user):
+    """Matérialise UNE dépense vehicle_expenses agrégeant les allocations $ des
+    trajets fournis. Réutilise _build_expense_category_snapshot (feature #3).
+    Chaque trajet doit avoir un taux ARC disponible pour son année, sinon 400
+    (aucun montant deviné). Le doc dépense est aligné sur create_expense (mêmes
+    champs) pour s'afficher à l'identique dans ExpensesPage."""
+    ordered = sorted(trip_docs, key=lambda d: (_mileage_trip_date_str(d["trip_date"]), d["id"]))
+    total = 0.0
+    trip_ids = []
+    origins_dests = []
+    first_date = None
+    for trip in ordered:
+        year = int(_mileage_trip_date_str(trip["trip_date"])[:4])
+        rates = _mileage_rate_for_year(year)
+        if rates is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Taux ARC {year} non configuré — allocation bloquée (voir rappel annuel)")
+        employee_key = _mileage_employee_key(trip.get("employee_id"), trip.get("created_by_user_id"))
+        ytd_before = _mileage_ytd_before(
+            scope, employee_key, trip["vehicle_id"], trip["trip_date"], trip["id"],
+            current_created_at=trip.get("created_at", ""))
+        amount, _ = _mileage_allocation(float(trip.get("distance_km", 0.0)), ytd_before, rates)
+        total += amount
+        trip_ids.append(trip["id"])
+        origins_dests.append(f"{trip.get('origin', '')} → {trip.get('destination', '')}")
+        trip_day = _mileage_trip_date_str(trip["trip_date"])
+        if first_date is None or trip_day < first_date:
+            first_date = trip_day
+
+    total = round(total, 2)
+    snapshot = _build_expense_category_snapshot({"category_code": "vehicle_expenses"}, total)
+    if len(trip_ids) == 1:
+        desc = f"Allocation km — {origins_dests[0]} ({ordered[0].get('distance_km', 0.0)} km)"
+    else:
+        desc = f"Allocation km — {len(trip_ids)} trajets ({first_date[:7]})"
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    expense_doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "user_id": current_user.id,  # legacy (aligné sur create_expense)
+        "employee_id": "",
+        "description": desc,
+        "amount": total,
+        "amount_cad": total,
+        "currency": "CAD",
+        "exchange_rate_to_cad": 1.0,
+        **snapshot,
+        "gst_paid_cad": 0.0,
+        "qst_paid_cad": 0.0,
+        "hst_paid_cad": 0.0,
+        "taxes_auto_computed": False,
+        "expense_date": first_date,
+        "status": "pending",
+        "receipt_url": "",
+        "receipt_file_id": None,
+        "notes": "",
+        "mileage_generated": True,
+        "mileage_trip_ids": trip_ids,
+        "created_at": now_iso,
+    }
+    db.expenses.insert_one(expense_doc)
+    db.mileage_trips.update_many(
+        {**scope, "id": {"$in": trip_ids}},
+        {"$set": {"expense_id": expense_doc["id"]}},
+    )
+    # [GL P2] Écriture de charge auto (§5.6), opt-in par org. Même contrat que
+    # create_expense : _safe_autopost avale toute erreur → la génération reste 200.
+    org_id = current_user.organization_id
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        _safe_autopost(
+            lambda: _autopost_expense(org_id, current_user.id, expense_doc),
+            "expenses", expense_doc["id"], {"organization_id": org_id},
+            legacy_user_id=current_user.id)
+    expense_doc.pop("_id", None)
+    return clean_doc(expense_doc)
+
+
+def _release_mileage_trips(expense_id: str, scope=None) -> None:
+    """Libère les trajets liés à une dépense supprimée (unset expense_id → None).
+    Modèle : _release_bank_transaction (feature #7). Le filtre est borné à l'org
+    (`scope`) quand fourni — évite de toucher un trajet d'une autre org qui
+    porterait par accident le même expense_id (id UUID, collision improbable mais
+    l'isolation multi-tenant doit rester stricte)."""
+    query = {"expense_id": expense_id}
+    if scope:
+        query.update(scope)
+    db.mileage_trips.update_many(query, {"$set": {"expense_id": None}})
+
+
+@app.post("/api/mileage/trips/{trip_id}/generate-expense")
+def generate_expense_from_trip(trip_id: str,
+                               current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    """Génère UNE dépense vehicle_expenses à partir d'un seul trajet (org-scopé).
+    404 si le trajet est absent/hors org ; 400 si déjà facturé (expense_id non nul)
+    ou si l'année du trajet n'a pas de taux ARC configuré (allocation bloquée)."""
+    scope = _org_scope(current_user)
+    trip = db.mileage_trips.find_one({**scope, "id": trip_id})
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trajet introuvable")
+    if trip.get("expense_id"):
+        raise HTTPException(status_code=400, detail="Trajet déjà facturé")
+    expense = _mileage_build_expense_for_trips([trip], scope, current_user)
+    return {"expense": expense}
+
+
+@app.post("/api/mileage/generate-expense")
+def generate_monthly_expense(payload: dict,
+                             current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    """Génère UNE dépense agrégeant tous les trajets NON facturés d'un mois donné
+    (org-scopé, filtrable par véhicule). 400 si aucun trajet non facturé pour ce
+    mois. Relancer le lot est idempotent (les trajets déjà liés sont exclus)."""
+    scope = _org_scope(current_user)
+    try:
+        year = int(payload.get("year"))
+        month = int(payload.get("month"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Année/mois invalides")
+    if not (1 <= month <= 12):
+        raise HTTPException(status_code=400, detail="Mois invalide (1-12)")
+    vehicle_id = payload.get("vehicle_id")
+    prefix = f"{year:04d}-{month:02d}"
+    query = {
+        **scope,
+        "expense_id": None,
+        "trip_date": {"$gte": f"{prefix}-01", "$lte": f"{prefix}-31"},
+    }
+    if vehicle_id:
+        query["vehicle_id"] = vehicle_id
+    trips = list(db.mileage_trips.find(query))
+    if not trips:
+        raise HTTPException(status_code=400, detail="Aucun trajet non facturé pour ce mois")
+    expense = _mileage_build_expense_for_trips(trips, scope, current_user)
+    return {"expense": expense}
 
 
 # ─── Carnet de route / kilométrage — favoris (feature #13, Task 7) ───
