@@ -23,6 +23,7 @@ from backend.server import (  # noqa: E402
     _mileage_distance_km,
     _mileage_allocation,
     _mileage_sum_ytd,
+    _mileage_trip_date_str,
 )
 
 
@@ -175,5 +176,42 @@ def test_ytd_excludes_current_and_later_trips():
         _trip("2026-09-01", 77.0, "z"),  # posterieur
     ]
     total = _mileage_sum_ytd(trips, current_id="c", current_date="2026-06-01",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 10.0
+
+
+# --- Fix T3 [CALCUL] : robustesse au format de trip_date (composante horaire) ---
+
+
+def test_trip_date_str_strips_time_component():
+    # une eventuelle composante horaire ou un datetime ne doit pas casser
+    # le cumul : on ne garde que la partie date 'YYYY-MM-DD'.
+    assert _mileage_trip_date_str("2026-12-31T09:00") == "2026-12-31"
+    assert _mileage_trip_date_str("2026-01-05") == "2026-01-05"
+    import datetime as _dt
+    assert _mileage_trip_date_str(_dt.date(2026, 12, 31)) == "2026-12-31"
+    assert _mileage_trip_date_str(_dt.datetime(2026, 12, 31, 9, 0)) == "2026-12-31"
+
+
+def test_ytd_counts_dec31_trip_with_time_component():
+    # Regression : un trajet du 31 decembre stocke avec une heure ('...T09:00')
+    # ne doit PAS etre exclu du cumul de l'annee (bornes/tri robustes).
+    trips = [
+        _trip("2026-12-31T09:00", 300.0, "a"),
+        _trip("2026-12-31T18:00", 40.0, "b"),  # courant
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-12-31T18:00",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 300.0
+
+
+def test_ytd_mixed_date_formats_order_by_date_portion():
+    # Un trajet pur 'YYYY-MM-DD' et un trajet avec heure le meme jour :
+    # l'ordre chronologique se base sur la partie date, pas sur le suffixe.
+    trips = [
+        _trip("2026-03-01", 10.0, "a"),           # anterieur (date pure)
+        _trip("2026-03-10T08:00", 20.0, "b"),     # courant (avec heure)
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-03-10T08:00",
                              employee_key="user:U1", vehicle_id="V1")
     assert total == 10.0

@@ -74,7 +74,7 @@ Un document par trajet, scopé org.
   "created_by_user_id": str,       # audit
   "employee_id": str | None,       # FK db.employees ; None => user courant
   "vehicle_id": str,               # FK mileage_vehicles (véhicule par défaut en v1)
-  "trip_date": str,                # ISO date "YYYY-MM-DD" (date comptable/ARC du trajet)
+  "trip_date": str,                # ISO date "YYYY-MM-DD" PURE (jamais de composante T ni BSON Date) — contrat du cumul YTD §4.1, validé len==10 à l'insert
   "origin": str,                   # point de départ (ex: "Domicile, Québec")
   "destination": str,              # destination (ex: "Client ABC, Lévis")
   "purpose": str,                  # motif d'affaires — OBLIGATOIRE (ARC)

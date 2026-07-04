@@ -343,20 +343,34 @@ def _mileage_employee_key(employee_id, user_id) -> str:
     return employee_id if employee_id else f"user:{user_id}"
 
 
+def _mileage_trip_date_str(value) -> str:
+    """Normalise un trip_date en 'YYYY-MM-DD' pur pour le cumul/l'ordre.
+    Le contrat du modele est une date pure (validation a l'insert, Task 5), mais
+    on defend le calcul contre une eventuelle composante horaire ('...T09:00')
+    ou un BSON date/datetime : sinon un tri/comparaison mixte sous-compterait le
+    31 decembre et fausserait le split au seuil. On ne garde que la partie date."""
+    if hasattr(value, "isoformat"):  # datetime / date BSON
+        value = value.isoformat()
+    return str(value)[:10]
+
+
 def _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id):
     """Somme des distance_km des trajets ANTERIEURS de la meme personne+vehicule
     dans la meme annee civile que current_date. Ordre (trip_date, id).
     Chaque trip du parametre `trips` porte deja 'employee_key' et 'vehicle_id'.
+    Robuste a un trip_date portant une composante horaire (normalise a 10 char).
     """
-    year = current_date[:4]
+    current_day = _mileage_trip_date_str(current_date)
+    year = current_day[:4]
     total = 0.0
     for t in trips:
         if t["employee_key"] != employee_key or t["vehicle_id"] != vehicle_id:
             continue
-        if t["trip_date"][:4] != year:
+        trip_day = _mileage_trip_date_str(t["trip_date"])
+        if trip_day[:4] != year:
             continue
         # anterieur = date < current_date, ou meme date avec id <
-        if (t["trip_date"], t["id"]) < (current_date, current_id):
+        if (trip_day, t["id"]) < (current_day, current_id):
             total += float(t["distance_km"])
     return round(total, 2)
 
@@ -366,11 +380,13 @@ def _mileage_ytd_before(scope, employee_key, vehicle_id, current_date, current_i
     personne+vehicule (scope org via `scope`), puis somme les anterieurs.
     `scope` = dict de filtre org (issu de _org_scope). employee_key est
     la cle deja resolue via _mileage_employee_key."""
-    year = current_date[:4]
+    year = int(_mileage_trip_date_str(current_date)[:4])
+    # Borne haute semi-ouverte ($lt annee+1) : inclut tout '{year}-12-31...' meme
+    # avec une composante horaire, que $lte '{year}-12-31' exclurait a tort.
     query = {
         **scope,
         "vehicle_id": vehicle_id,
-        "trip_date": {"$gte": f"{year}-01-01", "$lte": f"{year}-12-31"},
+        "trip_date": {"$gte": f"{year}-01-01", "$lt": f"{year + 1}-01-01"},
     }
     docs = list(db.mileage_trips.find(query))
     trips = [
@@ -558,6 +574,8 @@ git commit -m "feat(mileage): add migration, lazy default vehicle seed, and vehi
 **Files:**
 - Modify: `backend/server.py` (après les endpoints véhicules)
 - Test: `backend/tests/test_mileage_logbook_integration.py`
+
+> **Contrat `trip_date` (bloquant — dépendance du cumul YTD, Task 3) :** `trip_date` doit être **figé en 'YYYY-MM-DD' pur** (jamais un ISO datetime avec composante `T`, jamais un BSON `Date`). L'étape 3 valide déjà `len(trip_date) == 10` — **ne pas assouplir** cette validation. Les helpers `_mileage_sum_ytd`/`_mileage_ytd_before` (Task 3) sont désormais défensifs (normalisation `[:10]`, borne haute `$lt {year+1}-01-01`) au cas où, mais la ligne de défense principale est ici : une date pure garantit que le filtre `$gte/$lt` et le tri chronologique n'excluent jamais un trajet du 31 décembre ni ne faussent le split au seuil.
 
 - [ ] **Step 1: Write the failing test**
 
