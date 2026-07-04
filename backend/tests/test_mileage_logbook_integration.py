@@ -351,6 +351,53 @@ def test_missing_rate_year_blocks_allocation_and_flags_reminder(auth_headers):
         _cleanup_vehicle(vid)
 
 
+def test_create_trip_rejects_unknown_favorite(auth_headers):
+    # Fix T5 [SPEC] : favorite_id est validé appartenir à l'org avant l'insert
+    # (plan T5 Step 3). Un id fantôme (ou d'une autre org) → 400 « Favori
+    # introuvable », et AUCUN trajet n'est persisté avec une référence croisée.
+    vid = _dedicated_vehicle(auth_headers, "T5 favori fantome")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, favorite_id="does-not-exist"),
+                        headers=auth_headers)
+        assert r.status_code == 400, r.text
+        assert "favori" in r.json()["detail"].lower()
+        # aucun orphelin persisté malgré le favorite_id invalide
+        assert db.mileage_trips.count_documents({"vehicle_id": vid}) == 0
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_create_trip_accepts_valid_favorite(auth_headers):
+    # Complément du fix : un favorite_id RÉEL de l'org est accepté et tracé sur le
+    # trajet. Les endpoints favoris arrivant au Task 7, on insère le doc favori
+    # directement (scopé à l'org courante) pour exercer la validation dès T5.
+    vid = _dedicated_vehicle(auth_headers, "T5 favori valide")
+    org_id = client.get("/api/org/me", headers=auth_headers).json()["organization"]["id"]
+    fid = "test-fav-" + org_id
+    db.mileage_favorites.insert_one({
+        "id": fid,
+        "organization_id": org_id,
+        "created_by_user_id": "seed",
+        "label": "Domicile → Client ABC",
+        "origin": "Domicile",
+        "destination": "Client ABC, Lévis",
+        "purpose": "Rencontre",
+        "one_way_km": 45.0,
+        "round_trip_default": True,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    })
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, favorite_id=fid),
+                        headers=auth_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["trip"]["favorite_id"] == fid
+    finally:
+        db.mileage_favorites.delete_one({"id": fid})
+        _cleanup_vehicle(vid)
+
+
 def test_trip_cross_org_isolation(auth_headers):
     # Un trajet créé par l'org courante n'est pas accessible par id sans le scope.
     # (isolation garantie par _org_scope ; ici on vérifie le 404 hors org via un

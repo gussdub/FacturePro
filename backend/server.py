@@ -7035,6 +7035,14 @@ def create_mileage_trip(payload: dict, current_user: CurrentUser = Depends(requi
     vehicle_id = _mileage_resolve_vehicle_id(scope, payload.get("vehicle_id"))
     employee_id = _mileage_validate_employee(scope, payload.get("employee_id"))
 
+    # favorite_id est purement traçant (spec §3.3 : aucune dénormalisation liante),
+    # mais on valide qu'il appartient à l'org avant l'insert (plan T5 Step 3) : ainsi
+    # aucun trajet ne peut porter une référence croisée à un favori d'une autre org
+    # ni un id fantôme. `find_one({**scope, ...})` garantit le scope org.
+    favorite_id = payload.get("favorite_id") or None
+    if favorite_id and not db.mileage_favorites.find_one({**scope, "id": favorite_id}):
+        raise HTTPException(status_code=400, detail="Favori introuvable")
+
     doc = {
         "id": str(uuid.uuid4()),
         "organization_id": current_user.organization_id,
@@ -7048,7 +7056,7 @@ def create_mileage_trip(payload: dict, current_user: CurrentUser = Depends(requi
         "one_way_km": round(one_way_km, 2),
         "round_trip": round_trip,
         "distance_km": _mileage_distance_km(one_way_km, round_trip),
-        "favorite_id": (payload.get("favorite_id") or None),
+        "favorite_id": favorite_id,
         "expense_id": None,
         "notes": (payload.get("notes") or None),
         "created_at": datetime.now(timezone.utc).isoformat(),
