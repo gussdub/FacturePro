@@ -1436,7 +1436,220 @@ const ExpensesPage = () => {
 
 // ─── Carnet de route — onglets (squelette, remplis aux Tasks 15-17) ───
 function MileageTripsTab() {
-  return <div data-testid="mileage-trips-tab" style={{ color: '#6b7280' }}>Trajets (à venir)</div>;
+  const { token } = useAuth();
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [trips, setTrips] = useState([]);
+  const [favorites, setFavorites] = useState([]);
+  const [rates, setRates] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState({
+    trip_date: now.toISOString().slice(0, 10),
+    origin: '', destination: '', purpose: '',
+    one_way_km: '', round_trip: false, favorite_id: '',
+  });
+
+  // token disponible via useAuth ; axios.defaults porte déjà le header Authorization
+  // (AuthContext), mais on le passe explicitement pour rester robuste.
+  const authCfg = { headers: { Authorization: `Bearer ${token}` } };
+
+  const load = async () => {
+    try {
+      const [t, f, r] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/mileage/trips?year=${year}&month=${month}`, authCfg),
+        axios.get(`${BACKEND_URL}/api/mileage/favorites`, authCfg),
+        axios.get(`${BACKEND_URL}/api/mileage/rates`, authCfg),
+      ]);
+      setTrips(t.data); setFavorites(f.data); setRates(r.data);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur de chargement du carnet de route');
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, month]);
+
+  const applyFavorite = (fid) => {
+    const fav = favorites.find((x) => x.id === fid);
+    if (!fav) { setForm((s) => ({ ...s, favorite_id: '' })); return; }
+    setForm((s) => ({
+      ...s, favorite_id: fid, origin: fav.origin, destination: fav.destination,
+      purpose: fav.purpose || '', one_way_km: fav.one_way_km,
+      round_trip: fav.round_trip_default,
+    }));
+  };
+
+  const liveDistance = () => {
+    const km = parseFloat(form.one_way_km) || 0;
+    return form.round_trip ? km * 2 : km;
+  };
+  // Estimation indicative uniquement (le backend fait foi, avec split au seuil
+  // 5000 km cumulés). Utilise le taux PLEIN de l'ANNÉE du trajet ; renvoie null si
+  // la table des taux est indisponible ou si cette année n'a pas de taux publié
+  // (aucun montant deviné — conforme au contrat « année absente → bloquée »).
+  const liveAllocation = () => {
+    if (!rates || rates.current_year_missing) return null;
+    const yr = String(form.trip_date).slice(0, 4);
+    const rate = rates.rates && rates.rates[yr];
+    if (!rate) return null;
+    return (liveDistance() * rate.full).toFixed(2);
+  };
+
+  const canSave = () => form.purpose.trim() && parseFloat(form.one_way_km) > 0;
+  // L'année du trajet doit avoir un taux publié pour générer la dépense (sinon
+  // allocation bloquée backend). On désactive le bouton « générer » quand le taux
+  // de l'année saisie manque, pour éviter un 400 prévisible.
+  const tripYearRateMissing = () => {
+    if (!rates) return false;
+    const yr = String(form.trip_date).slice(0, 4);
+    return !(rates.rates && rates.rates[yr]);
+  };
+
+  const save = async (generate) => {
+    if (!canSave() || busy) return;
+    setBusy(true); setError('');
+    try {
+      const created = await axios.post(`${BACKEND_URL}/api/mileage/trips`, {
+        ...form, one_way_km: parseFloat(form.one_way_km),
+      }, authCfg);
+      if (generate) {
+        await axios.post(
+          `${BACKEND_URL}/api/mileage/trips/${created.data.trip.id}/generate-expense`, {}, authCfg);
+      }
+      setForm((s) => ({ ...s, origin: '', destination: '', purpose: '', one_way_km: '', favorite_id: '' }));
+      await load();
+    } catch (e) {
+      setError(e.response?.data?.detail || "Erreur lors de l'enregistrement du trajet");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const generateForTrip = async (tripId) => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      await axios.post(`${BACKEND_URL}/api/mileage/trips/${tripId}/generate-expense`, {}, authCfg);
+      await load();
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur lors de la génération de la dépense');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const generateForMonth = async () => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      await axios.post(`${BACKEND_URL}/api/mileage/generate-expense`, { year: Number(year), month: Number(month) }, authCfg);
+      await load();
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur lors de la génération de la dépense du mois');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const input = { padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14, boxSizing: 'border-box', width: '100%' };
+  const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 };
+  const btnSecondary = { background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 500, fontSize: 14 };
+  const th = { padding: '8px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#374151', borderBottom: '2px solid #e5e7eb' };
+  const td = { padding: '8px', fontSize: 13, borderBottom: '1px solid #e5e7eb', verticalAlign: 'middle' };
+  const disabledStyle = (disabled) => (disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {});
+
+  return (
+    <div data-testid="mileage-trips-tab">
+      {error && (
+        <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '10px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
+        <label style={{ fontSize: 13, color: '#374151' }}>Année</label>
+        <input type="number" data-testid="mileage-trips-year" value={year} onChange={(e) => setYear(e.target.value)} style={{ ...input, width: 100 }} />
+        <label style={{ fontSize: 13, color: '#374151' }}>Mois</label>
+        <select data-testid="mileage-trips-month" value={month} onChange={(e) => setMonth(e.target.value)} style={{ ...input, width: 80 }}>
+          {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+      </div>
+
+      {rates && rates.current_year_missing && (
+        <div role="alert" data-testid="mileage-rate-missing-warning" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '10px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+          Le taux ARC de l'année courante ({rates.current_year}) n'est pas encore configuré : l'allocation reste bloquée tant qu'il n'est pas confirmé. La saisie du trajet reste possible.
+        </div>
+      )}
+
+      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <select data-testid="mileage-favorite-select" value={form.favorite_id} onChange={(e) => applyFavorite(e.target.value)} style={{ ...input, gridColumn: '1 / -1' }}>
+          <option value="">Depuis un favori…</option>
+          {favorites.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
+        </select>
+        <input type="date" data-testid="mileage-trip-date" value={form.trip_date} onChange={(e) => setForm({ ...form, trip_date: e.target.value })} style={input} />
+        <input placeholder="Départ" data-testid="mileage-trip-origin" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} style={input} />
+        <input placeholder="Arrivée" data-testid="mileage-trip-destination" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} style={input} />
+        <input placeholder="Motif *" data-testid="mileage-trip-purpose" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} style={input} />
+        <input type="number" placeholder="Km (aller simple)" data-testid="mileage-trip-km" value={form.one_way_km} onChange={(e) => setForm({ ...form, one_way_km: e.target.value })} style={input} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151' }}>
+          <input type="checkbox" data-testid="mileage-trip-roundtrip" checked={form.round_trip} onChange={(e) => setForm({ ...form, round_trip: e.target.checked })} />
+          Aller-retour ({liveDistance()} km)
+        </label>
+        <div style={{ gridColumn: '1 / -1', fontSize: 13, color: '#6b7280' }} data-testid="mileage-live-allocation">
+          {liveAllocation() !== null
+            ? `Allocation estimée : ${liveDistance()} km × taux ${form.trip_date.slice(0, 4)} = ${liveAllocation()} $ (indicatif — le calcul final applique le split à 5000 km)`
+            : "Allocation indisponible — taux de l'année à confirmer."}
+        </div>
+        <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8 }}>
+          <button data-testid="mileage-save-only" onClick={() => save(false)} style={{ ...btnSecondary, ...disabledStyle(!canSave() || busy) }} disabled={!canSave() || busy}>
+            Enregistrer seulement
+          </button>
+          <button data-testid="mileage-save-generate" onClick={() => save(true)} style={{ ...btnPrimary, ...disabledStyle(!canSave() || busy || tripYearRateMissing()) }} disabled={!canSave() || busy || tripYearRateMissing()}>
+            Enregistrer et générer la dépense
+          </button>
+        </div>
+      </div>
+
+      <table style={{ width: '100%', borderCollapse: 'collapse' }} data-testid="mileage-trips-table">
+        <thead>
+          <tr>
+            <th style={th}>Date</th><th style={th}>Départ</th><th style={th}>Arrivée</th>
+            <th style={th}>Motif</th><th style={th}>Km</th><th style={th}>Allocation</th><th style={th}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {trips.length === 0 && (
+            <tr><td style={{ ...td, color: '#9ca3af' }} colSpan={7}>Aucun trajet pour cette période.</td></tr>
+          )}
+          {trips.map((row) => (
+            <tr key={row.trip.id} data-testid={`mileage-trip-row-${row.trip.id}`}>
+              <td style={td}>{row.trip.trip_date}</td>
+              <td style={td}>{row.trip.origin}</td>
+              <td style={td}>{row.trip.destination}</td>
+              <td style={td}>{row.trip.purpose}</td>
+              <td style={td}>{row.trip.distance_km}</td>
+              <td style={td}>{row.allocation ? `${row.allocation.amount_cad.toFixed(2)} $` : '—'}</td>
+              <td style={td}>
+                {row.trip.expense_id
+                  ? <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 600 }}>Facturé</span>
+                  : <button style={{ background: 'transparent', border: 'none', color: '#00A08C', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: 0, ...disabledStyle(busy) }} disabled={busy} onClick={() => generateForTrip(row.trip.id)}>
+                      Générer la dépense
+                    </button>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div style={{ marginTop: 16 }}>
+        <button data-testid="mileage-generate-month" style={{ ...btnSecondary, ...disabledStyle(busy) }} disabled={busy} onClick={generateForMonth}>
+          Générer la dépense du mois
+        </button>
+      </div>
+    </div>
+  );
 }
 function MileageFavoritesTab() {
   return <div data-testid="mileage-favorites-tab" style={{ color: '#6b7280' }}>Favoris (à venir)</div>;
