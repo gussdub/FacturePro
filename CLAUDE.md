@@ -108,6 +108,22 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-03 — Carnet de route kilométrage (feature #13)**
+  - 4 nouvelles collections org-scopées : `mileage_trips`, `mileage_favorites`, `mileage_vehicles`, `mileage_rate_reminders`
+  - Table des taux ARC dans le code (`MILEAGE_RATES` 2024-2026, full/reduced : 2024=0,70/0,64 ; 2025=0,72/0,66 ; 2026=0,73/0,67) + seuil 5 000 km ; helper `_mileage_rate_for_year` (aucun fallback silencieux : année absente → allocation `None`, jamais un mauvais montant)
+  - Allocation calculée à la volée avec **split au seuil 5 000 km** (`_mileage_allocation`), cumul chronologique par (personne, véhicule, année civile) via `_mileage_ytd_before`/`_mileage_sum_ytd` (ordre `(trip_date, created_at, id)`, borne au jour civil même sur date avec composante horaire)
+  - ~14 endpoints `/api/mileage/*` (trajets CRUD, favoris CRUD, véhicules, taux, carnet JSON + PDF ARC, génération dépense par trajet + lot mensuel), RBAC réutilisé `expenses:read`/`expenses:write`
+  - Génération dépense `vehicle_expenses` (ligne 9281) via snapshot existant ; anti-double-comptage par `expense_id` ; cascade `_release_mileage_trips` au DELETE de la dépense
+  - Carnet PDF FR-CA conforme ARC (Date/Départ/Arrivée/Motif/Km/Cumul/Allocation + totaux + rappel bascule), no-cache
+  - Rappel annuel du taux : `POST /api/mileage/check-rate-update` pingé par cron externe (modèle `check-trial-expiry`), notif email idempotente par (org, année), **jamais** de mise à jour silencieuse
+  - Seed lazy du véhicule par défaut au 1er accès ; migration idempotente `migrate_mileage_logbook_v1` (index seulement, additive)
+  - Frontend : bouton « Carnet de route » dans `ExpensesPage` → vue à 3 onglets (Trajets avec allocation live + favoris pré-remplis + génération, Favoris CRUD, Carnet annuel + export PDF)
+  - Limites v1 : saisie km manuelle (pas de géocodage), 1 véhicule par défaut (modèle porte `vehicle_id` pour v2), méthode allocation par km seulement (pas frais réels), taux fédéral (pas territorial), cumul année civile ; incompatible avec `vehicle_business_percentage` T2125 (double-prorata — avertissement UI à l'ouverture du carnet)
+  - Infra hors code : 1 cron externe 1×/jour en janvier sur `/api/mileage/check-rate-update`
+  - Tests : **25 unitaires + 55 intégration = 80 nouveaux tests**, tous verts, 0 régression (les 21 échecs pré-existants des suites live-HTTP — pollution seed org, clés Stripe/Resend/Anthropic absentes en dev — sont identiques avant/après le carnet)
+  - Spec : `docs/superpowers/specs/2026-07-03-mileage-logbook-design.md`
+  - Plan : `docs/superpowers/plans/2026-07-03-mileage-logbook.md`
+
 - **2026-07-04 — Grand livre Phase 2 — auto-posting (feature #12.2)**
   - **Opt-in par org** : flag `autopost_enabled` sur `company_settings` (**défaut `false`** — rien ne se poste automatiquement tant qu'il n'est pas activé), + `expense_default_credit_account` (compte crédité pour les dépenses, défaut `"1000"` Encaisse, validé ∈ {`"1000"`, `"2000"`}). Migration idempotente au startup (champs additifs à défaut sûr) + index unique partiel `uniq_live_auto_source` anti-doublon.
   - **Écritures dérivées automatiques** (`entry_type="auto"`, statut `posted`, équilibrées Dr=Cr) sur 3 événements sources : facture passée à `sent` → revenu (accrual) ; paiement reçu → encaissement ; dépense créée → charge. Hooks additifs en fin des endpoints existants (`PUT /api/invoices/{id}/status`, POST/DELETE paiement, POST/PUT/DELETE dépense, DELETE facture cascade), tous gardés par `autopost_enabled`.
