@@ -8,6 +8,8 @@ avant l'import et le paquet `backend` doit être importable depuis la racine.
 """
 import os
 import sys
+import uuid as _uuid
+from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -19,6 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.server import (  # noqa: E402
     app, db, _mileage_rate_for_year, migrate_mileage_logbook_v1,
+    create_token, DEFAULT_ROLE_PERMISSIONS,
 )
 
 client = TestClient(app)
@@ -748,3 +751,185 @@ def test_get_rates_flags_a_missing_year_year(auth_headers):
     # Coherence stricte du drapeau avec le helper source de verite.
     for year_str in body["rates"]:
         assert _mileage_rate_for_year(int(year_str)) is not None
+
+
+# --- Task 9 : RBAC + isolation cross-org sur les trajets ----------------------
+#
+# Ces tests VALIDENT le comportement des dependencies deja en place (aucune modif
+# serveur necessaire si le contrat tient) :
+#   1. isolation cross-org : un trajet cree par l'org A est INVISIBLE et
+#      INMUTABLE depuis l'org B (GET/PUT/DELETE -> 404). Garantie par _org_scope :
+#      toutes les queries des Tasks 5-8 combinent {**scope, "id": ...}, jamais
+#      {"id": ...} seul, et scope filtre sur organization_id. Un trajet porte
+#      TOUJOURS un organization_id (jamais de user_id nu) donc la branche de
+#      fallback pre-migration ($or user_id + organization_id absent) ne peut pas
+#      faire fuiter un trajet d'une autre org.
+#   2. enforcement de la permission d'ecriture : un role viewer (read-only, sans
+#      expenses:write) recoit 403 sur POST/PUT/DELETE mais 200 sur GET.
+#
+# Discipline d'isolation du fichier : on cree des orgs JETABLES (Org B via
+# /api/auth/register, viewer via insert DB direct) nettoyees en teardown, et on
+# nettoie tout trajet cree dans le seed org en `finally`. Le seed org n'est
+# jamais sali.
+
+
+@pytest.fixture
+def second_org_headers():
+    """Enregistre une organisation B jetable et renvoie ses headers d'auth.
+
+    /api/auth/register cree un nouvel user OWNER de sa propre org (voir
+    migrate_organizations_v1 / le flux register). On nettoie l'user + son org en
+    teardown pour ne pas accumuler d'orgs orphelines de test."""
+    email = f"mileage_orgb_{_uuid.uuid4().hex[:8]}@example.com"
+    reg = client.post("/api/auth/register", json={
+        "email": email, "password": "testpass123", "company_name": "Org B jetable",
+    })
+    assert reg.status_code == 200, reg.text
+    login = client.post("/api/auth/login", json={
+        "email": email, "password": "testpass123",
+    })
+    assert login.status_code == 200, login.text
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    yield headers
+    # Teardown : retire l'user B, son org, et tout artefact carnet de route cree.
+    user = db.users.find_one({"email": email})
+    if user:
+        org_id = user.get("organization_id")
+        if org_id:
+            db.mileage_trips.delete_many({"organization_id": org_id})
+            db.mileage_vehicles.delete_many({"organization_id": org_id})
+            db.mileage_favorites.delete_many({"organization_id": org_id})
+            db.mileage_rate_reminders.delete_many({"organization_id": org_id})
+            db.organizations.delete_one({"id": org_id})
+        db.users.delete_one({"email": email})
+        db.user_passwords.delete_one({"user_id": user["id"]})
+
+
+@pytest.fixture
+def viewer_headers():
+    """Cree un VRAI compte viewer (read-only) dans une org jetable et mint un
+    token. Le viewer herite des permissions par defaut du role (expenses:read
+    mais PAS expenses:write). On insere directement en DB (plutot que le flux
+    d'invitation) pour eviter le rate-limit 5/min et le mail Resend, comme le
+    fait test_organizations_integration.py. Nettoye en teardown."""
+    uid = f"mileage-viewer-{_uuid.uuid4().hex[:8]}"
+    email = f"{uid}@test.local"
+    org_id = str(_uuid.uuid4())
+    future_iso = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
+    db.organizations.insert_one({
+        "id": org_id,
+        "name": "Org viewer jetable",
+        "owner_id": f"owner-{uid}",
+        "subscription_status": "trial",
+        "trial_ends_at": future_iso,
+        "role_permissions": DEFAULT_ROLE_PERMISSIONS,
+        "scan_count_this_month": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    db.users.insert_one({
+        "id": uid,
+        "email": email,
+        "company_name": "Org viewer jetable",
+        "is_active": True,
+        "organization_id": org_id,
+        "role": "viewer",
+        "subscription_status": "trial",
+        "trial_end_date": future_iso,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    headers = {"Authorization": f"Bearer {create_token(uid)}"}
+    yield headers
+    db.mileage_trips.delete_many({"organization_id": org_id})
+    db.mileage_vehicles.delete_many({"organization_id": org_id})
+    db.mileage_favorites.delete_many({"organization_id": org_id})
+    db.users.delete_one({"id": uid})
+    db.organizations.delete_one({"id": org_id})
+
+
+def test_cross_org_isolation(auth_headers, second_org_headers):
+    # Un trajet cree par l'org A (seed org) est invisible depuis l'org B.
+    vid = _dedicated_vehicle(auth_headers, "T9 iso A")
+    try:
+        created = client.post("/api/mileage/trips",
+                              json=_new_trip_payload(vid), headers=auth_headers)
+        assert created.status_code == 200, created.text
+        tid = created.json()["trip"]["id"]
+
+        # Org B ne peut pas GET le trajet de A par id -> 404 (jamais 403 : le
+        # scope masque totalement l'existence du doc hors org).
+        r = client.get(f"/api/mileage/trips/{tid}", headers=second_org_headers)
+        assert r.status_code == 404, r.text
+
+        # La liste annuelle de B ne contient pas le trajet de A.
+        lst = client.get("/api/mileage/trips?year=2026", headers=second_org_headers)
+        assert lst.status_code == 200, lst.text
+        assert all(row["trip"]["id"] != tid for row in lst.json())
+
+        # A, lui, y accede toujours (le trajet existe bien, seule l'org B est bloquee).
+        assert client.get(f"/api/mileage/trips/{tid}",
+                          headers=auth_headers).status_code == 200
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_cross_org_mutation_blocked(auth_headers, second_org_headers):
+    # L'isolation couvre aussi l'ECRITURE : org B ne peut ni editer ni supprimer
+    # un trajet de A. Le scope renvoie 404 (le doc est invisible), pas un edit
+    # silencieux sur un autre org.
+    vid = _dedicated_vehicle(auth_headers, "T9 iso mut A")
+    try:
+        created = client.post("/api/mileage/trips",
+                              json=_new_trip_payload(vid), headers=auth_headers)
+        assert created.status_code == 200, created.text
+        tid = created.json()["trip"]["id"]
+
+        # PUT depuis B -> 404
+        put = client.put(f"/api/mileage/trips/{tid}",
+                         json=_new_trip_payload(vid, purpose="Detournement B"),
+                         headers=second_org_headers)
+        assert put.status_code == 404, put.text
+
+        # DELETE depuis B -> 404
+        dele = client.delete(f"/api/mileage/trips/{tid}", headers=second_org_headers)
+        assert dele.status_code == 404, dele.text
+
+        # Le trajet de A est INTACT : motif d'origine inchange, toujours present.
+        still = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert still.status_code == 200, still.text
+        assert still.json()["trip"]["purpose"] == "Rencontre client"
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_writer_permission_enforced(auth_headers, viewer_headers):
+    # Un viewer (read-only, sans expenses:write) ne peut PAS creer de trajet.
+    # On cree le vehicule via l'owner (write), puis on tente les ecritures en viewer.
+    vid = _dedicated_vehicle(auth_headers, "T9 rbac viewer")
+    try:
+        # POST -> 403 (expenses:write manquant)
+        post = client.post("/api/mileage/trips",
+                           json=_new_trip_payload(vid), headers=viewer_headers)
+        assert post.status_code == 403, post.text
+
+        # Le viewer garde bien le droit de LIRE (expenses:read present).
+        lst = client.get("/api/mileage/trips?year=2026", headers=viewer_headers)
+        assert lst.status_code == 200, lst.text
+
+        # PUT / DELETE d'un id quelconque -> 403 (la garde de permission tombe
+        # AVANT toute resolution de scope ; donc 403, pas 404).
+        assert client.put("/api/mileage/trips/whatever",
+                          json=_new_trip_payload(vid),
+                          headers=viewer_headers).status_code == 403
+        assert client.delete("/api/mileage/trips/whatever",
+                             headers=viewer_headers).status_code == 403
+
+        # La creation d'un vehicule et d'un favori est aussi une ecriture -> 403.
+        assert client.post("/api/mileage/vehicles",
+                           json={"name": "Interdit"},
+                           headers=viewer_headers).status_code == 403
+        assert client.post("/api/mileage/favorites",
+                           json={"label": "X", "origin": "A", "destination": "B",
+                                 "one_way_km": 10},
+                           headers=viewer_headers).status_code == 403
+    finally:
+        _cleanup_vehicle(vid)
