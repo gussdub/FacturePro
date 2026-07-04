@@ -70,6 +70,7 @@ def _cleanup(uid, org_id):
     server_module.db.ledger_counters.delete_many({"organization_id": org_id})
     server_module.db.invoices.delete_many({"organization_id": org_id})
     server_module.db.expenses.delete_many({"organization_id": org_id})
+    server_module.db.autopost_orphans.delete_many({"organization_id": org_id})
 
 
 def _create_draft_invoice(client, headers, total=115.0, province="QC"):
@@ -835,3 +836,242 @@ class TestExpenseHooks:
                 "2 appels avec le même expense.id → 1 écriture"
         finally:
             _cleanup(uid, org_id)
+
+
+def _orphans(org_id):
+    return list(server_module.db.autopost_orphans.find(
+        {"organization_id": org_id}, {"_id": 0}))
+
+
+class TestFixT9CascadeAtomicity:
+    """Fix T9 #1 — cascade delete_invoice atomique par source + trou journalisé."""
+
+    def test_cascade_reverses_all_sources_when_one_payment_fails(
+            self, client, monkeypatch):
+        # Une facture sent + 2 paiements. On force l'échec de la contre-passation
+        # du 2e paiement UNIQUEMENT. Attendu : le revenu ET le 1er paiement sont
+        # bien contre-passés (la cascade ne s'arrête PAS au 1er échec), et le
+        # trou (2e paiement) est journalisé dans autopost_orphans AVANT le delete.
+        uid, org_id, h = _setup_org(client, "fx1")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            r1 = _add_payment(client, h, inv["id"], 30.0)
+            pid1 = r1.json()["payments"][0]["id"]
+            r2 = _add_payment(client, h, inv["id"], 20.0)
+            pid2 = r2.json()["payments"][1]["id"]
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            assert len(_live_payment_entries(org_id, pid1)) == 1
+            assert len(_live_payment_entries(org_id, pid2)) == 1
+
+            real_unpost = server_module._unpost_source_entry
+
+            def _selective(organization_id, user_id, source_type, source_id,
+                           *a, **k):
+                if source_type == "invoice_payment" and source_id == pid2:
+                    raise RuntimeError("boom-p2")
+                return real_unpost(organization_id, user_id, source_type,
+                                   source_id, *a, **k)
+
+            monkeypatch.setattr(server_module, "_unpost_source_entry", _selective)
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+
+            # Cascade NON interrompue : revenu + paiement 1 contre-passés malgré
+            # l'échec du paiement 2 (plus de cascade partielle silencieuse).
+            assert _live_revenue_entries(org_id, inv["id"]) == [], \
+                "le revenu doit être contre-passé même si un paiement échoue"
+            assert _live_payment_entries(org_id, pid1) == [], \
+                "le 1er paiement doit être contre-passé malgré l'échec du 2e"
+            # Le paiement 2 reste vivant (sa contre-passation a échoué) = le trou.
+            assert len(_live_payment_entries(org_id, pid2)) == 1
+
+            # Trou JOURNALISÉ durablement avant le delete physique.
+            orphans = _orphans(org_id)
+            assert len(orphans) == 1, "un orphan doit tracer le trou de cascade"
+            o = orphans[0]
+            assert o["source_type"] == "invoice"
+            assert o["source_id"] == inv["id"]
+            assert o["context"] == "delete_invoice_cascade"
+            failed_ids = {f["source_id"] for f in o["failed_sources"]}
+            assert failed_ids == {pid2}, "seul le paiement 2 est en échec"
+            # La facture est bien physiquement supprimée (op métier prioritaire).
+            r2b = client.get(f"/api/invoices/{inv['id']}", headers=h)
+            assert r2b.status_code == 404
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_cascade_success_records_no_orphan(self, client):
+        # Cascade nominale (tout réussit) → aucun orphan journalisé.
+        uid, org_id, h = _setup_org(client, "fx2")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            _add_payment(client, h, inv["id"], 30.0)
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+            assert _orphans(org_id) == [], \
+                "cascade réussie → aucun orphan"
+        finally:
+            _cleanup(uid, org_id)
+
+
+class TestFixT9ExpenseRegenNoHole:
+    """Fix T9 #2 — PUT expense : si le repost échoue, pas de trou (restauration)."""
+
+    def test_put_expense_repost_failure_restores_previous_entry(
+            self, client, monkeypatch):
+        # Une dépense postée (114.98). Au PUT, le repost (_autopost_expense) lève.
+        # Sans le fix, l'unpost aurait réussi mais le repost échoué → AUCUNE
+        # écriture vivante (charge disparue du GL). Avec le fix : l'écriture
+        # PRÉCÉDENTE est restaurée → 1 vivant reflétant l'ANCIEN montant, et
+        # autopost_error est posé (trou visible), le PUT reste 200.
+        uid, org_id, h = _setup_org(client, "fx3")
+        try:
+            r = _create_expense(client, h, amount=114.98, gst=5.0, qst=9.98)
+            exp = r.json()
+            live_before = _live_expense_entries(org_id, exp["id"])
+            assert len(live_before) == 1
+            before_net = _net_by_number(org_id, live_before)
+            assert before_net.get("5010") == 100.0
+
+            def _boom(*a, **k):
+                raise RuntimeError("boom-repost")
+
+            monkeypatch.setattr(server_module, "_autopost_expense", _boom)
+            r2 = client.put(f"/api/expenses/{exp['id']}", headers=h, json={
+                "amount": 200.0, "gst_paid_cad": 0.0, "qst_paid_cad": 0.0,
+            })
+            assert r2.status_code == 200, r2.text
+
+            # Anti-trou : une écriture vivante EXISTE encore (restaurée), pas de
+            # disparition de la charge du grand livre.
+            live_after = _live_expense_entries(org_id, exp["id"])
+            assert len(live_after) == 1, \
+                "l'écriture précédente doit être restaurée (pas de trou)"
+            _assert_balanced_entry(org_id, live_after[0])
+            after_net = _net_by_number(org_id, live_after)
+            # Le vivant restauré reflète l'ANCIEN montant (114.98 TTC → charge 100).
+            assert after_net.get("5010") == 100.0, \
+                "le vivant restauré reflète l'ancien montant (véridique)"
+            assert after_net.get("1000") == -114.98
+
+            # Trou visible : autopost_error posé sur la dépense.
+            doc = server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+            assert "boom" not in doc["autopost_error"]
+            # L'op métier a bien mis à jour le montant de la dépense.
+            assert doc["amount"] == 200.0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_put_expense_repost_success_still_regenerates(self, client):
+        # Non-régression du fix : quand le repost RÉUSSIT, la régénération se
+        # comporte comme avant (1 seul vivant reflétant le NOUVEAU montant).
+        uid, org_id, h = _setup_org(client, "fx4")
+        try:
+            r = _create_expense(client, h, amount=114.98, gst=5.0, qst=9.98)
+            exp = r.json()
+            r2 = client.put(f"/api/expenses/{exp['id']}", headers=h, json={
+                "amount": 200.0, "gst_paid_cad": 0.0, "qst_paid_cad": 0.0,
+            })
+            assert r2.status_code == 200, r2.text
+            live = _live_expense_entries(org_id, exp["id"])
+            assert len(live) == 1
+            net = _net_by_number(org_id, live)
+            assert net.get("5010") == 200.0, "le vivant reflète le nouveau montant"
+            assert net.get("1000") == -200.0
+            doc = server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" not in doc
+        finally:
+            _cleanup(uid, org_id)
+
+
+class TestFixT9LegacyDocMarking:
+    """Fix T9 #3 — autopost_error posé/effacé même sur docs LEGACY sans org_id."""
+
+    def test_autopost_error_marked_on_legacy_expense(self, client, monkeypatch):
+        # Une dépense LEGACY (sans champ organization_id, matchée par le fallback
+        # user_id de _org_scope). Sans le fix, _safe_autopost marquerait avec un
+        # filtre STRICT {id, organization_id} qui NE matche PAS → no-op silencieux.
+        # Avec le fix (legacy_user_id), l'autopost_error EST posé.
+        uid, org_id, h = _setup_org(client, "fx5")
+        try:
+            # Insère une dépense legacy directement en DB : PAS d'organization_id,
+            # seulement user_id (état pré-migration multi-tenant).
+            legacy_id = str(uuid.uuid4())
+            server_module.db.expenses.insert_one({
+                "id": legacy_id, "user_id": uid,  # PAS d'organization_id
+                "amount": 100.0, "currency": "CAD",
+                "exchange_rate_to_cad": 1.0, "amount_cad": 100.0,
+                "category_code": "office_supplies",
+                "gst_paid_cad": 0.0, "qst_paid_cad": 0.0, "hst_paid_cad": 0.0,
+                "expense_date": "2026-06-15", "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            # Sanity : le doc est bien matché par _org_scope (endpoint business).
+            r_get = client.get("/api/expenses", headers=h)
+            assert r_get.status_code == 200
+            assert any(e["id"] == legacy_id for e in r_get.json())
+
+            def _boom(*a, **k):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(server_module, "_autopost_expense", _boom)
+            # PUT sur le doc legacy → l'op métier réussit ; le repost échoue → le
+            # fix doit poser autopost_error sur ce doc SANS organization_id.
+            r = client.put(f"/api/expenses/{legacy_id}", headers=h,
+                           json={"amount": 120.0})
+            assert r.status_code == 200, r.text
+            doc = server_module.db.expenses.find_one({"id": legacy_id}, {"_id": 0})
+            assert "organization_id" not in doc, "doc reste legacy (non muté)"
+            assert "autopost_error" in doc, \
+                "fix T9 #3 : autopost_error posé même sur doc legacy sans org_id"
+            assert "boom" not in doc["autopost_error"]
+        finally:
+            server_module.db.expenses.delete_many({"user_id": uid})
+            _cleanup(uid, org_id)
+
+    def test_legacy_marking_does_not_touch_other_org(self, client):
+        # Isolation : le marquage legacy (fallback user_id) ne doit JAMAIS toucher
+        # un doc d'une AUTRE org partageant le même id. On appelle _safe_autopost
+        # directement avec un fn qui lève, pour un id partagé entre 2 docs.
+        uidA, orgA, hA = _setup_org(client, "fx6a")
+        uidB, orgB, hB = _setup_org(client, "fx6b")
+        try:
+            shared_id = str(uuid.uuid4())
+            # Doc org B (avec organization_id = orgB) — NE doit PAS être touché.
+            server_module.db.expenses.insert_one({
+                "id": shared_id, "organization_id": orgB, "user_id": uidB,
+                "amount": 1.0, "amount_cad": 1.0,
+            })
+            # Doc legacy de l'user A (sans organization_id) — CELUI-CI doit être
+            # marqué. Même id (collision théorique) pour tester l'isolation.
+            server_module.db.expenses.insert_one({
+                "id": shared_id + "-legacyA", "user_id": uidA,
+                "amount": 1.0, "amount_cad": 1.0,
+            })
+
+            def _boom():
+                raise RuntimeError("boom")
+
+            # Marque le doc legacy A par son id + legacy_user_id=uidA.
+            server_module._safe_autopost(
+                _boom, "expenses", shared_id + "-legacyA",
+                {"organization_id": orgA}, legacy_user_id=uidA)
+
+            legacyA = server_module.db.expenses.find_one(
+                {"id": shared_id + "-legacyA"}, {"_id": 0})
+            assert "autopost_error" in legacyA, "le doc legacy de A est marqué"
+            # Le doc de l'org B (id partagé racine, org différente) reste INTACT.
+            docB = server_module.db.expenses.find_one(
+                {"id": shared_id, "organization_id": orgB}, {"_id": 0})
+            assert "autopost_error" not in docB, \
+                "aucune fuite cross-org : le doc org B n'est pas touché"
+        finally:
+            server_module.db.expenses.delete_many({"user_id": uidA})
+            server_module.db.expenses.delete_many({"user_id": uidB})
+            _cleanup(uidA, orgA)
+            _cleanup(uidB, orgB)

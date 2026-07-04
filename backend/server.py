@@ -1826,8 +1826,39 @@ def _unpost_source_entry(organization_id: str, user_id: str, source_type: str,
         source_type=source_type, source_id=source_id)
 
 
+def _autopost_mark_filter(source_doc_id: str, org_scope: dict,
+                          legacy_user_id: Optional[str] = None) -> dict:
+    """Filtre Mongo pour poser/effacer `autopost_error` sur le doc source.
+
+    Toujours borné par `id == source_doc_id` ET l'org du caller — jamais par `id`
+    seul (anti-fuite cross-org, spec §10).
+
+    [REGRESSION — fix T9 #3] Les docs métier LEGACY (pré-migration multi-tenant)
+    n'ont PAS de champ `organization_id` : ils sont matchés par les endpoints
+    business via le fallback `user_id` de `_org_scope` (`$or`). Un filtre STRICT
+    `{organization_id: org_id}` ne les matche PAS → le marquage/effacement
+    d'`autopost_error` serait un no-op silencieux (trou diagnostic invisible).
+    Quand `legacy_user_id` est fourni, on reproduit EXACTEMENT la sémantique de
+    `_org_scope` : le doc est matché soit par son `organization_id`, soit — s'il
+    n'a pas ce champ — par `user_id == legacy_user_id`. Cela couvre les docs
+    legacy sans jamais toucher un doc d'une AUTRE org (le fallback exige
+    `organization_id` absent + le user_id propriétaire). Cas résiduel appelé à
+    disparaître (fenêtre de migration 4 semaines)."""
+    org_id = org_scope.get("organization_id")
+    if legacy_user_id:
+        return {
+            "id": source_doc_id,
+            "$or": [
+                {"organization_id": org_id},
+                {"user_id": legacy_user_id,
+                 "organization_id": {"$exists": False}},
+            ],
+        }
+    return {"id": source_doc_id, "organization_id": org_id}
+
+
 def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
-                   org_scope: dict) -> None:
+                   org_scope: dict, legacy_user_id: Optional[str] = None) -> None:
     """Garde-fou robustesse (décision #6, spec §6.3).
 
     Enveloppe TOUT appel d'auto-posting : l'opération métier (facture, paiement,
@@ -1840,6 +1871,9 @@ def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
     part au log serveur ; le doc source ne reçoit qu'un message générique.
 
     L'update est TOUJOURS scopé org via `org_scope` (jamais par `id` seul).
+    Passe `legacy_user_id` (= `current_user.id`) pour que le marquage matche aussi
+    les docs LEGACY sans `organization_id` (cf. `_autopost_mark_filter`, fix T9 #3)
+    sans jamais toucher un doc d'une autre org.
 
     [REGRESSION/ISOLATION] Garde-fou de câblage (fix reviewer T4 #1/#5) : les
     callers métier des Tâches 5–9 doivent passer un `org_scope` NON VIDE contenant
@@ -1859,19 +1893,50 @@ def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
             "autopost aborted for %s: org_scope invalide (organization_id requis)",
             source_doc_id)
         return
+    mark_filter = _autopost_mark_filter(source_doc_id, org_scope, legacy_user_id)
     try:
         fn()
         db[source_doc_collection].update_one(
-            {"id": source_doc_id, **org_scope},
-            {"$unset": {"autopost_error": ""}})
+            mark_filter, {"$unset": {"autopost_error": ""}})
     except Exception as e:
         # NE JAMAIS propager : l'opération métier a déjà réussi.
         logger.warning("autopost failed for %s: %s", source_doc_id,
                        type(e).__name__)
         db[source_doc_collection].update_one(
-            {"id": source_doc_id, **org_scope},
+            mark_filter,
             {"$set": {"autopost_error":
                       f"{datetime.now(timezone.utc).isoformat()} — échec auto-posting"}})
+
+
+def _record_autopost_orphan(organization_id: str, source_type: str,
+                            source_id: str, context: str,
+                            failed_sources: list) -> None:
+    """Journal DURABLE d'un trou d'auto-posting (fix T9 #1).
+
+    Utilisé quand le doc source va être PHYSIQUEMENT supprimé (ex.
+    `delete_invoice`) : l'`autopost_error` que `_safe_autopost` poserait sur le
+    doc serait effacé par le `delete_one` qui suit → aucune trace du trou. On
+    écrit donc une entrée persistante dans `autopost_orphans` AVANT le delete, de
+    sorte qu'une cascade PARTIELLE (certaines contre-passations réussies, une
+    échouée) reste diagnosticable (réconciliation P&L T13, /autopost/status T11).
+
+    Best-effort : ne doit JAMAIS faire échouer l'op métier (jamais de propagation).
+    Toujours scopé org. `failed_sources` = liste des (source_type, source_id) dont
+    la contre-passation a levé."""
+    try:
+        db.autopost_orphans.insert_one({
+            "id": str(uuid.uuid4()),
+            "organization_id": organization_id,
+            "source_type": source_type,
+            "source_id": source_id,
+            "context": context,
+            "failed_sources": failed_sources,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "resolved": False,
+        })
+    except Exception as e:  # noqa: BLE001 — journal best-effort, jamais bloquant
+        logger.warning("autopost orphan record failed for %s/%s: %s",
+                       source_type, source_id, type(e).__name__)
 
 
 def _resolve_ledger_account(organization_id: str, user_id: str,
@@ -4467,7 +4532,8 @@ def update_invoice_status(invoice_id: str, status_data: dict, current_user: Curr
         _safe_autopost(
             lambda: _autopost_invoice_status_transition(
                 org_id, current_user.id, old_status, new_status, inv),
-            "invoices", invoice_id, {"organization_id": org_id})
+            "invoices", invoice_id, {"organization_id": org_id},
+            legacy_user_id=current_user.id)
     return {"message": "Status updated"}
 
 @app.post("/api/invoices/{invoice_id}/payments")
@@ -4501,7 +4567,8 @@ def add_invoice_payment(invoice_id: str, body: dict,
         _ensure_chart_seeded(org_id, current_user.id)
         _safe_autopost(
             lambda: _autopost_payment(org_id, current_user.id, invoice, payment),
-            "invoices", invoice_id, {"organization_id": org_id})
+            "invoices", invoice_id, {"organization_id": org_id},
+            legacy_user_id=current_user.id)
     fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     return _enrich_invoice(fresh)
 
@@ -4541,7 +4608,8 @@ def delete_invoice_payment(invoice_id: str, payment_id: str,
         _safe_autopost(
             lambda: _unpost_source_entry(
                 org_id, current_user.id, "invoice_payment", payment_id),
-            "invoices", invoice_id, {"organization_id": org_id})
+            "invoices", invoice_id, {"organization_id": org_id},
+            legacy_user_id=current_user.id)
     fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
     return _enrich_invoice(fresh)
 
@@ -4559,7 +4627,19 @@ def delete_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_
     # besoin de la facture (elle porte source_type/source_id), mais on lit ici la
     # liste des paiements du doc encore présent. On ne supprime JAMAIS
     # physiquement une écriture postée (immuabilité Phase 1) — uniquement
-    # contre-passation. _safe_autopost avale toute erreur → DELETE reste 200.
+    # contre-passation.
+    #
+    # [COMPTA — fix T9 #1] Cascade ATOMIQUE par source + trou journalisé. Chaque
+    # source (revenu + N encaissements) est contre-passée dans son PROPRE bloc :
+    # si l'une lève, les AUTRES sont quand même tentées (plus de cascade partielle
+    # avalée par un unique _safe_autopost qui s'arrêterait au 1er échec). Chaque
+    # contre-passation est isolée par try/except → aucune ne fait échouer le DELETE
+    # (décision #6). CRUCIAL : l'autopost_error que _safe_autopost poserait sur la
+    # facture serait EFFACÉ par le delete_one qui suit → aucune trace du trou. On
+    # journalise donc tout échec dans `autopost_orphans` AVANT le delete (durable,
+    # diagnosticable via réconciliation P&L T13). _unpost_source_entry est
+    # déterministe et idempotent (no-op si déjà contre-passé), donc le risque
+    # résiduel est faible ; ce garde-fou capture néanmoins le bord tranchant.
     if inv:
         org_id = current_user.organization_id
         settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
@@ -4567,14 +4647,25 @@ def delete_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_
             _ensure_chart_seeded(org_id, current_user.id)
             payment_ids = [p.get("id") for p in (inv.get("payments", []) or [])
                            if p.get("id")]
-
-            def _cascade_unpost():
-                _unpost_source_entry(org_id, current_user.id, "invoice", invoice_id)
-                for pid in payment_ids:
-                    _unpost_source_entry(org_id, current_user.id, "invoice_payment", pid)
-
-            _safe_autopost(_cascade_unpost, "invoices", invoice_id,
-                           {"organization_id": org_id})
+            sources = [("invoice", invoice_id)] + [
+                ("invoice_payment", pid) for pid in payment_ids]
+            failed_sources = []
+            for src_type, src_id in sources:
+                try:
+                    _unpost_source_entry(org_id, current_user.id, src_type, src_id)
+                except Exception as e:  # noqa: BLE001 — jamais bloquant (déc. #6)
+                    logger.warning(
+                        "cascade unpost failed for %s/%s on delete_invoice %s: %s",
+                        src_type, src_id, invoice_id, type(e).__name__)
+                    failed_sources.append({"source_type": src_type,
+                                           "source_id": src_id})
+            # Trou de cascade : journaliser AVANT le delete_one (l'autopost_error
+            # sur la facture serait sinon perdu avec le doc supprimé).
+            if failed_sources:
+                _record_autopost_orphan(
+                    org_id, "invoice", invoice_id,
+                    context="delete_invoice_cascade",
+                    failed_sources=failed_sources)
     result = db.invoices.delete_one({"id": invoice_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Invoice not found")
@@ -5687,7 +5778,8 @@ def create_expense(expense_data: dict, current_user: CurrentUser = Depends(requi
         _ensure_chart_seeded(org_id, current_user.id)
         _safe_autopost(
             lambda: _autopost_expense(org_id, current_user.id, doc),
-            "expenses", doc["id"], {"organization_id": org_id})
+            "expenses", doc["id"], {"organization_id": org_id},
+            legacy_user_id=current_user.id)
     return clean_doc(doc)
 
 @app.put("/api/expenses/{expense_id}")
@@ -5734,20 +5826,52 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
     # [GL P2 — T9] Régénération auto de l'écriture de charge (§5.7), opt-in par org.
     # On CONTRE-PASSE l'ancienne écriture (miroir POSTED — l'origine reste posted,
     # net zéro) puis on POSTE la nouvelle avec les valeurs à jour. Toujours
-    # régénérer (pas d'optimisation de court-circuit pour cette version) : le plus
-    # sûr, l'idempotence est garantie par le tandem unpost/post. _safe_autopost
-    # avale toute erreur → le PUT reste 200.
+    # régénérer (pas d'optimisation de court-circuit pour cette version) :
+    # l'idempotence est garantie par le tandem unpost/post. _safe_autopost avale
+    # toute erreur → le PUT reste 200.
+    #
+    # [COMPTA — fix T9 #2] Anti-trou de régénération : si l'unpost réussit mais que
+    # le repost lève (ex. compte 5xxx introuvable), on se retrouverait SANS écriture
+    # vivante — la charge disparaîtrait du grand livre jusqu'au prochain PUT réussi.
+    # Pour éviter ce trou, on RÉCUPÈRE (best-effort) en re-postant l'écriture
+    # PRÉCÉDENTE (mêmes lignes que l'ancien vivant, source_type/source_id conservés)
+    # : le GL reflète alors encore l'ANCIEN montant (véridique jusqu'à la prochaine
+    # régénération réussie) plutôt que rien. On propage ensuite l'exception d'origine
+    # pour que _safe_autopost pose l'autopost_error (trou visible via /autopost/status
+    # T11) — l'op métier (PUT) reste 200 dans tous les cas.
     org_id = current_user.organization_id
     settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
     if settings.get("autopost_enabled") and updated is not None:
         _ensure_chart_seeded(org_id, current_user.id)
 
         def _regenerate():
+            # Snapshot de l'ancien vivant AVANT de le contre-passer, pour pouvoir
+            # le restaurer si le repost échoue (best-effort anti-trou).
+            prev_live = _find_live_source_entry(org_id, "expense", expense_id)
             _unpost_source_entry(org_id, current_user.id, "expense", expense_id)
-            _autopost_expense(org_id, current_user.id, updated)
+            try:
+                _autopost_expense(org_id, current_user.id, updated)
+            except Exception:
+                # Le repost a échoué : restaure l'ancienne écriture pour ne pas
+                # laisser la charge absente du GL. La restauration est best-effort
+                # (ne doit pas masquer l'erreur d'origine) ; on re-lève ensuite.
+                if prev_live is not None:
+                    try:
+                        _post_source_entry(
+                            org_id, current_user.id, "expense", expense_id,
+                            entry_date=prev_live["entry_date"],
+                            description=prev_live.get("description", ""),
+                            lines=prev_live["lines"],
+                            reference=prev_live.get("reference"))
+                    except Exception:
+                        logger.warning(
+                            "expense %s: échec restauration écriture après repost KO",
+                            expense_id)
+                raise
 
         _safe_autopost(_regenerate, "expenses", expense_id,
-                       {"organization_id": org_id})
+                       {"organization_id": org_id},
+                       legacy_user_id=current_user.id)
     return clean_doc(updated)
 
 @app.put("/api/expenses/{expense_id}/status")
@@ -5780,7 +5904,8 @@ def delete_expense(expense_id: str, current_user: CurrentUser = Depends(require_
             _safe_autopost(
                 lambda: _unpost_source_entry(
                     org_id, current_user.id, "expense", expense_id),
-                "expenses", expense_id, {"organization_id": org_id})
+                "expenses", expense_id, {"organization_id": org_id},
+                legacy_user_id=current_user.id)
     result = db.expenses.delete_one({"id": expense_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Expense not found")
