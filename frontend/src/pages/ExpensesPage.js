@@ -50,6 +50,10 @@ const ExpensesPage = () => {
   const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
   const [exchangeRates, setExchangeRates] = useState(null); // { CAD:1, USD:0.73, ... } | null (unités étrangères par 1 CAD)
   const [companyProvince, setCompanyProvince] = useState('QC');
+  // % d'usage d'affaires du véhicule (T2125 feature #10). > 0 = méthode « frais réels au prorata »,
+  // INCOMPATIBLE avec le carnet de route (méthode « allocation par km »). Sert à avertir l'utilisateur
+  // du double-prorata 9281 quand il ouvre le carnet (spec §13). null tant que les réglages ne sont pas chargés.
+  const [vehicleBusinessPct, setVehicleBusinessPct] = useState(null);
   const scanInputRef = useRef(null);
   // Cache des taux historiques par date (figés) — évite les fetch redondants
   const historicalRatesRef = useRef({});
@@ -100,7 +104,10 @@ const ExpensesPage = () => {
 
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/settings/company`)
-      .then(resp => setCompanyProvince(resp.data.province || 'QC'))
+      .then(resp => {
+        setCompanyProvince(resp.data.province || 'QC');
+        setVehicleBusinessPct(Number(resp.data.vehicle_business_percentage) || 0);
+      })
       .catch(() => {});
   }, []);
 
@@ -1391,6 +1398,27 @@ const ExpensesPage = () => {
               </button>
             ))}
           </div>
+          {vehicleBusinessPct > 0 && (
+            <div
+              data-testid="logbook-vehicle-pct-warning"
+              role="alert"
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10,
+                background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
+                padding: '12px 14px', marginBottom: '16px', color: '#991b1b', fontSize: 13, lineHeight: 1.5,
+              }}>
+              <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 1, color: '#dc2626' }} />
+              <div>
+                <strong>Méthodes incompatibles — déduction véhicule comptée deux fois.</strong>{' '}
+                Le pourcentage d'usage d'affaires du véhicule est réglé à <strong>{vehicleBusinessPct}&nbsp;%</strong> dans
+                Réglages (méthode « frais réels au prorata », ligne 9281 du T2125). Le carnet de route utilise plutôt la
+                méthode « allocation par&nbsp;km » : la dépense qu'il génère <strong>est déjà</strong> la déduction finale
+                (km × taux ARC). Cumuler les deux fait proratiser cette allocation une seconde fois par le T2125 et
+                <strong> sous-déclare</strong> votre déduction. Mettez <strong>vehicle_business_percentage&nbsp;=&nbsp;0</strong> dans
+                Réglages si vous tenez un carnet de route.
+              </div>
+            </div>
+          )}
           {logbookTab === 'trips' && <MileageTripsTab />}
           {logbookTab === 'favorites' && <MileageFavoritesTab />}
           {logbookTab === 'logbook' && <MileageLogbookTab />}
