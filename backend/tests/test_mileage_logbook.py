@@ -177,6 +177,66 @@ def test_ytd_same_date_orders_by_id():
     assert total == 10.0
 
 
+def test_ytd_same_date_orders_by_created_at_then_id():
+    # Fix T4 [CALCUL] : deux trajets de la MEME date sont departages par
+    # created_at (ordre de saisie reel), pas par l'UUID arbitraire. Ici l'id 'z'
+    # (UUID plus grand) a ete saisi AVANT 'a' (created_at plus tot) ; le courant
+    # 'a' doit donc compter le trajet 'z' comme anterieur malgre 'z' > 'a'.
+    trips = [
+        {"id": "z", "trip_date": "2026-05-01", "distance_km": 10.0,
+         "created_at": "2026-05-01T08:00:00+00:00",
+         "employee_key": "user:U1", "vehicle_id": "V1"},
+        {"id": "a", "trip_date": "2026-05-01", "distance_km": 20.0,
+         "created_at": "2026-05-01T09:00:00+00:00",  # saisi APRES 'z'
+         "employee_key": "user:U1", "vehicle_id": "V1"},
+    ]
+    total = _mileage_sum_ytd(trips, current_id="a", current_date="2026-05-01",
+                             employee_key="user:U1", vehicle_id="V1",
+                             current_created_at="2026-05-01T09:00:00+00:00")
+    assert total == 10.0  # 'z' compte (saisi avant), malgre 'z' > 'a' en UUID
+
+
+def test_ytd_same_created_at_falls_back_to_id():
+    # created_at egal (ou absent) -> departage final deterministe par id, comme
+    # avant le fix (comportement historique preserve).
+    trips = [
+        {"id": "a", "trip_date": "2026-05-01", "distance_km": 10.0,
+         "created_at": "2026-05-01T08:00:00+00:00",
+         "employee_key": "user:U1", "vehicle_id": "V1"},
+        {"id": "b", "trip_date": "2026-05-01", "distance_km": 20.0,
+         "created_at": "2026-05-01T08:00:00+00:00",  # meme instant que 'a'
+         "employee_key": "user:U1", "vehicle_id": "V1"},
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-05-01",
+                             employee_key="user:U1", vehicle_id="V1",
+                             current_created_at="2026-05-01T08:00:00+00:00")
+    assert total == 10.0  # 'a' < 'b' au departage final
+
+
+def test_ytd_annual_total_invariant_to_created_at_order():
+    # Le TOTAL du cumul YTD (donc l'allocation annuelle) est invariant a l'ordre
+    # de saisie de trajets du meme jour : seule la ligne qui absorbe la bascule
+    # au seuil change, jamais le cumul. On verifie que la somme des anterieurs +
+    # courant reste identique quel que soit le fil de saisie.
+    def _trips(order):
+        # order = liste de (id, created_at) dans l'ordre de saisie
+        return [
+            {"id": tid, "trip_date": "2026-07-02", "distance_km": km,
+             "created_at": ca, "employee_key": "user:U1", "vehicle_id": "V1"}
+            for (tid, ca, km) in order
+        ]
+    orderA = [("t1", "2026-07-02T08:00", 30.0), ("t2", "2026-07-02T09:00", 40.0)]
+    orderB = [("t2", "2026-07-02T08:00", 40.0), ("t1", "2026-07-02T09:00", 30.0)]
+    # cumul avant le DERNIER trajet saisi + sa distance = total du jour, invariant
+    lastA = _mileage_sum_ytd(_trips(orderA), current_id="t2",
+                             current_date="2026-07-02", employee_key="user:U1",
+                             vehicle_id="V1", current_created_at="2026-07-02T09:00")
+    lastB = _mileage_sum_ytd(_trips(orderB), current_id="t1",
+                             current_date="2026-07-02", employee_key="user:U1",
+                             vehicle_id="V1", current_created_at="2026-07-02T09:00")
+    assert lastA + 40.0 == lastB + 30.0 == 70.0
+
+
 def test_ytd_excludes_current_and_later_trips():
     trips = [
         _trip("2026-01-01", 10.0, "a"),

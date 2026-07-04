@@ -255,14 +255,29 @@ def _mileage_trip_date_str(value) -> str:
     return str(value)[:10]
 
 
-def _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id):
+def _mileage_order_key(trip_day, created_at, trip_id):
+    """Cle d'ordre chronologique d'un trajet dans le cumul YTD.
+    Ordre : (jour civil, timestamp de saisie 'created_at', id).
+    Le created_at (ISO monotone a l'insertion) departage DEUX trajets de la MEME
+    date civile dans l'ordre reel de saisie plutot que par UUID arbitraire ; ainsi
+    la ligne qui 'absorbe' la bascule au seuil 5000 km est stable et chronologique
+    (montant par-trajet reproductible pour l'audit). L'id reste le departage final
+    deterministe (created_at egal/absent). created_at absent -> '' : l'ordre
+    retombe alors sur (jour, id), comportement historique preserve."""
+    return (str(trip_day), str(created_at or ""), str(trip_id))
+
+
+def _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id,
+                     current_created_at=""):
     """Somme des distance_km des trajets ANTERIEURS de la meme personne+vehicule
-    dans la meme annee civile que current_date. Ordre (trip_date, id).
-    Chaque trip du parametre `trips` porte deja 'employee_key' et 'vehicle_id'.
-    Robuste a un trip_date portant une composante horaire (normalise a 10 char).
+    dans la meme annee civile que current_date. Ordre (trip_date, created_at, id).
+    Chaque trip du parametre `trips` porte deja 'employee_key' et 'vehicle_id' ;
+    'created_at' est optionnel (departage chronologique intra-journee, cf.
+    _mileage_order_key). Robuste a un trip_date portant une composante horaire.
     """
     current_day = _mileage_trip_date_str(current_date)
     year = current_day[:4]
+    current_key = _mileage_order_key(current_day, current_created_at, current_id)
     total = 0.0
     for t in trips:
         if t["employee_key"] != employee_key or t["vehicle_id"] != vehicle_id:
@@ -270,17 +285,19 @@ def _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id):
         trip_day = _mileage_trip_date_str(t["trip_date"])
         if trip_day[:4] != year:
             continue
-        # anterieur = date < current_date, ou meme date avec id <
-        if (trip_day, t["id"]) < (current_day, current_id):
+        # anterieur = ordre (jour, created_at, id) strictement inferieur au courant
+        if _mileage_order_key(trip_day, t.get("created_at"), t["id"]) < current_key:
             total += float(t["distance_km"])
     return round(total, 2)
 
 
-def _mileage_ytd_before(scope, employee_key, vehicle_id, current_date, current_id):
+def _mileage_ytd_before(scope, employee_key, vehicle_id, current_date, current_id,
+                        current_created_at=""):
     """Charge les trajets de l'annee civile de current_date pour la meme
     personne+vehicule (scope org via `scope`), puis somme les anterieurs.
     `scope` = dict de filtre org (issu de _org_scope). employee_key est
-    la cle deja resolue via _mileage_employee_key."""
+    la cle deja resolue via _mileage_employee_key. current_created_at departage
+    l'ordre intra-journee (cf. _mileage_order_key)."""
     year = int(_mileage_trip_date_str(current_date)[:4])
     # Borne haute semi-ouverte ($lt annee+1) : inclut tout '{year}-12-31...' meme
     # avec une composante horaire ('2026-12-31T09:00'), que $lte '{year}-12-31'
@@ -297,12 +314,14 @@ def _mileage_ytd_before(scope, employee_key, vehicle_id, current_date, current_i
             "id": d["id"],
             "trip_date": d["trip_date"],
             "distance_km": d.get("distance_km", 0.0),
+            "created_at": d.get("created_at", ""),
             "employee_key": _mileage_employee_key(d.get("employee_id"), d.get("created_by_user_id")),
             "vehicle_id": d["vehicle_id"],
         }
         for d in docs
     ]
-    return _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id)
+    return _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id,
+                            current_created_at=current_created_at)
 
 
 def _find_category(code):
@@ -6951,7 +6970,8 @@ def _mileage_enrich_trip(trip: dict, scope) -> dict:
     rates = _mileage_rate_for_year(year)
     employee_key = _mileage_employee_key(trip.get("employee_id"), trip.get("created_by_user_id"))
     ytd_before = _mileage_ytd_before(
-        scope, employee_key, trip["vehicle_id"], trip["trip_date"], trip["id"])
+        scope, employee_key, trip["vehicle_id"], trip["trip_date"], trip["id"],
+        current_created_at=trip.get("created_at", ""))
     distance_km = float(trip.get("distance_km", 0.0))
     running_total_km = round(ytd_before + distance_km, 2)
     if rates is None:
