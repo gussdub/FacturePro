@@ -7448,6 +7448,188 @@ def delete_mileage_favorite(favorite_id: str,
     return {"status": "deleted", "id": favorite_id}
 
 
+# ─── Task 11 : Carnet de route — JSON + PDF conforme ARC ───────────────────
+#
+# Le carnet agrège les trajets d'une année civile (org-scopé, filtrable par
+# véhicule) avec, par ligne, la colonne « Cumul » exigée par l'ARC et l'allocation
+# du trajet. [CALCUL] Le cumul et l'allocation sont calculés dans le MÊME ordre
+# chronologique que _mileage_enrich_trip (jour civil, created_at, id — cf.
+# _mileage_order_key) et avec le taux de l'ANNÉE du trajet : le total du carnet
+# est donc, ligne à ligne, la somme des allocations par-trajet affichées ailleurs
+# (invariant d'audit). La bascule au taux réduit après 5000 km cumulés (par
+# personne+véhicule) est appliquée par _mileage_allocation avec split au seuil.
+# Année sans taux ARC → allocation BLOQUÉE (None, aucun montant deviné), le carnet
+# se rend quand même avec la mention « en attente de confirmation ».
+
+
+def _mileage_logbook_rows(scope, year, vehicle_id):
+    """Retourne (rows, totals). rows triés (trip_date, created_at, id) — même ordre
+    chronologique que l'enrichissement par-trajet — avec running total km et
+    allocation par trajet. Le cumul running est PAR (personne, véhicule)."""
+    year = int(year)
+    query = {
+        **scope,
+        "trip_date": {"$gte": f"{year}-01-01", "$lt": f"{year + 1}-01-01"},
+    }
+    if vehicle_id:
+        query["vehicle_id"] = vehicle_id
+    docs = list(db.mileage_trips.find(query, {"_id": 0}))
+    # Ordre chronologique canonique (jour, created_at, id) : identique au calcul
+    # per-trajet, pour que la ligne qui absorbe la bascule 5000 km soit la même
+    # que celle vue par GET /trips/{id} (montant par-trajet reproductible).
+    docs.sort(key=lambda d: _mileage_order_key(
+        _mileage_trip_date_str(d["trip_date"]), d.get("created_at"), d["id"]))
+    rates = _mileage_rate_for_year(year)
+    running = {}  # (employee_key, vehicle_id) -> km cumulés dans l'année
+    rows = []
+    total_km = 0.0
+    total_alloc = 0.0
+    for d in docs:
+        employee_key = _mileage_employee_key(d.get("employee_id"), d.get("created_by_user_id"))
+        key = (employee_key, d["vehicle_id"])
+        ytd_before = running.get(key, 0.0)
+        distance_km = float(d.get("distance_km", 0.0))
+        alloc = None
+        if rates is not None:
+            amount, _ = _mileage_allocation(distance_km, ytd_before, rates)
+            alloc = amount
+            total_alloc += amount
+        running[key] = ytd_before + distance_km
+        total_km += distance_km
+        rows.append({
+            "trip_date": _mileage_trip_date_str(d["trip_date"]),
+            "origin": d.get("origin", ""),
+            "destination": d.get("destination", ""),
+            "purpose": d.get("purpose", ""),
+            "distance_km": round(distance_km, 2),
+            "running_total_km": round(running[key], 2),
+            "allocation_cad": alloc,
+            "expense_id": d.get("expense_id"),
+        })
+    return rows, {
+        "total_km": round(total_km, 2),
+        "total_allocation_cad": round(total_alloc, 2),
+        "rates": rates,
+    }
+
+
+@app.get("/api/mileage/logbook")
+def get_mileage_logbook(year: int, vehicle_id: str = None,
+                        current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    """Carnet de route JSON d'une année (org-scopé, filtrable par véhicule).
+    Chaque ligne : date/départ/arrivée/motif/km/cumul/allocation (conforme ARC).
+    Année sans taux → allocations None + drapeau current_year_missing."""
+    _ensure_default_vehicle(current_user.organization_id, current_user.id)
+    scope = _org_scope(current_user)
+    rows, totals = _mileage_logbook_rows(scope, int(year), vehicle_id)
+    vehicle = None
+    if vehicle_id:
+        vehicle = db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0})
+    return {
+        "year": int(year),
+        "vehicle": vehicle,
+        "rows": rows,
+        "total_km": totals["total_km"],
+        "total_allocation_cad": totals["total_allocation_cad"],
+        "current_year_missing": _mileage_rate_for_year(int(year)) is None,
+    }
+
+
+def _render_mileage_logbook_pdf(year, vehicle, company, rows, totals) -> bytes:
+    """Génère le PDF du carnet de route (pattern miroir de _render_t2125_pdf :
+    ReportLab SimpleDocTemplate, _t2125_format_money, html.escape). Tableau
+    date/départ/arrivée/motif/km/cumul/allocation + totaux annuels."""
+    from reportlab.lib import colors
+    import html as _html
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=40, bottomMargin=40)
+    styles = getSampleStyleSheet()
+    story = []
+
+    company_name = _html.escape(company.get("company_name", "") if company else "")
+    story.append(Paragraph(f"Carnet de route — {year}", styles["Title"]))
+    if company_name:
+        story.append(Paragraph(company_name, styles["Normal"]))
+    if vehicle:
+        parts = [vehicle.get("name", "")]
+        if vehicle.get("make_model"):
+            parts.append(vehicle["make_model"])
+        if vehicle.get("plate"):
+            parts.append(vehicle["plate"])
+        story.append(Paragraph("Véhicule : " + _html.escape(" — ".join(p for p in parts if p)),
+                               styles["Normal"]))
+    story.append(Paragraph(
+        "Registre des déplacements d'affaires — conforme aux exigences de l'ARC "
+        "pour l'allocation de frais automobiles.", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    header = ["Date", "Départ", "Arrivée", "Motif", "Km", "Cumul", "Allocation"]
+    data = [header]
+    for r in rows:
+        alloc = _t2125_format_money(r["allocation_cad"]) if r["allocation_cad"] is not None else "—"
+        data.append([
+            r["trip_date"],
+            _html.escape(r["origin"]),
+            _html.escape(r["destination"]),
+            _html.escape(r["purpose"]),
+            _t2125_format_money(r["distance_km"]).replace(" $", ""),
+            _t2125_format_money(r["running_total_km"]).replace(" $", ""),
+            alloc,
+        ])
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f2937")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph(
+        f"Total des km {year} : {_t2125_format_money(totals['total_km']).replace(' $', '')} km",
+        styles["Normal"]))
+    story.append(Paragraph(
+        f"Total de l'allocation {year} : {_t2125_format_money(totals['total_allocation_cad'])}",
+        styles["Normal"]))
+    if totals["rates"]:
+        story.append(Paragraph(
+            f"Taux plein {totals['rates']['full']} $/km jusqu'à 5 000 km, "
+            f"puis {totals['rates']['reduced']} $/km au-delà.", styles["Normal"]))
+    else:
+        story.append(Paragraph(
+            f"Taux ARC {year} non configuré — allocation en attente de confirmation.",
+            styles["Normal"]))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@app.get("/api/mileage/logbook/pdf")
+def get_mileage_logbook_pdf(year: int, vehicle_id: str = None,
+                            current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    """PDF du carnet de route (org-scopé). Sans vehicle_id, retombe sur le
+    véhicule par défaut de l'org. No-store (données fiscales sensibles)."""
+    _ensure_default_vehicle(current_user.organization_id, current_user.id)
+    scope = _org_scope(current_user)
+    rows, totals = _mileage_logbook_rows(scope, int(year), vehicle_id)
+    vehicle = db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0}) if vehicle_id \
+        else db.mileage_vehicles.find_one({**scope, "is_default": True}, {"_id": 0})
+    company = db.company_settings.find_one(scope, {"_id": 0})
+    pdf_bytes = _render_mileage_logbook_pdf(int(year), vehicle, company, rows, totals)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="carnet-route-{year}.pdf"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
+
+
 @app.get("/api/dashboard/expense-analytics")
 def get_expense_analytics(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     expenses = list(db.expenses.find(

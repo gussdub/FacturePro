@@ -1027,3 +1027,110 @@ def test_delete_expense_releases_trips(auth_headers):
     finally:
         _cleanup_generated_expenses(vid)
         _cleanup_vehicle(vid)
+
+
+# ─── Task 11 : Carnet JSON + PDF conforme ARC ──────────────────────────────
+#
+# Le carnet agrège les trajets d'une année (par véhicule) avec cumul progressif
+# (colonne « Cumul » exigée par l'ARC) et allocation par trajet (taux de l'ANNÉE
+# du trajet, bascule au taux réduit après 5000 km cumulés par personne+véhicule).
+# On respecte la discipline d'isolation du fichier : véhicule DÉDIÉ (cumul à 0) +
+# nettoyage en `finally`, jamais de trajet laissé dans le seed org.
+
+
+def test_logbook_json_running_total(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T11 carnet JSON")
+    try:
+        _create_trip(auth_headers, vid, trip_date="2026-02-01",
+                     one_way_km=10, round_trip=False)
+        _create_trip(auth_headers, vid, trip_date="2026-02-15",
+                     one_way_km=20, round_trip=False)
+        r = client.get(f"/api/mileage/logbook?year=2026&vehicle_id={vid}",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        rows = body["rows"]
+        assert rows[0]["running_total_km"] == 10.0
+        assert rows[1]["running_total_km"] == 30.0
+        assert body["total_km"] == 30.0
+        assert body["total_allocation_cad"] == round(30 * 0.73, 2)
+        # Colonnes conformes ARC : chaque ligne porte date/départ/arrivée/motif/km.
+        assert rows[0]["trip_date"] == "2026-02-01"
+        for col in ("origin", "destination", "purpose", "distance_km",
+                    "running_total_km", "allocation_cad"):
+            assert col in rows[0]
+        assert body["current_year_missing"] is False
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_logbook_json_running_total_switch_5000km(auth_headers):
+    # Le cumul du carnet et l'allocation par trajet basculent au taux réduit
+    # après 5000 km, avec split correct sur le trajet à cheval (invariant ARC).
+    vid = _dedicated_vehicle(auth_headers, "T11 carnet bascule")
+    try:
+        for i in range(49):
+            _create_trip(auth_headers, vid,
+                         trip_date=f"2026-01-{(i % 28) + 1:02d}",
+                         one_way_km=100, round_trip=False)  # 4900 km cumulés
+        _create_trip(auth_headers, vid, trip_date="2026-06-15",
+                     one_way_km=200, round_trip=False)  # à cheval : 100@0,73 + 100@0,67
+        r = client.get(f"/api/mileage/logbook?year=2026&vehicle_id={vid}",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        crossing = body["rows"][-1]
+        assert crossing["running_total_km"] == 5100.0
+        assert crossing["allocation_cad"] == 140.00  # 100*0.73 + 100*0.67
+        # Total allocation = 4900 @ 0,73 + 100 @ 0,73 + 100 @ 0,67
+        expected = round(5000 * 0.73 + 100 * 0.67, 2)
+        assert body["total_km"] == 5100.0
+        assert body["total_allocation_cad"] == expected
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_logbook_pdf(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T11 carnet PDF")
+    try:
+        _create_trip(auth_headers, vid, trip_date="2026-03-03",
+                     one_way_km=12, round_trip=True)
+        r = client.get(f"/api/mileage/logbook/pdf?year=2026&vehicle_id={vid}",
+                       headers=auth_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert "no-store" in r.headers.get("cache-control", "")
+        assert r.content[:4] == b"%PDF"
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_logbook_pdf_missing_rate_year(auth_headers):
+    # Année sans taux ARC : le carnet se génère quand même (allocation en attente),
+    # les lignes portent allocation_cad=None et current_year_missing=True.
+    vid = _dedicated_vehicle(auth_headers, "T11 carnet sans taux")
+    org = client.get("/api/org/me", headers=auth_headers).json()["organization"]["id"]
+    missing_year = 2019  # hors table MILEAGE_RATES
+    assert _mileage_rate_for_year(missing_year) is None
+    try:
+        _create_trip(auth_headers, vid, trip_date=f"{missing_year}-04-04",
+                     one_way_km=10, round_trip=False)
+        rj = client.get(f"/api/mileage/logbook?year={missing_year}&vehicle_id={vid}",
+                        headers=auth_headers)
+        assert rj.status_code == 200, rj.text
+        body = rj.json()
+        assert body["current_year_missing"] is True
+        assert body["rows"][0]["allocation_cad"] is None
+        assert body["total_allocation_cad"] == 0.0
+        assert body["total_km"] == 10.0
+        # Le PDF se rend malgré l'absence de taux.
+        rp = client.get(
+            f"/api/mileage/logbook/pdf?year={missing_year}&vehicle_id={vid}",
+            headers=auth_headers)
+        assert rp.status_code == 200
+        assert rp.content[:4] == b"%PDF"
+    finally:
+        _cleanup_vehicle(vid)
+        # La saisie d'un trajet sur une année sans taux flague un reminder ARC ;
+        # on le nettoie pour ne pas salir le seed org.
+        db.mileage_rate_reminders.delete_one({"id": f"{org}:{missing_year}"})
