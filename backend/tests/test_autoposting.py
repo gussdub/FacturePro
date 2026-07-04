@@ -521,6 +521,39 @@ class TestSafeAutopost:
             server_module.db.invoices.delete_many(
                 {"organization_id": {"$in": [org_a, org_b]}})
 
+    def test_safe_autopost_refuses_empty_org_scope(self):
+        # [ISOLATION] Garde-fou de câblage (fix reviewer T4 #1/#5) : un caller
+        # qui oublie l'organization_id (scope vide) NE doit toucher AUCUN doc
+        # — sinon match par `id` seul → fuite cross-org. On ne propage pas non
+        # plus (décision #6) : la fn ne s'exécute même pas.
+        org_a = str(uuid.uuid4())
+        org_b = str(uuid.uuid4())
+        shared_id = f"inv-{uuid.uuid4().hex[:8]}"
+        try:
+            server_module.db.invoices.insert_one(
+                {"id": shared_id, "organization_id": org_a})
+            server_module.db.invoices.insert_one(
+                {"id": shared_id, "organization_id": org_b})
+
+            calls = {"n": 0}
+
+            def _fn():
+                calls["n"] += 1
+
+            # Scope vide : ne lève PAS, mais n'exécute pas fn et ne marque rien.
+            server_module._safe_autopost(_fn, "invoices", shared_id, {})
+            # Scope présent mais organization_id vide : même garde.
+            server_module._safe_autopost(
+                _fn, "invoices", shared_id, {"organization_id": None})
+
+            assert calls["n"] == 0  # fn jamais exécutée sur un scope invalide
+            for org in (org_a, org_b):
+                doc = server_module.db.invoices.find_one(
+                    {"id": shared_id, "organization_id": org}, {"_id": 0})
+                assert "autopost_error" not in doc  # aucun doc touché
+        finally:
+            server_module.db.invoices.delete_many({"id": shared_id})
+
 
 class TestResolveLedgerAccount:
     """Tâche 4 — _resolve_ledger_account : résolution de compte par numéro

@@ -250,6 +250,10 @@ Déjà en place en Phase 1, réutilisé tel quel :
 - 2120/1220 créés à la volée quand la taxe correspondante > 0.
 - Métadonnées exactes ; idempotent.
 
+> **[COMPTA — report obligatoire depuis la revue T4]** Ces vérifications comptables ne s'appliquaient PAS au code T4 (primitives `_safe_autopost`/`_resolve_ledger_account` sans caller). Elles deviennent BLOQUANTES ici, où le mapping facture est effectivement construit :
+> 1. **Partie double équilibrée** : `Σ Dr == Σ Cr` sur l'écriture produite (Dr 1100 = Cr 4000 + Σ taxes), tolérance ≤ 0,005 $ ; la ligne de revenu est calculée PAR DIFFÉRENCE (`total_cad − Σ taxes_cad`) pour absorber l'arrondi de conversion. Un test l'assert explicitement.
+> 2. **Reconversion des taxes en CAD AVANT post** : `gst/pst/hst` sont en devise de FACTURE (spec déc. #7) → divisés par `exchange_rate_to_cad`. Test USD obligatoire : `Σ Dr == Σ Cr` au cent près et Dr 1100 == `total_cad`.
+
 ---
 
 ## Tâche 6 — Mapping paiement→encaissement + mapping dépense→charge
@@ -270,6 +274,8 @@ Déjà en place en Phase 1, réutilisé tel quel :
 **Critères d'acceptation :**
 - Paiement : Dr 1000 / Cr 1100 = amount_cad ; métadonnées exactes ; idempotent.
 - Dépense : 5xxx (fallback 5900), taxes en 12xx, charge nette par différence, crédit 1000/2000 selon flag ; équilibré ; idempotent.
+
+> **[COMPTA — report obligatoire depuis la revue T4]** Comme en Tâche 5, la partie double DOIT être assertée sur chaque écriture (paiement : Dr 1000 = Cr 1100 ; dépense : Dr charge nette + Dr taxes 12xx = Cr `amount_cad`), tolérance ≤ 0,005 $. La charge est calculée PAR DIFFÉRENCE (`amount_cad − Σ taxes`) → équilibre garanti dans tous les cas de taxe. Le net-zéro sur régénération/suppression (unpost) est délégué à `_reverse_entry_internal` (miroir POSTED) et vérifié en Tâches 8–9 lors du câblage.
 
 ---
 

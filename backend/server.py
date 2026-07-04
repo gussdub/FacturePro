@@ -1765,6 +1765,16 @@ def _reverse_entry_internal(organization_id: str, user_id: str, entry: dict,
 # Régénération = contre-passer l'ancienne (miroir POSTED) + reposter la nouvelle.
 # Tous les helpers filtrent organization_id explicitement (jamais par source_id
 # seul) → aucune fuite cross-org (spec §10).
+#
+# [COMPTA — report depuis la revue T4] Ces primitives (T3/T4) ne CONSTRUISENT
+# aucune ligne Dr/Cr : elles enveloppent _create_journal_entry / le miroir
+# _reverse_entry_internal. L'équilibre partie double (Dr=Cr) et la reconversion
+# CAD des taxes de facture sont des OBLIGATIONS des Tâches 5–6 (mappings
+# _build_invoice_revenue_lines / _autopost_payment / _autopost_expense), assertées
+# à leur câblage (T7–T9). Le net-zéro sur edit/delete est garanti PAR CONSTRUCTION
+# ici : _reverse_entry_internal poste un miroir Dr↔Cr inversé sans exclure
+# l'origine du solde (invariant Phase 1). Ne pas dupliquer ces contrôles dans les
+# primitives ; les vérifier sur les écritures RÉELLES produites en T5–T9.
 
 def _find_live_source_entry(organization_id: str, source_type: str,
                             source_id: str) -> Optional[dict]:
@@ -1829,7 +1839,26 @@ def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
     une exception peut charrier des données sensibles. Seul le TYPE d'exception
     part au log serveur ; le doc source ne reçoit qu'un message générique.
 
-    L'update est TOUJOURS scopé org via `org_scope` (jamais par `id` seul)."""
+    L'update est TOUJOURS scopé org via `org_scope` (jamais par `id` seul).
+
+    [REGRESSION/ISOLATION] Garde-fou de câblage (fix reviewer T4 #1/#5) : les
+    callers métier des Tâches 5–9 doivent passer un `org_scope` NON VIDE contenant
+    l'`organization_id` du `current_user`. Un scope vide/sans org ferait matcher
+    `{"id": source_doc_id}` seul → marquage (`autopost_error`) ou effacement du doc
+    d'une AUTRE org partageant le même id (fuite cross-org silencieuse, spec §10).
+    Si le scope est invalide on N'exécute PAS `fn`, on NE touche AUCUN doc (jamais
+    de filtre sans org) et on log une ERREUR bruyante — mais on ne PROPAGE PAS
+    (décision #6 : l'auto-posting ne fait jamais échouer l'op métier). Le trou de
+    couverture qui en résulte est visible via `/autopost/status` (T11) et la
+    réconciliation P&L (T13). Ceci n'altère AUCUN caller correct (tous scopent
+    déjà par org : cf. tests test_safe_autopost_*)."""
+    if not org_scope or not org_scope.get("organization_id"):
+        # Contrat violé par un caller (bug de câblage), pas un échec runtime de
+        # `fn` → on refuse d'agir sans org plutôt que de risquer une fuite.
+        logger.error(
+            "autopost aborted for %s: org_scope invalide (organization_id requis)",
+            source_doc_id)
+        return
     try:
         fn()
         db[source_doc_collection].update_one(
