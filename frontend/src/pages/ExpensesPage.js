@@ -1484,11 +1484,16 @@ function MileageTripsTab() {
     return form.round_trip ? km * 2 : km;
   };
   // Estimation indicative uniquement (le backend fait foi, avec split au seuil
-  // 5000 km cumulés). Utilise le taux PLEIN de l'ANNÉE du trajet ; renvoie null si
-  // la table des taux est indisponible ou si cette année n'a pas de taux publié
+  // 5000 km cumulés). Utilise le taux PLEIN de l'ANNÉE DU TRAJET ; renvoie null si
+  // la table des taux est indisponible ou si CETTE année n'a pas de taux publié
   // (aucun montant deviné — conforme au contrat « année absente → bloquée »).
+  // On gate sur l'année du trajet (rates.rates[yr]), comme tripYearRateMissing et
+  // comme le vrai gardien backend (_mileage_build_expense_for_trips) — surtout PAS
+  // sur current_year_missing, qui teste l'ANNÉE CIVILE COURANTE (datetime.now().year
+  // côté get_mileage_rates) et non l'année saisie : sinon un trajet visant une année
+  // AVEC taux afficherait à tort « indisponible » quand l'année courante en manque.
   const liveAllocation = () => {
-    if (!rates || rates.current_year_missing) return null;
+    if (!rates) return null;
     const yr = String(form.trip_date).slice(0, 4);
     const rate = rates.rates && rates.rates[yr];
     if (!rate) return null;
