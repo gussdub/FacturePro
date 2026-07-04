@@ -182,6 +182,25 @@ EXPENSE_CATEGORIES = [
 ]
 
 
+# Taux ARC allocation automobile, en $ CAD par km.
+# full    = taux pour les 5 000 premiers km de l'annee civile
+# reduced = taux pour chaque km au-dela de 5 000
+# Confirmes contre canada.ca avant chaque deploiement (voir rappel annuel).
+MILEAGE_RATES = {
+    2024: {"full": 0.70, "reduced": 0.64},
+    2025: {"full": 0.72, "reduced": 0.66},
+    2026: {"full": 0.73, "reduced": 0.67},
+}
+MILEAGE_RATE_THRESHOLD_KM = 5000  # bascule full -> reduced (par personne+vehicule+annee)
+
+
+def _mileage_rate_for_year(year) -> Optional[dict]:
+    """Retourne {'full','reduced'} pour l'annee, ou None si non renseignee
+    (declenche le rappel annuel). Pas de fallback silencieux sur une autre
+    annee : un taux manquant est une condition a corriger, pas a deviner."""
+    return MILEAGE_RATES.get(int(year))
+
+
 def _find_category(code):
     """Retourne le dict catalogue correspondant à code, ou None si inconnu/vide/None."""
     if not code:
