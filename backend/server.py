@@ -1676,7 +1676,9 @@ def _create_journal_entry(organization_id: str, user_id: str, entry_date: str,
                           description: str, lines: list, status: str = "posted",
                           reference: str = None, entry_type: str = "manual",
                           reverses_entry_id: str = None,
-                          entry_number: str = None) -> dict:
+                          entry_number: str = None,
+                          source_type: Optional[str] = None,
+                          source_id: Optional[str] = None) -> dict:
     """Factory interne d'écriture (partagée par journal manuel, ouverture,
     apport, contre-passation). Valide l'équilibre + snapshot les lignes."""
     _validate_entry_balance(lines)
@@ -1701,8 +1703,8 @@ def _create_journal_entry(organization_id: str, user_id: str, entry_date: str,
         "total_credit": total_credit,
         "reverses_entry_id": reverses_entry_id,
         "reversed_by_entry_id": None,
-        "source_type": None,
-        "source_id": None,
+        "source_type": source_type,
+        "source_id": source_id,
         "created_at": now,
         "posted_at": now if status == "posted" else None,
     }
