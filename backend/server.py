@@ -1527,6 +1527,9 @@ _ORG_SCOPED_COLLECTIONS = [
     "company_settings", "files", "bank_mappings", "bank_imports",
     "bank_transactions", "payment_transactions", "trial_notifications",
     "quote_tokens",
+    # feature #13 — carnet de route / kilométrage
+    "mileage_trips", "mileage_favorites", "mileage_vehicles",
+    "mileage_rate_reminders",
 ]
 
 
@@ -2631,6 +2634,20 @@ def migrate_general_ledger_v1():
     db.journal_entries.create_index(
         [("organization_id", 1), ("source_type", 1), ("source_id", 1)])
     db.ledger_counters.create_index("id", unique=True)
+
+
+def migrate_mileage_logbook_v1():
+    """Idempotente. Safe à chaque boot (feature #13 — carnet de route).
+    Purement additive : crée uniquement les index des nouvelles collections.
+    AUCUNE donnée existante touchée. Le véhicule par défaut est seedé LAZY au
+    1er accès (voir `_ensure_default_vehicle`), PAS ici."""
+    db.mileage_trips.create_index([("organization_id", 1), ("trip_date", 1)])
+    db.mileage_trips.create_index([("organization_id", 1), ("vehicle_id", 1), ("trip_date", 1)])
+    db.mileage_trips.create_index([("organization_id", 1), ("employee_id", 1)])
+    db.mileage_trips.create_index([("organization_id", 1), ("expense_id", 1)])
+    db.mileage_favorites.create_index([("organization_id", 1), ("label", 1)])
+    db.mileage_vehicles.create_index([("organization_id", 1), ("is_default", 1)])
+    db.mileage_rate_reminders.create_index("id", unique=True)
 
 
 def migrate_general_ledger_autopost_v1(target=None):
@@ -6796,6 +6813,55 @@ def import_csv_confirm(import_data: dict, current_user: CurrentUser = Depends(re
         created += 1
     return {"message": f"{created} depense(s) importee(s)", "created": created}
 
+
+# ─── Carnet de route / kilométrage — véhicules (feature #13) ───
+
+def _ensure_default_vehicle(org_id: str, user_id: str) -> None:
+    """Seed lazy du véhicule par défaut. Idempotent : ne crée que si zéro
+    véhicule pour l'org (même approche que le seed du plan comptable, feature #12).
+    Purement additif — n'écrit jamais si un véhicule existe déjà pour l'org."""
+    if db.mileage_vehicles.count_documents({"organization_id": org_id}) == 0:
+        db.mileage_vehicles.insert_one({
+            "id": str(uuid.uuid4()),
+            "organization_id": org_id,
+            "created_by_user_id": user_id,
+            "name": "Véhicule principal",
+            "make_model": None,
+            "plate": None,
+            "is_default": True,
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+@app.get("/api/mileage/vehicles")
+def list_mileage_vehicles(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    _ensure_default_vehicle(current_user.organization_id, current_user.id)
+    vehicles = list(db.mileage_vehicles.find(_org_scope(current_user), {"_id": 0}))
+    return vehicles
+
+
+@app.post("/api/mileage/vehicles")
+def create_mileage_vehicle(payload: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Le nom du véhicule est obligatoire")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "name": name,
+        "make_model": (payload.get("make_model") or None),
+        "plate": (payload.get("plate") or None),
+        "is_default": False,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.mileage_vehicles.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
 @app.get("/api/dashboard/expense-analytics")
 def get_expense_analytics(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     expenses = list(db.expenses.find(
@@ -8648,6 +8714,9 @@ def seed_data():
 
         # Migration feature #12 Phase 2 — auto-posting (idempotente)
         migrate_general_ledger_autopost_v1(db)
+
+        # Migration feature #13 — carnet de route / kilométrage (idempotente)
+        migrate_mileage_logbook_v1()
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(
