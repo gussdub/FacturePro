@@ -20,6 +20,35 @@ def _unique_label():
     return f"TestBank-{uuid.uuid4().hex[:8]}"
 
 
+@pytest.fixture(autouse=True)
+def _purge_seed_bank_mappings():
+    """Feature #7 : bank_mappings est POST-only (pas de DELETE endpoint), donc les
+    tests ne peuvent pas se nettoyer via l'API et polluent le seed org (copie-prod)
+    jusqu'à la limite de 20/org → 409 sur les runs suivants. Cette fixture autouse
+    snapshot les bank_mappings du seed org AVANT chaque test et purge en DB (local)
+    ceux créés APRÈS, pour que ce fichier ne dépende ni ne pollue le seed org."""
+    import pymongo
+    from dotenv import dotenv_values
+    _env = dotenv_values(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    _cli = pymongo.MongoClient(_env.get("MONGO_URL", "mongodb://localhost:27017"))
+    _db = _cli[_env.get("DB_NAME", "facturepro")]
+    _u = _db.users.find_one({"email": "gussdub@gmail.com"})
+    _org = _u.get("organization_id") if _u else None
+    _before = set()
+    if _org:
+        _before = set(m["id"] for m in _db.bank_mappings.find(
+            {"organization_id": _org}, {"id": 1}))
+    try:
+        yield
+    finally:
+        if _org:
+            _new = [m["id"] for m in _db.bank_mappings.find(
+                {"organization_id": _org}, {"id": 1}) if m["id"] not in _before]
+            if _new:
+                _db.bank_mappings.delete_many({"id": {"$in": _new}})
+        _cli.close()
+
+
 class TestMappings:
     _auth = None
 
