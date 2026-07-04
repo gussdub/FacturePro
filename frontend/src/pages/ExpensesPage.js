@@ -1815,7 +1815,132 @@ function MileageFavoritesTab() {
   );
 }
 function MileageLogbookTab() {
-  return <div data-testid="mileage-logbook-tab" style={{ color: '#6b7280' }}>Carnet (à venir)</div>;
+  const { token } = useAuth();
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [vehicles, setVehicles] = useState([]);
+  const [vehicleId, setVehicleId] = useState(''); // '' = véhicule par défaut (résolu backend)
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const authCfg = { headers: { Authorization: `Bearer ${token}` } };
+
+  const load = async () => {
+    setError('');
+    try {
+      const qs = vehicleId ? `?year=${year}&vehicle_id=${vehicleId}` : `?year=${year}`;
+      const [lb, veh] = await Promise.all([
+        axios.get(`${BACKEND_URL}/api/mileage/logbook${qs}`, authCfg),
+        axios.get(`${BACKEND_URL}/api/mileage/vehicles`, authCfg),
+      ]);
+      setData(lb.data);
+      setVehicles(veh.data);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur de chargement du carnet');
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [year, vehicleId]);
+
+  const downloadPdf = async () => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      const qs = vehicleId ? `?year=${year}&vehicle_id=${vehicleId}` : `?year=${year}`;
+      const resp = await axios.get(`${BACKEND_URL}/api/mileage/logbook/pdf${qs}`, {
+        headers: { Authorization: `Bearer ${token}` }, responseType: 'blob',
+      });
+      const url = window.URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `carnet-route-${year}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur lors du téléchargement du carnet PDF');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const input = { padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14, boxSizing: 'border-box' };
+  const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 };
+  const th = { padding: '8px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#374151', borderBottom: '2px solid #e5e7eb' };
+  const td = { padding: '8px', fontSize: 13, borderBottom: '1px solid #e5e7eb', verticalAlign: 'middle' };
+  const disabledStyle = (disabled) => (disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {});
+
+  const vehicleLabel = (v) => [v.name, v.make_model, v.plate].filter(Boolean).join(' — ');
+
+  return (
+    <div data-testid="mileage-logbook-tab">
+      {error && (
+        <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '10px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 13, color: '#374151' }}>Année</label>
+        <input type="number" data-testid="mileage-logbook-year" value={year} onChange={(e) => setYear(e.target.value)} style={{ ...input, width: 100 }} />
+        <label style={{ fontSize: 13, color: '#374151' }}>Véhicule</label>
+        <select data-testid="mileage-logbook-vehicle" value={vehicleId} onChange={(e) => setVehicleId(e.target.value)} style={{ ...input, minWidth: 160 }}>
+          <option value="">Véhicule par défaut</option>
+          {vehicles.map((v) => <option key={v.id} value={v.id}>{vehicleLabel(v)}</option>)}
+        </select>
+        <button data-testid="mileage-logbook-download" onClick={downloadPdf} style={{ ...btnPrimary, ...disabledStyle(busy) }} disabled={busy}>
+          Télécharger le carnet PDF
+        </button>
+      </div>
+
+      {data?.vehicle && (
+        <div style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }} data-testid="mileage-logbook-vehicle-label">
+          Carnet mono-véhicule : <strong style={{ color: '#374151' }}>{vehicleLabel(data.vehicle)}</strong>. Le cumul kilométrique et le split à 5 000 km sont tenus par véhicule (exigence ARC).
+        </div>
+      )}
+
+      {data?.current_year_missing && (
+        <div role="alert" data-testid="mileage-logbook-rate-missing" style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', padding: '10px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+          Taux ARC {data.year} à confirmer — l'allocation en dollars est en attente de mise à jour du taux ARC. Les kilomètres et le cumul restent exacts.
+        </div>
+      )}
+
+      {data && (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }} data-testid="mileage-logbook-table">
+            <thead>
+              <tr>
+                <th style={th}>Date</th><th style={th}>Départ</th><th style={th}>Arrivée</th>
+                <th style={th}>Motif</th><th style={th}>Km</th><th style={th}>Cumul</th><th style={th}>Allocation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.length === 0 && (
+                <tr><td style={{ ...td, color: '#9ca3af' }} colSpan={7}>Aucun trajet pour cette année.</td></tr>
+              )}
+              {data.rows.map((r, i) => (
+                <tr key={i} data-testid={`mileage-logbook-row-${i}`}>
+                  <td style={td}>{r.trip_date}</td>
+                  <td style={td}>{r.origin}</td>
+                  <td style={td}>{r.destination}</td>
+                  <td style={td}>{r.purpose}</td>
+                  <td style={td}>{r.distance_km}</td>
+                  <td style={td}>{r.running_total_km}</td>
+                  <td style={td}>{r.allocation_cad !== null && r.allocation_cad !== undefined ? `${r.allocation_cad.toFixed(2)} $` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 16, fontWeight: 600, fontSize: 14, color: '#374151' }} data-testid="mileage-logbook-totals">
+            Total : {data.total_km} km — {data.total_allocation_cad !== null && data.total_allocation_cad !== undefined
+              ? `${data.total_allocation_cad.toFixed(2)} $`
+              : 'allocation en attente (taux ARC à confirmer)'}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ─── Batch Review Table (feature: batch scan) ───
