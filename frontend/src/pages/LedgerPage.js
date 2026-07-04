@@ -2,16 +2,26 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BACKEND_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
+import {
+  formatCoverage, sourceDocRoute, sourceDocLabel, isAutoEntry, backfillTotal,
+} from '../utils/ledgerAutopost';
 
 const TABS = [
   { key: 'accounts', label: 'Plan comptable' },
   { key: 'journal', label: 'Journal' },
+  { key: 'autopost', label: 'Auto-posting' },
   { key: 'opening', label: 'Bilan d\'ouverture' },
   { key: 'contribution', label: 'Apport' },
   { key: 'ledger', label: 'Grand livre' },
   { key: 'trial', label: 'Balance de vérification' },
   { key: 'balancesheet', label: 'Bilan' },
 ];
+
+// Navigation manuelle (pas de router lib) — aligne sur App.js navigate().
+const goTo = (path) => {
+  window.history.pushState({}, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+};
 
 function AccountsTab() {
   const { hasPermission } = useAuth();
@@ -250,17 +260,40 @@ function JournalTab() {
           </tr>
         </thead>
         <tbody>
-          {entries.map(e => (
+          {entries.map(e => {
+            const auto = isAutoEntry(e);
+            const srcRoute = auto ? sourceDocRoute(e.source_type) : null;
+            return (
             <tr key={e.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
               <td style={{ padding: 8, fontFamily: 'monospace' }}>{e.entry_number}</td>
               <td style={{ padding: 8 }}>{e.entry_date}</td>
-              <td style={{ padding: 8 }}>{e.description}</td>
+              <td style={{ padding: 8 }}>
+                {e.description}
+                {auto && (
+                  <>
+                    {/* Pastille « Auto » : écriture générée par l'auto-posting (§8.3).
+                        Verrouillée — pas de contre-passation manuelle possible. */}
+                    <span title="Écriture générée automatiquement depuis un document source (verrouillée)"
+                      style={{ marginLeft: 8, background: '#EDE9FE', color: '#5B21B6',
+                        border: '1px solid #C4B5FD', borderRadius: 4, padding: '1px 6px',
+                        fontSize: 11, fontWeight: 600 }}>Auto</span>
+                    {srcRoute && (
+                      <button onClick={() => goTo(srcRoute)} title="Ouvrir le document source"
+                        style={{ marginLeft: 6, background: 'none', border: 'none',
+                          color: '#00A08C', cursor: 'pointer', fontSize: 12,
+                          textDecoration: 'underline', padding: 0 }}>
+                        {sourceDocLabel(e.source_type)} →</button>
+                    )}
+                  </>
+                )}
+              </td>
               <td style={{ padding: 8, textAlign: 'right' }}>{e.total_debit.toFixed(2)} $</td>
               <td style={{ padding: 8 }}>{statusLabel(e)}</td>
               {canWrite && (
                 <td style={{ padding: 8 }}>
-                  {/* Contre-passer seulement si postée ET pas déjà contre-passée */}
-                  {e.status === 'posted' && !e.reversed_by_entry_id
+                  {/* Contre-passer seulement si postée, pas déjà contre-passée, ET
+                      NON auto (les auto se gèrent via le document source, verrou §8.3). */}
+                  {!auto && e.status === 'posted' && !e.reversed_by_entry_id
                     && e.entry_type !== 'reversal' && (
                     <button onClick={() => reverse(e.id)} style={{
                       background: 'none', border: '1px solid #d1d5db', borderRadius: 4,
@@ -270,7 +303,8 @@ function JournalTab() {
                 </td>
               )}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
 
@@ -341,6 +375,309 @@ function JournalTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Onglet Auto-posting (feature #12 Phase 2, §12) ───
+// Gaté `accounting:read` au niveau route (App.js). Les actions d'écriture
+// (toggle, sélecteur, réparation, backfill) sont gatées `accounting:write`.
+function AutopostTab() {
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('accounting:write');
+
+  const [status, setStatus] = useState(null);      // GET /autopost/status
+  const [loading, setLoading] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [msg, setMsg] = useState(null);            // {type:'ok'|'err', text}
+  const [repairing, setRepairing] = useState(false);
+
+  // Assistant backfill
+  const [bfStart, setBfStart] = useState('');
+  const [bfEnd, setBfEnd] = useState('');
+  const [bfPreview, setBfPreview] = useState(null); // réponse dry-run
+  const [bfBusy, setBfBusy] = useState(false);
+  const [bfResult, setBfResult] = useState(null);   // réponse apply
+
+  const loadStatus = () => {
+    setLoading(true);
+    axios.get(`${BACKEND_URL}/api/ledger/autopost/status`)
+      .then(r => setStatus(r.data))
+      .catch(() => setStatus(null))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { loadStatus(); }, []);
+
+  // Persiste un champ de settings via le PUT existant, puis recharge le statut.
+  const saveSetting = async (patch) => {
+    setSavingSettings(true); setMsg(null);
+    try {
+      await axios.put(`${BACKEND_URL}/api/settings/company`, patch);
+      loadStatus();
+    } catch (err) {
+      setMsg({ type: 'err', text: err.response?.data?.detail || 'Erreur d\'enregistrement' });
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const toggleEnabled = () => {
+    if (!status) return;
+    saveSetting({ autopost_enabled: !status.enabled });
+  };
+
+  const changeCreditAccount = (value) => {
+    saveSetting({ expense_default_credit_account: value });
+  };
+
+  const runRepair = async () => {
+    setRepairing(true); setMsg(null);
+    try {
+      const r = await axios.post(`${BACKEND_URL}/api/ledger/autopost/repair`, {});
+      const stillFailing = (r.data?.still_failing || []).length;
+      setMsg({
+        type: stillFailing ? 'err' : 'ok',
+        text: stillFailing
+          ? `${r.data.repaired} réparé(s), ${stillFailing} en échec persistant.`
+          : `${r.data.repaired} écriture(s) réparée(s).`,
+      });
+      loadStatus();
+    } catch (err) {
+      setMsg({ type: 'err', text: err.response?.data?.detail || 'Erreur de réparation' });
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  // Backfill : dry-run (aperçu) puis apply (confirmation).
+  const previewBackfill = async () => {
+    setBfBusy(true); setBfPreview(null); setBfResult(null); setMsg(null);
+    try {
+      const params = { dry_run: true };
+      if (bfStart) params.start = bfStart;
+      if (bfEnd) params.end = bfEnd;
+      const r = await axios.post(`${BACKEND_URL}/api/ledger/autopost/backfill`, {}, { params });
+      setBfPreview(r.data);
+    } catch (err) {
+      setMsg({ type: 'err', text: err.response?.data?.detail || 'Erreur d\'aperçu' });
+    } finally {
+      setBfBusy(false);
+    }
+  };
+
+  const applyBackfill = async () => {
+    setBfBusy(true); setMsg(null);
+    try {
+      const params = { dry_run: false };
+      if (bfStart) params.start = bfStart;
+      if (bfEnd) params.end = bfEnd;
+      const r = await axios.post(`${BACKEND_URL}/api/ledger/autopost/backfill`, {}, { params });
+      setBfResult(r.data);
+      setBfPreview(null);
+      loadStatus();
+    } catch (err) {
+      setMsg({ type: 'err', text: err.response?.data?.detail || 'Erreur d\'application' });
+    } finally {
+      setBfBusy(false);
+    }
+  };
+
+  if (loading) return <div style={{ color: '#6b7280' }}>Chargement…</div>;
+  if (!status) return <div style={{ color: '#991b1b' }}>Impossible de charger l'état de l'auto-posting.</div>;
+
+  const cov = formatCoverage(status.coverage);
+  const previewTotal = bfPreview ? backfillTotal(bfPreview.would_create) : 0;
+  const cardStyle = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8,
+    padding: 16, marginBottom: 16 };
+  const sectionTitle = { fontSize: 15, fontWeight: 700, marginBottom: 12, marginTop: 0 };
+
+  const CoverageBar = ({ percent, color }) => (
+    <div style={{ background: '#f3f4f6', borderRadius: 4, height: 8, overflow: 'hidden', marginTop: 6 }}>
+      <div style={{ width: `${percent}%`, background: color, height: '100%' }} />
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <div style={{ background: '#eff6ff', padding: 12, borderRadius: 6, marginBottom: 16,
+        fontSize: 13, color: '#1e3a8a' }}>
+        L'auto-posting génère automatiquement les écritures du grand livre à partir
+        de vos factures, paiements et dépenses. Désactivé par défaut : activez-le,
+        puis lancez un backfill sur votre exercice pour comptabiliser l'historique.
+      </div>
+
+      {msg && (
+        <div style={{ padding: '10px 14px', borderRadius: 6, marginBottom: 16, fontSize: 13,
+          background: msg.type === 'ok' ? '#ecfdf5' : '#fef2f2',
+          color: msg.type === 'ok' ? '#065f46' : '#991b1b',
+          border: `1px solid ${msg.type === 'ok' ? '#a7f3d0' : '#fecaca'}` }}>
+          {msg.text}
+        </div>
+      )}
+
+      {/* ── Activation + compte de crédit dépenses ── */}
+      <div style={cardStyle}>
+        <h3 style={sectionTitle}>Activation</h3>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Auto-posting {status.enabled ? 'activé' : 'désactivé'}</div>
+            <div style={{ fontSize: 12, color: '#6b7280' }}>
+              {status.enabled
+                ? 'Les nouvelles factures/paiements/dépenses sont comptabilisés automatiquement.'
+                : 'Aucune écriture automatique n\'est générée.'}
+            </div>
+          </div>
+          <button onClick={toggleEnabled} disabled={!canWrite || savingSettings}
+            title={canWrite ? '' : 'Permission accounting:write requise'}
+            style={{ border: 'none', borderRadius: 20, width: 52, height: 28, position: 'relative',
+              cursor: canWrite && !savingSettings ? 'pointer' : 'not-allowed',
+              background: status.enabled ? '#00A08C' : '#d1d5db',
+              opacity: canWrite ? 1 : 0.5, transition: 'background 0.15s' }}>
+            <span style={{ position: 'absolute', top: 3, left: status.enabled ? 27 : 3,
+              width: 22, height: 22, borderRadius: '50%', background: '#fff',
+              transition: 'left 0.15s' }} />
+          </button>
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+            Compte de crédit des dépenses</label>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+            Contrepartie créditée lors de la comptabilisation d'une dépense.
+          </div>
+          <select value={status.expense_default_credit_account}
+            disabled={!canWrite || savingSettings}
+            onChange={e => changeCreditAccount(e.target.value)}
+            style={{ padding: 8, border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14,
+              cursor: canWrite ? 'pointer' : 'not-allowed', opacity: canWrite ? 1 : 0.6 }}>
+            <option value="1000">1000 — Encaisse (payé comptant)</option>
+            <option value="2000">2000 — Comptes fournisseurs (à payer)</option>
+          </select>
+        </div>
+        {!canWrite && (
+          <div style={{ marginTop: 12, fontSize: 12, color: '#92400e' }}>
+            Lecture seule — la permission « comptabilité : écriture » est requise pour modifier ces réglages.
+          </div>
+        )}
+      </div>
+
+      {/* ── Couverture ── */}
+      <div style={cardStyle}>
+        <h3 style={sectionTitle}>Couverture</h3>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 13, color: '#374151' }}>
+              Factures postées <strong>{cov.invoices.posted}/{cov.invoices.total}</strong>
+              {' '}({cov.invoices.percent} %)
+            </div>
+            <CoverageBar percent={cov.invoices.percent} color="#00A08C" />
+          </div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div style={{ fontSize: 13, color: '#374151' }}>
+              Dépenses postées <strong>{cov.expenses.posted}/{cov.expenses.total}</strong>
+              {' '}({cov.expenses.percent} %)
+            </div>
+            <CoverageBar percent={cov.expenses.percent} color="#00A08C" />
+          </div>
+        </div>
+
+        {/* Badge erreurs en attente + réparation */}
+        <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+          {status.pending_errors > 0 ? (
+            <span style={{ background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5',
+              borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 600 }}>
+              ⚠ {status.pending_errors} écriture(s) en erreur
+            </span>
+          ) : (
+            <span style={{ background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0',
+              borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 600 }}>
+              ✓ Aucune erreur en attente
+            </span>
+          )}
+          {canWrite && status.pending_errors > 0 && (
+            <button onClick={runRepair} disabled={repairing}
+              style={{ background: '#00A08C', color: '#fff', border: 'none', padding: '6px 14px',
+                borderRadius: 6, cursor: repairing ? 'wait' : 'pointer', fontWeight: 600, fontSize: 13 }}>
+              {repairing ? 'Réparation…' : 'Réparer'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Assistant backfill ── */}
+      <div style={cardStyle}>
+        <h3 style={sectionTitle}>Assistant de backfill</h3>
+        <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+          Comptabilise l'historique existant sur une période. L'aperçu n'écrit rien ;
+          l'application est idempotente (ne crée jamais de doublon). Période vide = exercice courant.
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12 }}>
+          <label style={{ fontSize: 13, fontWeight: 600 }}>Début{' '}
+            <input type="date" value={bfStart} onChange={e => { setBfStart(e.target.value); setBfPreview(null); }}
+              style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6, display: 'block', marginTop: 4 }} />
+          </label>
+          <label style={{ fontSize: 13, fontWeight: 600 }}>Fin{' '}
+            <input type="date" value={bfEnd} onChange={e => { setBfEnd(e.target.value); setBfPreview(null); }}
+              style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6, display: 'block', marginTop: 4 }} />
+          </label>
+          <button onClick={previewBackfill} disabled={!canWrite || bfBusy}
+            style={{ background: '#fff', border: '1px solid #00A08C', color: '#00A08C',
+              padding: '8px 16px', borderRadius: 6, fontWeight: 600, fontSize: 13,
+              cursor: canWrite && !bfBusy ? 'pointer' : 'not-allowed', opacity: canWrite ? 1 : 0.5 }}>
+            {bfBusy && !bfResult ? 'Calcul…' : 'Aperçu (dry-run)'}
+          </button>
+        </div>
+
+        {bfPreview && (
+          <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6,
+            padding: 12, fontSize: 13 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              {previewTotal} écriture(s) seront créées
+              {' '}<span style={{ fontWeight: 400, color: '#6b7280' }}>
+                (période {bfPreview.period?.start} → {bfPreview.period?.end})
+              </span>
+            </div>
+            <ul style={{ margin: '6px 0', paddingLeft: 20, color: '#374151' }}>
+              <li>Factures : {bfPreview.would_create?.invoice || 0}</li>
+              <li>Paiements : {bfPreview.would_create?.invoice_payment || 0}</li>
+              <li>Dépenses : {bfPreview.would_create?.expense || 0}</li>
+            </ul>
+            <div style={{ color: '#6b7280', marginBottom: 10 }}>
+              Déjà comptabilisées (ignorées) : {bfPreview.skipped_existing || 0}
+            </div>
+            {canWrite && previewTotal > 0 && (
+              <button onClick={applyBackfill} disabled={bfBusy}
+                style={{ background: '#00A08C', color: '#fff', border: 'none', padding: '8px 16px',
+                  borderRadius: 6, fontWeight: 600, fontSize: 13,
+                  cursor: bfBusy ? 'wait' : 'pointer' }}>
+                {bfBusy ? 'Application…' : `Confirmer et créer ${previewTotal} écriture(s)`}
+              </button>
+            )}
+            {previewTotal === 0 && (
+              <div style={{ color: '#065f46', fontWeight: 600 }}>
+                Rien à créer — tout est déjà comptabilisé sur cette période.
+              </div>
+            )}
+          </div>
+        )}
+
+        {bfResult && (
+          <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 6,
+            padding: 12, fontSize: 13, color: '#065f46' }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Backfill appliqué</div>
+            <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
+              <li>Factures : {bfResult.created?.invoice || 0}</li>
+              <li>Paiements : {bfResult.created?.invoice_payment || 0}</li>
+              <li>Dépenses : {bfResult.created?.expense || 0}</li>
+            </ul>
+            {(bfResult.failed || []).length > 0 && (
+              <div style={{ color: '#991b1b', marginTop: 6 }}>
+                {bfResult.failed.length} échec(s) — voir le badge d'erreurs et « Réparer ».
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -729,6 +1066,7 @@ export default function LedgerPage() {
       <div>{/* Onglets remplis aux Tasks 14-17 */}
         {tab === 'accounts' && <AccountsTab />}
         {tab === 'journal' && <JournalTab />}
+        {tab === 'autopost' && <AutopostTab />}
         {tab === 'opening' && <OpeningTab />}
         {tab === 'contribution' && <ContributionTab />}
         {tab === 'ledger' && <LedgerDetailTab />}

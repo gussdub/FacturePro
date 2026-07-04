@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { DollarSign } from 'lucide-react';
+import { DollarSign, AlertTriangle } from 'lucide-react';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
 import PaymentModal from '../components/PaymentModal';
@@ -315,6 +315,23 @@ const InvoicesPage = () => {
                           border: inv.recurrence_active ? '1.5px solid currentColor' : '1px dashed #d1d5db'
                         }}>
                           ↻ {RECURRENCE_CONFIG[inv.recurrence]?.label}{inv.recurrence_active ? '' : ' (pause)'}
+                        </span>
+                      )}
+                      {inv.autopost_error && (
+                        <span
+                          data-testid={`invoice-autopost-error-${inv.id}`}
+                          onClick={() => {
+                            window.history.pushState({}, '', '/ledger');
+                            window.dispatchEvent(new PopStateEvent('popstate'));
+                          }}
+                          title="Échec de la comptabilisation automatique — ouvrir l'onglet Auto-posting du grand livre"
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px',
+                            background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5',
+                            padding: '3px 10px', borderRadius: '20px', fontSize: '11px',
+                            fontWeight: '600', cursor: 'pointer'
+                          }}>
+                          <AlertTriangle size={12} /> Erreur compta
                         </span>
                       )}
                     </div>

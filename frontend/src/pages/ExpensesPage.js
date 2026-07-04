@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency, CURRENCY_LABELS } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
-import { ScanLine, Paperclip, Edit } from 'lucide-react';
+import { ScanLine, Paperclip, Edit, AlertTriangle } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 
 function computeTaxesPaid(amountGross, province) {
@@ -785,7 +785,26 @@ const ExpensesPage = () => {
               <div key={exp.id} data-testid={`expense-card-${exp.id}`} style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
                   <div style={{ flex: '1', minWidth: '200px' }}>
-                    <h3 style={{ fontSize: '16px', fontWeight: '700', color: '#1f2937', margin: '0 0 6px' }}>{exp.description}</h3>
+                    <h3 style={{ fontSize: '16px', fontWeight: '700', color: '#1f2937', margin: '0 0 6px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      {exp.description}
+                      {exp.autopost_error && (
+                        <span
+                          data-testid={`expense-autopost-error-${exp.id}`}
+                          onClick={() => {
+                            window.history.pushState({}, '', '/ledger');
+                            window.dispatchEvent(new PopStateEvent('popstate'));
+                          }}
+                          title="Échec de la comptabilisation automatique — ouvrir l'onglet Auto-posting du grand livre"
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px',
+                            background: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5',
+                            padding: '3px 10px', borderRadius: '20px', fontSize: '11px',
+                            fontWeight: '600', cursor: 'pointer'
+                          }}>
+                          <AlertTriangle size={12} /> Erreur compta
+                        </span>
+                      )}
+                    </h3>
                     <p style={{ color: '#6b7280', margin: '2px 0', fontSize: '14px' }}>
                       {empName ? `Employe: ${empName}` : (
                         <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Depense generale</span>
