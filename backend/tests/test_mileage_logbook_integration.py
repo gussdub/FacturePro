@@ -1249,3 +1249,29 @@ def test_check_rate_update_idempotent(monkeypatch):
             assert b2["count"] == 0
     finally:
         _delete_reminders_for_year(2099)
+
+
+# ─── Task 13 : garde de bout en bout « année sans taux → génération bloquée » ──
+# Un trajet dans une année sans taux ARC (2099) ne calcule JAMAIS silencieusement
+# une allocation : à la création allocation=None, et la génération de dépense
+# renvoie un 400 explicite mentionnant l'année (pas de fallback ni de montant
+# deviné). Véhicule dédié + nettoyage du rappel écrit pour ne pas salir le seed org.
+def test_generate_expense_missing_rate_year_blocked(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T13 annee sans taux -> 400")
+    try:
+        # Trajet dans une année sans taux -> à la création, allocation est None.
+        created = _create_trip(auth_headers, vid, trip_date="2099-05-01",
+                               one_way_km=10, round_trip=False)
+        tid = created["trip"]["id"]
+        assert created["allocation"] is None           # aucun montant deviné à la création
+        assert created["rate_missing_year"] == 2099
+        # Génération de dépense -> 400 explicite, aucun calcul (pas de fallback silencieux).
+        r = client.post(f"/api/mileage/trips/{tid}/generate-expense", headers=auth_headers)
+        assert r.status_code == 400, r.text
+        assert "2099" in r.json()["detail"]
+        # Aucune dépense n'a été matérialisée par la tentative bloquée.
+        assert db.expenses.count_documents(
+            {"mileage_trip_ids": {"$in": [tid]}}) == 0
+    finally:
+        _delete_reminders_for_year(2099)
+        _cleanup_vehicle(vid)

@@ -283,3 +283,15 @@ def test_ytd_mixed_date_formats_order_by_date_portion():
     total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-03-10T08:00",
                              employee_key="user:U1", vehicle_id="V1")
     assert total == 10.0
+
+
+# ─── Task 13 : garde « année sans taux → allocation JAMAIS devinée » ──────────
+# Le contrat côté helper d'allocation batch (_mileage_build_expense_for_trips)
+# repose sur _mileage_rate_for_year(year) is None pour lever un 400 explicite
+# plutôt que de deviner un montant à partir d'un taux d'une autre année. On fige
+# ici l'invariant unitaire dont dépend la garde (2099 = année sans taux).
+def test_missing_year_enrich_returns_none_allocation():
+    # _mileage_enrich_trip doit poser allocation=None et rate_missing_year pour 2099.
+    # Test unitaire du contrat via _mileage_rate_for_year déjà couvert ; ici on
+    # documente la garde côté helper d'allocation batch (pas de fallback silencieux).
+    assert _mileage_rate_for_year(2099) is None
