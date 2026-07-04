@@ -7194,6 +7194,85 @@ def delete_mileage_trip(trip_id: str,
     return {"status": "deleted", "id": trip_id}
 
 
+# ─── Carnet de route / kilométrage — favoris (feature #13, Task 7) ───
+#
+# Les favoris sont des GABARITS de trajet (label, départ, arrivée, motif, km,
+# aller-retour par défaut) pour pré-remplir la saisie. Ils sont INDÉPENDANTS des
+# trajets : `favorite_id` sur un trajet est purement traçant (spec §3.3), jamais
+# liant/dénormalisé. Conséquence garantie : éditer ou supprimer un favori NE MUTE
+# PAS les trajets déjà saisis (le trajet a son propre snapshot origin/destination/
+# one_way_km/round_trip figé à sa création). Org-scopé (RBAC expenses:read /write,
+# aligné sur les trajets et les dépenses).
+
+
+def _mileage_favorite_from_payload(payload: dict) -> dict:
+    """Valide + normalise un payload de favori. Invariants : label obligatoire
+    (non vide après trim), distance aller-simple finie et > 0 (un gabarit sert à
+    pré-remplir un trajet, dont la distance doit être valide). Ne renvoie que les
+    champs métier (jamais d'identité/scope) → réutilisable au POST comme au PUT."""
+    label = (payload.get("label") or "").strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="Le nom du favori est obligatoire")
+    try:
+        one_way_km = float(payload.get("one_way_km"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Distance invalide")
+    if not math.isfinite(one_way_km) or one_way_km <= 0:
+        raise HTTPException(status_code=400, detail="La distance doit être supérieure à 0")
+    return {
+        "label": label,
+        "origin": (payload.get("origin") or "").strip(),
+        "destination": (payload.get("destination") or "").strip(),
+        "purpose": (payload.get("purpose") or None),
+        "one_way_km": round(one_way_km, 2),
+        "round_trip_default": bool(payload.get("round_trip_default", False)),
+    }
+
+
+@app.get("/api/mileage/favorites")
+def list_mileage_favorites(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    favs = list(db.mileage_favorites.find(_org_scope(current_user), {"_id": 0}))
+    favs.sort(key=lambda f: f.get("label", ""))
+    return favs
+
+
+@app.post("/api/mileage/favorites")
+def create_mileage_favorite(payload: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    fields = _mileage_favorite_from_payload(payload)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **fields,
+    }
+    db.mileage_favorites.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@app.put("/api/mileage/favorites/{favorite_id}")
+def update_mileage_favorite(favorite_id: str, payload: dict,
+                            current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    scope = _org_scope(current_user)
+    if not db.mileage_favorites.find_one({**scope, "id": favorite_id}):
+        raise HTTPException(status_code=404, detail="Favori introuvable")
+    fields = _mileage_favorite_from_payload(payload)
+    db.mileage_favorites.update_one({**scope, "id": favorite_id}, {"$set": fields})
+    return db.mileage_favorites.find_one({**scope, "id": favorite_id}, {"_id": 0})
+
+
+@app.delete("/api/mileage/favorites/{favorite_id}")
+def delete_mileage_favorite(favorite_id: str,
+                            current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    # Suppression pure : `favorite_id` sur les trajets étant traçant (non liant),
+    # aucun trajet n'est muté et aucune cascade n'est requise (spec §3.3).
+    res = db.mileage_favorites.delete_one({**_org_scope(current_user), "id": favorite_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Favori introuvable")
+    return {"status": "deleted", "id": favorite_id}
+
+
 @app.get("/api/dashboard/expense-analytics")
 def get_expense_analytics(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     expenses = list(db.expenses.find(

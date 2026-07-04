@@ -622,3 +622,97 @@ def test_edit_trip_blocked_when_billed(auth_headers):
         assert r_del.status_code == 400, r_del.text
     finally:
         _cleanup_vehicle(vid)
+
+
+# ─── Task 7 : Favoris (CRUD) ───
+#
+# Les favoris sont des GABARITS de trajet (label, départ, arrivée, motif, km,
+# aller-retour par défaut) — purement pratiques pour pré-remplir la saisie. Ils
+# sont INDÉPENDANTS des trajets : `favorite_id` sur un trajet est traçant, jamais
+# liant (spec §3.3). Éditer/supprimer un favori ne DOIT PAS muter les trajets déjà
+# saisis. On respecte la discipline d'isolation du fichier : véhicule dédié pour le
+# trajet, nettoyage systématique du favori et du véhicule en `finally` (jamais de
+# favori/trajet laissé dans le seed org).
+
+
+def test_favorite_crud_and_trip_independence(auth_headers):
+    r = client.post("/api/mileage/favorites", json={
+        "label": "Domicile → Client ABC", "origin": "Domicile",
+        "destination": "Client ABC, Lévis", "purpose": "Rencontre",
+        "one_way_km": 45, "round_trip_default": True,
+    }, headers=auth_headers)
+    assert r.status_code == 200, r.text
+    fid = r.json()["id"]
+
+    vid = _dedicated_vehicle(auth_headers, "T7 favori independance")
+    try:
+        # normalisation : origin/destination trim, one_way_km arrondi en float
+        created = r.json()
+        assert created["label"] == "Domicile → Client ABC"
+        assert created["one_way_km"] == 45.0
+        assert created["round_trip_default"] is True
+        assert "_id" not in created  # projection Mongo interne masquée
+
+        lst = client.get("/api/mileage/favorites", headers=auth_headers)
+        assert lst.status_code == 200, lst.text
+        assert any(f["id"] == fid for f in lst.json())
+
+        # trajet créé depuis le favori (favorite_id tracé)
+        tr = client.post("/api/mileage/trips",
+                         json=_new_trip_payload(vid, favorite_id=fid, one_way_km=45,
+                                                round_trip=False),
+                         headers=auth_headers)
+        assert tr.status_code == 200, tr.text
+        tid = tr.json()["trip"]["id"]
+        assert tr.json()["trip"]["favorite_id"] == fid
+        assert tr.json()["trip"]["one_way_km"] == 45.0
+
+        # éditer le favori n'affecte pas le trajet (snapshot indépendant)
+        upd = client.put(f"/api/mileage/favorites/{fid}", json={
+            "label": "Modifié", "origin": "X", "destination": "Y",
+            "one_way_km": 999, "round_trip_default": False,
+        }, headers=auth_headers)
+        assert upd.status_code == 200, upd.text
+        assert upd.json()["label"] == "Modifié"
+        assert upd.json()["one_way_km"] == 999.0
+        trip_after = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers).json()
+        assert trip_after["trip"]["one_way_km"] == 45.0
+
+        # supprimer le favori n'affecte pas le trajet
+        dr = client.delete(f"/api/mileage/favorites/{fid}", headers=auth_headers)
+        assert dr.status_code == 200, dr.text
+        still = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert still.status_code == 200
+        assert still.json()["trip"]["favorite_id"] == fid  # référence traçante conservée
+    finally:
+        db.mileage_favorites.delete_one({"id": fid})
+        _cleanup_vehicle(vid)
+
+
+def test_favorite_requires_label(auth_headers):
+    r = client.post("/api/mileage/favorites", json={
+        "label": "  ", "origin": "A", "destination": "B", "one_way_km": 10,
+    }, headers=auth_headers)
+    assert r.status_code == 400, r.text
+    assert "nom" in r.json()["detail"].lower() or "favori" in r.json()["detail"].lower()
+
+
+def test_favorite_requires_positive_distance(auth_headers):
+    # La distance est le seul champ numérique d'un gabarit : >0 obligatoire, sinon
+    # un trajet pré-rempli depuis ce favori naîtrait avec une distance invalide.
+    r = client.post("/api/mileage/favorites", json={
+        "label": "Sans distance", "origin": "A", "destination": "B", "one_way_km": 0,
+    }, headers=auth_headers)
+    assert r.status_code == 400, r.text
+
+
+def test_update_unknown_favorite_returns_404(auth_headers):
+    r = client.put("/api/mileage/favorites/does-not-exist", json={
+        "label": "X", "origin": "A", "destination": "B", "one_way_km": 10,
+    }, headers=auth_headers)
+    assert r.status_code == 404, r.text
+
+
+def test_delete_unknown_favorite_returns_404(auth_headers):
+    r = client.delete("/api/mileage/favorites/does-not-exist", headers=auth_headers)
+    assert r.status_code == 404, r.text
