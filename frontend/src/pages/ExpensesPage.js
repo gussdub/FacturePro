@@ -1657,7 +1657,162 @@ function MileageTripsTab() {
   );
 }
 function MileageFavoritesTab() {
-  return <div data-testid="mileage-favorites-tab" style={{ color: '#6b7280' }}>Favoris (à venir)</div>;
+  const { token, hasPermission } = useAuth();
+  const canWrite = hasPermission("expenses:write");
+  const authCfg = { headers: { Authorization: `Bearer ${token}` } };
+  const emptyForm = {
+    label: '', origin: '', destination: '', purpose: '',
+    one_way_km: '', round_trip_default: false,
+  };
+  const [favorites, setFavorites] = useState([]);
+  const [form, setForm] = useState(emptyForm);
+  const [editId, setEditId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    try {
+      const r = await axios.get(`${BACKEND_URL}/api/mileage/favorites`, authCfg);
+      setFavorites(r.data);
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur de chargement des favoris');
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const canSubmit = () => form.label.trim() !== '' && parseFloat(form.one_way_km) > 0;
+
+  const submit = async () => {
+    if (!canSubmit()) return;
+    setBusy(true); setError('');
+    const payload = {
+      label: form.label.trim(),
+      origin: form.origin.trim(),
+      destination: form.destination.trim(),
+      purpose: form.purpose.trim() || null,
+      one_way_km: parseFloat(form.one_way_km),
+      round_trip_default: form.round_trip_default,
+    };
+    try {
+      if (editId) {
+        await axios.put(`${BACKEND_URL}/api/mileage/favorites/${editId}`, payload, authCfg);
+      } else {
+        await axios.post(`${BACKEND_URL}/api/mileage/favorites`, payload, authCfg);
+      }
+      setForm(emptyForm);
+      setEditId(null);
+      await load();
+    } catch (e) {
+      setError(e.response?.data?.detail || "Erreur lors de l'enregistrement du favori");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startEdit = (f) => {
+    setEditId(f.id);
+    setForm({
+      label: f.label || '',
+      origin: f.origin || '',
+      destination: f.destination || '',
+      purpose: f.purpose || '',
+      one_way_km: f.one_way_km,
+      round_trip_default: !!f.round_trip_default,
+    });
+  };
+
+  const cancelEdit = () => { setEditId(null); setForm(emptyForm); };
+
+  const remove = async (id) => {
+    setBusy(true); setError('');
+    try {
+      await axios.delete(`${BACKEND_URL}/api/mileage/favorites/${id}`, authCfg);
+      if (editId === id) cancelEdit();
+      await load();
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Erreur lors de la suppression du favori');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const input = { padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14, boxSizing: 'border-box', width: '100%' };
+  const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 };
+  const btnSecondary = { background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 500, fontSize: 14 };
+  const th = { padding: '8px', textAlign: 'left', fontSize: 12, fontWeight: 700, color: '#374151', borderBottom: '2px solid #e5e7eb' };
+  const td = { padding: '8px', fontSize: 13, borderBottom: '1px solid #e5e7eb', verticalAlign: 'middle' };
+  const disabledStyle = (disabled) => (disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {});
+
+  return (
+    <div data-testid="mileage-favorites-tab">
+      {error && (
+        <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', padding: '10px 12px', borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+
+      <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 16 }}>
+        Les favoris sont des trajets récurrents pré-remplis (domicile → client, etc.). Sélectionnez-les depuis l'onglet Trajets pour saisir un déplacement en un clic.
+      </p>
+
+      {canWrite && (
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <input placeholder="Nom (ex: Domicile → Client ABC) *" data-testid="mileage-favorite-label" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} style={{ ...input, gridColumn: '1 / -1' }} />
+          <input placeholder="Départ" data-testid="mileage-favorite-origin" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} style={input} />
+          <input placeholder="Arrivée" data-testid="mileage-favorite-destination" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} style={input} />
+          <input placeholder="Motif par défaut" data-testid="mileage-favorite-purpose" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} style={input} />
+          <input type="number" placeholder="Km (aller simple) *" data-testid="mileage-favorite-km" value={form.one_way_km} onChange={(e) => setForm({ ...form, one_way_km: e.target.value })} style={input} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151', gridColumn: '1 / -1' }}>
+            <input type="checkbox" data-testid="mileage-favorite-roundtrip" checked={form.round_trip_default} onChange={(e) => setForm({ ...form, round_trip_default: e.target.checked })} />
+            Aller-retour par défaut
+          </label>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8 }}>
+            <button data-testid="mileage-favorite-submit" onClick={submit} style={{ ...btnPrimary, ...disabledStyle(!canSubmit() || busy) }} disabled={!canSubmit() || busy}>
+              {editId ? 'Enregistrer les modifications' : 'Nouveau favori'}
+            </button>
+            {editId && (
+              <button data-testid="mileage-favorite-cancel" onClick={cancelEdit} style={{ ...btnSecondary, ...disabledStyle(busy) }} disabled={busy}>
+                Annuler
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <table style={{ width: '100%', borderCollapse: 'collapse' }} data-testid="mileage-favorites-table">
+        <thead>
+          <tr>
+            <th style={th}>Nom</th><th style={th}>Route</th><th style={th}>Km</th>
+            <th style={th}>Motif</th><th style={th}>A/R</th>{canWrite && <th style={th}></th>}
+          </tr>
+        </thead>
+        <tbody>
+          {favorites.length === 0 && (
+            <tr><td style={{ ...td, color: '#9ca3af' }} colSpan={canWrite ? 6 : 5}>Aucun favori enregistré.</td></tr>
+          )}
+          {favorites.map((f) => (
+            <tr key={f.id} data-testid={`mileage-favorite-row-${f.id}`}>
+              <td style={td}>{f.label}</td>
+              <td style={td}>{f.origin || '—'} → {f.destination || '—'}</td>
+              <td style={td}>{f.one_way_km}</td>
+              <td style={td}>{f.purpose || '—'}</td>
+              <td style={td}>{f.round_trip_default ? 'Oui' : 'Non'}</td>
+              {canWrite && (
+                <td style={{ ...td, display: 'flex', gap: 12 }}>
+                  <button data-testid={`mileage-favorite-edit-${f.id}`} style={{ background: 'transparent', border: 'none', color: '#00A08C', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: 0, ...disabledStyle(busy) }} disabled={busy} onClick={() => startEdit(f)}>
+                    Modifier
+                  </button>
+                  <button data-testid={`mileage-favorite-delete-${f.id}`} style={{ background: 'transparent', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: 0, ...disabledStyle(busy) }} disabled={busy} onClick={() => remove(f.id)}>
+                    Supprimer
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 function MileageLogbookTab() {
   return <div data-testid="mileage-logbook-tab" style={{ color: '#6b7280' }}>Carnet (à venir)</div>;
