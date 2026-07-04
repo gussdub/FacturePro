@@ -7096,6 +7096,104 @@ def get_mileage_trip(trip_id: str, current_user: CurrentUser = Depends(require_p
     return _mileage_enrich_trip(doc, scope)
 
 
+@app.put("/api/mileage/trips/{trip_id}")
+def update_mileage_trip(trip_id: str, payload: dict,
+                        current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    """Édite un trajet (org-scopé) et retourne le trajet ENRICHI recalculé.
+
+    [CALCUL] La distance et l'allocation ne sont jamais figées : distance_km est
+    toujours recalculée backend (aller-retour doublé, valeur client ignorée), et
+    l'allocation + le cumul YTD sont re-dérivés à la volée par _mileage_enrich_trip
+    — la bascule 5000 km reste donc correcte après édition (y compris le split du
+    trajet à cheval). Mêmes invariants ARC qu'à la création : motif obligatoire,
+    km aller-simple > 0, date pure AAAA-MM-JJ calendaire canonique.
+
+    Garde-fou de cohérence : un trajet déjà rattaché à une dépense (expense_id non
+    nul) est verrouillé (400) — éditer la source d'une dépense déjà générée
+    créerait une divergence montant carnet ↔ dépense. Il faut d'abord détacher la
+    dépense (Task 10). Même contrat que le verrou d'intégrité du grand livre."""
+    scope = _org_scope(current_user)
+    doc = db.mileage_trips.find_one({**scope, "id": trip_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Trajet introuvable")
+    if doc.get("expense_id"):
+        raise HTTPException(status_code=400,
+                            detail="Trajet déjà facturé — détachez d'abord la dépense")
+
+    purpose = (payload.get("purpose") or "").strip()
+    if not purpose:
+        raise HTTPException(status_code=400, detail="Le motif du déplacement est obligatoire")
+    try:
+        one_way_km = float(payload.get("one_way_km"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Distance invalide")
+    if not math.isfinite(one_way_km) or one_way_km <= 0:
+        raise HTTPException(status_code=400, detail="La distance (aller simple) doit être supérieure à 0")
+
+    # trip_date : si le payload en fournit un, il est re-validé (même contrat
+    # calendaire canonique qu'à la création — sinon un document corrompu ferait
+    # lever _mileage_enrich_trip en 500) ; sinon on conserve la date existante.
+    if payload.get("trip_date") is not None:
+        trip_date = str(payload.get("trip_date")).strip()
+        try:
+            parsed = datetime.strptime(trip_date, "%Y-%m-%d")
+            if parsed.strftime("%Y-%m-%d") != trip_date:
+                raise ValueError("format non canonique (attendu AAAA-MM-JJ zéro-paddé)")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Date de trajet invalide (AAAA-MM-JJ)")
+    else:
+        trip_date = doc["trip_date"]
+
+    round_trip = bool(payload.get("round_trip", False))
+    vehicle_id = _mileage_resolve_vehicle_id(scope, payload.get("vehicle_id"))
+    employee_id = _mileage_validate_employee(scope, payload.get("employee_id"))
+
+    # favorite_id (purement traçant, spec §3.3) : validé appartenir à l'org si fourni.
+    favorite_id = payload.get("favorite_id") or None
+    if favorite_id and not db.mileage_favorites.find_one({**scope, "id": favorite_id}):
+        raise HTTPException(status_code=400, detail="Favori introuvable")
+
+    updates = {
+        "trip_date": trip_date,
+        "origin": (payload.get("origin") or "").strip(),
+        "destination": (payload.get("destination") or "").strip(),
+        "purpose": purpose,
+        "one_way_km": round(one_way_km, 2),
+        "round_trip": round_trip,
+        "distance_km": _mileage_distance_km(one_way_km, round_trip),
+        "vehicle_id": vehicle_id,
+        "employee_id": employee_id,
+        "favorite_id": favorite_id,
+        "notes": (payload.get("notes") or None),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.mileage_trips.update_one({**scope, "id": trip_id}, {"$set": updates})
+    fresh = db.mileage_trips.find_one({**scope, "id": trip_id}, {"_id": 0})
+    return _mileage_enrich_trip(fresh, scope)
+
+
+@app.delete("/api/mileage/trips/{trip_id}")
+def delete_mileage_trip(trip_id: str,
+                        current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    """Supprime un trajet (org-scopé). 404 si absent/hors org.
+
+    [CALCUL] Le cumul YTD n'étant jamais figé, la suppression fait automatiquement
+    baisser l'allocation des trajets postérieurs de la même personne+véhicule+année
+    (recalculé à la volée au prochain GET) — aucune donnée dérivée à réconcilier.
+
+    Garde-fou : un trajet lié à une dépense (expense_id) est verrouillé (400) ;
+    détacher la dépense d'abord (Task 10)."""
+    scope = _org_scope(current_user)
+    doc = db.mileage_trips.find_one({**scope, "id": trip_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Trajet introuvable")
+    if doc.get("expense_id"):
+        raise HTTPException(status_code=400,
+                            detail="Trajet lié à une dépense — détachez-la d'abord")
+    db.mileage_trips.delete_one({**scope, "id": trip_id})
+    return {"status": "deleted", "id": trip_id}
+
+
 @app.get("/api/dashboard/expense-analytics")
 def get_expense_analytics(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     expenses = list(db.expenses.find(

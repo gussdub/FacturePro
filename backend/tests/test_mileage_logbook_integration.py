@@ -413,3 +413,167 @@ def test_trip_cross_org_isolation(auth_headers):
         assert client.get("/api/mileage/trips/does-not-exist", headers=auth_headers).status_code == 404
     finally:
         _cleanup_vehicle(vid)
+
+
+# ─── Task 6 : GET/PUT/DELETE trajets + cumul YTD de bout en bout (bascule 5000 km) ───
+#
+# Le GET liste et le GET par id existent depuis le T4 ; le T6 ajoute PUT/DELETE et
+# PROUVE le CRUD complet + la bascule 5000 km recalculée à la volée après chaque
+# mutation. On respecte la discipline d'isolation du fichier : chaque test utilise
+# un véhicule DÉDIÉ (cumul YTD par personne+véhicule+année → part de 0) et nettoie
+# en `finally` (jamais de trajet laissé dans le seed org).
+
+
+def _create_trip(auth_headers, vid, **over):
+    """Crée un trajet sur le véhicule dédié `vid` et renvoie la réponse enrichie."""
+    r = client.post("/api/mileage/trips", json=_new_trip_payload(vid, **over),
+                    headers=auth_headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_list_trips_filtered_and_enriched(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T6 liste enrichie")
+    try:
+        _create_trip(auth_headers, vid, trip_date="2026-04-01", one_way_km=10,
+                     round_trip=False)
+        r = client.get(f"/api/mileage/trips?year=2026&month=4&vehicle_id={vid}",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        rows = r.json()
+        assert rows, "au moins un trajet d'avril 2026 attendu"
+        assert all(row["trip"]["trip_date"].startswith("2026-04") for row in rows)
+        assert "allocation" in rows[0] and "ytd_before" in rows[0]
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_edit_trip_recalculates_distance(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T6 edit distance")
+    try:
+        created = _create_trip(auth_headers, vid, one_way_km=20, round_trip=False)
+        tid = created["trip"]["id"]
+        assert created["trip"]["distance_km"] == 20.0  # aller simple à la création
+        # Passage en aller-retour : distance recalculée backend (valeur figée ignorée).
+        r = client.put(f"/api/mileage/trips/{tid}",
+                       json=_new_trip_payload(vid, one_way_km=20, round_trip=True),
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["trip"]["distance_km"] == 40.0
+        # L'allocation suit la nouvelle distance (2026, sous 5000 km : 40 × 0,73).
+        assert r.json()["allocation"]["amount_cad"] == round(40 * 0.73, 2)
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_edit_trip_requires_purpose(auth_headers):
+    # Invariant ARC préservé au PUT : le motif reste obligatoire (400 si vide).
+    vid = _dedicated_vehicle(auth_headers, "T6 edit motif")
+    try:
+        created = _create_trip(auth_headers, vid, one_way_km=10, round_trip=False)
+        tid = created["trip"]["id"]
+        r = client.put(f"/api/mileage/trips/{tid}",
+                       json=_new_trip_payload(vid, purpose="   "),
+                       headers=auth_headers)
+        assert r.status_code == 400, r.text
+        assert "motif" in r.json()["detail"].lower()
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_edit_unknown_trip_returns_404(auth_headers):
+    r = client.put("/api/mileage/trips/does-not-exist",
+                   json={"purpose": "x", "one_way_km": 5}, headers=auth_headers)
+    assert r.status_code == 404, r.text
+
+
+def test_switch_5000km_end_to_end_after_edit(auth_headers):
+    # Bascule 5000 km recalculée à la volée : le split au seuil est correct même
+    # sur le trajet à cheval, ET le trajet suivant bascule entièrement au taux réduit.
+    vid = _dedicated_vehicle(auth_headers, "T6 bascule CRUD")
+    try:
+        # 49 trajets de 100 km (aller simple) = 4900 km cumulés
+        for i in range(49):
+            _create_trip(auth_headers, vid, trip_date=f"2026-01-{(i % 28) + 1:02d}",
+                         one_way_km=100, round_trip=False)
+        # Trajet qui franchit le seuil : ytd 4900 + 200 → 100@0,73 + 100@0,67 = 140,00
+        crossing = _create_trip(auth_headers, vid, trip_date="2026-06-15",
+                                one_way_km=200, round_trip=False)
+        assert crossing["allocation"]["amount_cad"] == 140.00
+        assert crossing["allocation"]["breakdown"]["km_full"] == 100.0
+        assert crossing["allocation"]["breakdown"]["km_reduced"] == 100.0
+        # Trajet suivant : tout au taux réduit
+        after = _create_trip(auth_headers, vid, trip_date="2026-07-01",
+                             one_way_km=100, round_trip=False)
+        assert after["allocation"]["amount_cad"] == round(100 * 0.67, 2)
+        # Le GET par id re-calcule identiquement le trajet à cheval (split stable).
+        tid = crossing["trip"]["id"]
+        got = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert got.status_code == 200, got.text
+        assert got.json()["allocation"]["amount_cad"] == 140.00
+        assert got.json()["running_total_km"] == 5100.0  # cumul ARC après ce trajet
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_delete_trip(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "T6 delete")
+    try:
+        created = _create_trip(auth_headers, vid, one_way_km=5, round_trip=False)
+        tid = created["trip"]["id"]
+        r = client.delete(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "deleted"
+        # Le trajet n'existe plus (404 au GET par id).
+        r2 = client.get(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert r2.status_code == 404, r2.text
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_delete_unknown_trip_returns_404(auth_headers):
+    r = client.delete("/api/mileage/trips/does-not-exist", headers=auth_headers)
+    assert r.status_code == 404, r.text
+
+
+def test_delete_recomputes_ytd_for_remaining_trips(auth_headers):
+    # Après suppression d'un trajet, le cumul YTD (jamais figé) des trajets restants
+    # est recalculé : l'allocation d'un trajet postérieur baisse en conséquence.
+    vid = _dedicated_vehicle(auth_headers, "T6 delete recompute")
+    try:
+        first = _create_trip(auth_headers, vid, trip_date="2026-02-01",
+                             one_way_km=100, round_trip=False)
+        second = _create_trip(auth_headers, vid, trip_date="2026-02-02",
+                              one_way_km=100, round_trip=False)
+        # Avant suppression : le 2e a un cumul YTD de 100 km avant lui.
+        assert second["ytd_before"] == 100.0
+        # On supprime le premier ; le 2e voit désormais un cumul de 0.
+        assert client.delete(f"/api/mileage/trips/{first['trip']['id']}",
+                             headers=auth_headers).status_code == 200
+        refetched = client.get(f"/api/mileage/trips/{second['trip']['id']}",
+                               headers=auth_headers)
+        assert refetched.status_code == 200, refetched.text
+        assert refetched.json()["ytd_before"] == 0.0
+        assert refetched.json()["running_total_km"] == 100.0
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_edit_trip_blocked_when_billed(auth_headers):
+    # Garde-fou : un trajet déjà rattaché à une dépense (expense_id) ne peut être
+    # ni édité ni supprimé directement (400) — il faut d'abord détacher la dépense.
+    # La génération de dépense arrive au Task 10 ; on pose ici l'expense_id
+    # directement en DB (scopé org) pour exercer le garde-fou dès le T6.
+    vid = _dedicated_vehicle(auth_headers, "T6 verrou facture")
+    try:
+        created = _create_trip(auth_headers, vid, one_way_km=10, round_trip=False)
+        tid = created["trip"]["id"]
+        db.mileage_trips.update_one({"id": tid}, {"$set": {"expense_id": "exp-lie-123"}})
+        r_put = client.put(f"/api/mileage/trips/{tid}",
+                           json=_new_trip_payload(vid, one_way_km=99),
+                           headers=auth_headers)
+        assert r_put.status_code == 400, r_put.text
+        r_del = client.delete(f"/api/mileage/trips/{tid}", headers=auth_headers)
+        assert r_del.status_code == 400, r_del.text
+    finally:
+        _cleanup_vehicle(vid)
