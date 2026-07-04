@@ -201,7 +201,11 @@ def test_create_trip_rejects_invalid_date_before_insert(auth_headers, bad_date):
 
 def test_create_trip_accepts_valid_calendar_date(auth_headers):
     # Complément du fix : une vraie date calendaire limite (29 fév. bissextile) passe.
+    # 2028 (année bissextile) n'a pas de taux ARC configuré -> l'enrichissement
+    # flague un mileage_rate_reminders '{org}:2028' ; on le nettoie en finally pour
+    # ne pas salir le seed org (instruction « ne pas polluer l'org de seed »).
     vid = _dedicated_vehicle(auth_headers, "CALCUL date ok")
+    org_id = client.get("/api/org/me", headers=auth_headers).json()["organization"]["id"]
     try:
         r = client.post("/api/mileage/trips",
                         json=_new_trip_payload(vid, trip_date="2028-02-29"),
@@ -212,6 +216,7 @@ def test_create_trip_accepts_valid_calendar_date(auth_headers):
         lst = client.get("/api/mileage/trips", headers=auth_headers)
         assert lst.status_code == 200, lst.text
     finally:
+        db.mileage_rate_reminders.delete_one({"id": f"{org_id}:2028"})
         _cleanup_vehicle(vid)
 
 
