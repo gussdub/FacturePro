@@ -27,7 +27,7 @@
 - Cron externe : `POST /api/subscription/check-trial-expiry` (`server.py:6254`), garde anti-double `trial_notifications` (`server.py:6281`).
 - Migrations idempotentes au startup après `migrate_general_ledger_v1()` (`server.py:7032`).
 
-> **Note pré-implémentation (bloquant avant commit) :** confirmer les taux ARC officiels (2024 : 0,70/0,64 ; 2025 : 0,72/0,66 ; 2026 : 0,73/0,67) contre la page officielle canada.ca avant le commit du Task 1. Le seuil 5 000 km et les taux territoriaux (+0,04 $/km) sont hors scope v1 (§13 du spec).
+> **Note pré-implémentation (taux ARC) :** taux confirmés contre canada.ca. 2024 : 0,70/0,64 et 2025 : 0,72/0,66 (Reg. 7306 ITR). **2026 : 0,73/0,67 — CONFIRMÉ le 2026-07-04** contre canada.ca (annonce Finance Canada des plafonds 2026 + guide des allocations automobiles ARC : hausse d'un cent → 73 c/km pour les 5 000 premiers km, 67 c/km au-delà, provinces). Le seuil 5 000 km et les taux territoriaux (+0,04 $/km) sont hors scope v1 (§13 du spec).
 
 > **Note infra (hors code, à documenter) :** après déploiement, créer un cron externe (Render Cron Job ou cron-job.org) qui `POST` sur `/api/mileage/check-rate-update` 1×/jour en janvier. Aucune dépendance Python de scheduling ajoutée.
 

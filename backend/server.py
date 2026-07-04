@@ -182,10 +182,17 @@ EXPENSE_CATEGORIES = [
 ]
 
 
-# Taux ARC allocation automobile, en $ CAD par km.
+# Taux ARC allocation automobile (taux raisonnables prescrits, Reg. 7306 ITR),
+# en $ CAD par km. Provinces uniquement (taux territoriaux +0,04 $/km hors scope v1).
 # full    = taux pour les 5 000 premiers km de l'annee civile
 # reduced = taux pour chaque km au-dela de 5 000
-# Confirmes contre canada.ca avant chaque deploiement (voir rappel annuel).
+# Chaque annee doit etre confirmee contre canada.ca avant deploiement (rappel annuel).
+# Confirmations (source : canada.ca / Reg. 7306) :
+#   2024 : 0,70 / 0,64 — confirme
+#   2025 : 0,72 / 0,66 — confirme
+#   2026 : 0,73 / 0,67 — CONFIRME le 2026-07-04 contre canada.ca (Finance Canada,
+#          annonce des plafonds 2026 + guide allocations automobiles ARC : hausse
+#          d'un cent -> 73 c/km premiers 5 000 km, 67 c/km au-dela, provinces).
 MILEAGE_RATES = {
     2024: {"full": 0.70, "reduced": 0.64},
     2025: {"full": 0.72, "reduced": 0.66},

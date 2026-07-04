@@ -61,7 +61,7 @@ def _mileage_rate_for_year(year: int) -> dict | None:
     return MILEAGE_RATES.get(int(year))
 ```
 
-> **Remarque de conformité :** les taux ci-dessus (2024 : 0,70/0,64 ; 2025 : 0,72/0,66 ; 2026 : 0,73/0,67) sont ceux fournis au brainstorming. À l'implémentation, ils seront **confirmés contre la page officielle ARC** avant commit, et le rappel annuel (§7) garantit qu'ils restent à jour. Le seuil et les provinces territoriales (+0,04 $/km dans les Territoires) sont notés §13 comme hors scope v1.
+> **Remarque de conformité :** les taux ci-dessus **sont confirmés contre canada.ca** (taux raisonnables prescrits, Reg. 7306 ITR). 2024 : 0,70/0,64 ; 2025 : 0,72/0,66 ; **2026 : 0,73/0,67 — confirmé le 2026-07-04** (annonce Finance Canada des plafonds 2026 + guide des allocations automobiles ARC : hausse d'un cent → 73 c/km pour les 5 000 premiers km, 67 c/km au-delà, provinces). Le rappel annuel (§7) garantit qu'ils restent à jour aux années suivantes. Le seuil et les taux territoriaux (+0,04 $/km dans les Territoires) sont notés §13 comme hors scope v1.
 
 ### 3.2 Nouvelle collection `mileage_trips`
 
