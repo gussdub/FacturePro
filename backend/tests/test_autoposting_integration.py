@@ -2560,3 +2560,363 @@ class TestReconciliationDateBoundaryFix:
             assert abs(exp["diff"]) < 0.02, exp
         finally:
             _cleanup(uid, org_id)
+
+
+# ─── Tâche 14 — Tests intégration bout-en-bout (§11.2) ────────────────────────
+#
+# Verrouille les invariants GLOBAUX du spec §11.2 non couverts en dédié par les
+# tâches précédentes : cycle facture complet AVEC assertions sur la balance de
+# vérification à chaque étape, multi-devise via le cycle POST, robustesse compte
+# 4000 réellement supprimé (pas monkeypatché), isolation cross-org bout-en-bout,
+# non-régression Phase 1 (les écritures manuelles ne sont JAMAIS touchées par
+# l'auto-posting), et opt-in global sur toute la séquence POST facture/paiement/
+# dépense. Ces cas passent SANS nouvelle logique métier (T1–T13) : ils assertent
+# que les invariants tiennent bout-en-bout. Orgs jetables + cleanup en finally.
+
+
+def _trial_balance(client, headers, as_of="2026-12-31"):
+    """Balance de vérification bornée à as_of (défaut : fin d'exercice courant)."""
+    return client.get(
+        f"/api/ledger/trial-balance?as_of={as_of}", headers=headers)
+
+
+def _tb_row(tb_body, account_number):
+    """Ligne de la balance pour un n° de compte, ou None si solde 0 (exclu)."""
+    for row in tb_body.get("accounts", []):
+        if row["account_number"] == account_number:
+            return row
+    return None
+
+
+def _acct_id_by_num_db(org_id, account_number):
+    """Résout l'id d'un compte par n° directement en DB (org scope)."""
+    acc = server_module.db.chart_of_accounts.find_one(
+        {"organization_id": org_id, "account_number": account_number},
+        {"_id": 0, "id": 1})
+    return acc["id"] if acc else None
+
+
+class TestT14EndToEndInvariants:
+    """Tâche 14 — Invariants bout-en-bout du spec §11.2 (verrous globaux)."""
+
+    def test_full_invoice_cycle_trial_balance_at_each_step(self, client):
+        # [COMPTA] Cycle facture COMPLET avec assertion sur la BALANCE DE
+        # VÉRIFICATION (ΣDr == ΣCr) à CHAQUE étape :
+        #   draft (rien) → sent (revenu) → paiement (encaissement) → balance
+        #   équilibrée → suppression paiement (net zéro) → retour draft (net zéro).
+        uid, org_id, h = _setup_org(client, "t14cycle")
+        try:
+            # 1) POST facture draft : AUCUNE écriture, balance équilibrée (vide).
+            inv = _create_draft_invoice(client, h)
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+            tb0 = _trial_balance(client, h).json()
+            assert tb0["balanced"] is True, tb0
+            assert _tb_row(tb0, "1100") is None, "aucun A/R sur facture draft"
+            assert _tb_row(tb0, "4000") is None, "aucun revenu sur facture draft"
+
+            total = round(float(inv["total"]), 2)
+
+            # 2) draft → sent : revenu posté (Dr 1100 / Cr 4000+taxes), équilibré.
+            r = _set_status(client, h, inv["id"], "sent")
+            assert r.status_code == 200, r.text
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            tb1 = _trial_balance(client, h).json()
+            assert tb1["balanced"] is True, tb1
+            # A/R (1100) au débit == total facture ; revenu 4000 au crédit > 0.
+            ar = _tb_row(tb1, "1100")
+            assert ar is not None and abs(ar["debit_balance"] - total) < 0.02, tb1
+            rev = _tb_row(tb1, "4000")
+            assert rev is not None and rev["credit_balance"] > 0, tb1
+
+            # 3) paiement partiel : encaissement Dr 1000 / Cr 1100, équilibré.
+            rp = _add_payment(client, h, inv["id"], 50.0)
+            assert rp.status_code == 200, rp.text
+            pid = rp.json()["payments"][0]["id"]
+            assert len(_live_payment_entries(org_id, pid)) == 1
+            tb2 = _trial_balance(client, h).json()
+            assert tb2["balanced"] is True, tb2
+            # Encaisse (1000) au débit == montant encaissé.
+            cash = _tb_row(tb2, "1000")
+            assert cash is not None and abs(cash["debit_balance"] - 50.0) < 0.01, tb2
+            # A/R net réduit du paiement (total − 50).
+            ar2 = _tb_row(tb2, "1100")
+            assert ar2 is not None
+            assert abs(ar2["debit_balance"] - (total - 50.0)) < 0.02, tb2
+
+            # 4) suppression paiement : encaissement contre-passé, NET ZÉRO sur
+            #    1000/1100 (retour à l'état post-revenu), balance équilibrée.
+            rd = _delete_payment(client, h, inv["id"], pid)
+            assert rd.status_code == 200, rd.text
+            assert _live_payment_entries(org_id, pid) == []
+            tb3 = _trial_balance(client, h).json()
+            assert tb3["balanced"] is True, tb3
+            assert _tb_row(tb3, "1000") is None, "Encaisse revenue à 0 (net zéro)"
+            ar3 = _tb_row(tb3, "1100")
+            assert ar3 is not None and abs(ar3["debit_balance"] - total) < 0.02, tb3
+
+            # 5) retour draft : revenu contre-passé, NET ZÉRO partout, balance
+            #    équilibrée et VIDE (comme au départ).
+            rb = _set_status(client, h, inv["id"], "draft")
+            assert rb.status_code == 200, rb.text
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+            tb4 = _trial_balance(client, h).json()
+            assert tb4["balanced"] is True, tb4
+            assert _tb_row(tb4, "1100") is None, "A/R net zéro après retour draft"
+            assert _tb_row(tb4, "4000") is None, "revenu net zéro après retour draft"
+            # net global sur toutes les écritures de la facture = zéro.
+            net = _net_by_number(org_id, _all_invoice_entries(org_id, inv["id"]))
+            for num, val in net.items():
+                assert abs(val) < 0.01, f"compte {num} non nul: {val}"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_multi_currency_invoice_cycle_balanced(self, client):
+        # [COMPTA] Facture USD passée sent via le CYCLE (insert USD + PUT status) :
+        # écriture équilibrée (Σ Dr == Σ Cr), total Dr 1100 == total_cad, taxes
+        # reconverties CAD via exchange_rate_to_cad. Balance de vérif équilibrée.
+        uid, org_id, h = _setup_org(client, "t14usd")
+        try:
+            inv_id = str(uuid.uuid4())
+            total_cad = round(114.98 / 1.35, 2)
+            server_module.db.invoices.insert_one({
+                "id": inv_id, "organization_id": org_id, "user_id": uid,
+                "invoice_number": f"USD-{uuid.uuid4().hex[:6]}",
+                "status": "draft", "issue_date": "2026-06-15",
+                "currency": "USD", "exchange_rate_to_cad": 1.35,
+                "gst_amount": 5.0, "pst_amount": 9.98, "hst_amount": 0.0,
+                "total_cad": total_cad, "total": 114.98, "payments": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            # draft → sent : poste le revenu (câblage T7).
+            r = _set_status(client, h, inv_id, "sent")
+            assert r.status_code == 200, r.text
+            entries = _live_revenue_entries(org_id, inv_id)
+            assert len(entries) == 1
+            e = entries[0]
+            # écriture ÉQUILIBRÉE malgré la conversion.
+            _assert_balanced_entry(org_id, e)
+            # Σ Dr == Σ Cr sur l'écriture (invariant partie double explicite).
+            sdr = round(sum(float(l.get("debit", 0) or 0) for l in e["lines"]), 2)
+            scr = round(sum(float(l.get("credit", 0) or 0) for l in e["lines"]), 2)
+            assert abs(sdr - scr) < 0.01, (sdr, scr)
+            # total Dr 1100 == total_cad (source de vérité du total en CAD).
+            net = _net_by_number(org_id, entries)
+            assert abs(net.get("1100", 0) - total_cad) < 0.02, net
+            # balance de vérif de l'org équilibrée.
+            tb = _trial_balance(client, h).json()
+            assert tb["balanced"] is True, tb
+            ar = _tb_row(tb, "1100")
+            assert ar is not None and abs(ar["debit_balance"] - total_cad) < 0.02, tb
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_missing_revenue_account_soft_fails_then_repairs(self, client):
+        # [COMPTA] ROBUSTESSE : le compte de revenu 4000 est réellement SUPPRIMÉ
+        # (pas monkeypatché) → PUT status sent renvoie 200 (op métier préservée)
+        # + autopost_error posé, AUCUNE écriture déséquilibrée. On recrée 4000,
+        # POST /repair rejoue, réconciliation `balanced`.
+        uid, org_id, h = _setup_org(client, "t14robust")
+        try:
+            inv = _create_draft_invoice(client, h)
+            # Force le seed du plan puis SUPPRIME 4000 → _autopost_debit/credit
+            # lèvera ValueError (compte introuvable) → capté par _safe_autopost.
+            server_module._ensure_chart_seeded(org_id, uid)
+            saved_4000 = server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "4000"}, {"_id": 0})
+            assert saved_4000 is not None
+            server_module.db.chart_of_accounts.delete_one(
+                {"organization_id": org_id, "account_number": "4000"})
+
+            # PUT status sent : 200 (op métier réussit malgré l'échec auto-post).
+            r = _set_status(client, h, inv["id"], "sent")
+            assert r.status_code == 200, r.text
+            # la transition métier est bien appliquée (statut persisté).
+            persisted = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert persisted["status"] == "sent", "transition métier appliquée"
+            # AUCUNE écriture vivante (l'échec n'a rien posté de déséquilibré).
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+            # autopost_error posé sur la facture.
+            doc = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc, "autopost_error attendu"
+            # status → pending_errors >= 1.
+            st = client.get("/api/ledger/autopost/status", headers=h).json()
+            assert st["pending_errors"] >= 1, st
+
+            # Recrée le compte 4000 (restauration).
+            server_module.db.chart_of_accounts.insert_one(dict(saved_4000))
+
+            # POST /repair rejoue : 1 réparé, plus d'erreur.
+            rr = client.post("/api/ledger/autopost/repair", headers=h)
+            assert rr.status_code == 200, rr.text
+            body = rr.json()
+            assert body["repaired"] >= 1, body
+            assert body["still_failing"] == [], body
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            fresh = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" not in fresh, "erreur effacée après repair"
+
+            # réconciliation : revenue.diff ≈ 0, balanced.
+            rc = _recon(client, h)
+            assert rc.status_code == 200, rc.text
+            rb = rc.json()
+            assert abs(rb["revenue"]["diff"]) < 0.02, rb
+            assert rb["balanced"] is True, rb
+            # balance de vérif équilibrée après réparation.
+            tb = _trial_balance(client, h).json()
+            assert tb["balanced"] is True, tb
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_cross_org_isolation_end_to_end(self, client):
+        # [COMPTA] Isolation cross-org bout-en-bout : org A poste (facture +
+        # dépense) ; org B ne voit AUCUNE écriture de A ; status/backfill/
+        # reconciliation de B excluent les docs de A.
+        uidA, orgA, hA = _setup_org(client, "t14isoA")
+        uidB, orgB, hB = _setup_org(client, "t14isoB")
+        try:
+            # Org A poste une facture (sent) + une dépense.
+            invA = _create_draft_invoice(client, hA)
+            _set_status(client, hA, invA["id"], "sent")
+            reA = _create_expense(client, hA, amount=115.0, gst=5.0, qst=9.98)
+            assert reA.status_code == 200, reA.text
+            assert len(_live_revenue_entries(orgA, invA["id"])) == 1
+
+            # Org B ne voit AUCUNE écriture auto de A dans son propre scope.
+            b_entries = list(server_module.db.journal_entries.find(
+                {"organization_id": orgB}, {"_id": 0}))
+            for e in b_entries:
+                assert e["organization_id"] == orgB
+            # aucune écriture de B référence les sources de A.
+            assert _live_revenue_entries(orgB, invA["id"]) == []
+
+            # status de B : coverage 0 (aucune facture postable chez B).
+            stB = client.get("/api/ledger/autopost/status", headers=hB).json()
+            assert stB["coverage"]["invoices_posted"] == 0, stB
+            assert stB["coverage"]["invoices_total_postable"] == 0, stB
+            assert stB["pending_errors"] == 0, stB
+
+            # backfill de B : n'inclut aucun doc de A (rien à poster).
+            bfB = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=hB).json()
+            assert bfB["created"]["invoice"] == 0, bfB
+            assert bfB["created"]["expense"] == 0, bfB
+            # aucune écriture créée dans B pour la source de A.
+            assert _all_invoice_entries(orgB, invA["id"]) == []
+
+            # reconciliation de B : période vide → tout à 0, balanced.
+            rcB = _recon(client, hB).json()
+            assert abs(rcB["revenue"]["gl"]) < 0.01, rcB
+            assert abs(rcB["expenses"]["gl_net"]) < 0.01, rcB
+            assert rcB["balanced"] is True, rcB
+
+            # A garde ses écritures intactes (isolation ne casse pas A).
+            assert len(_live_revenue_entries(orgA, invA["id"])) == 1
+        finally:
+            _cleanup(uidA, orgA)
+            _cleanup(uidB, orgB)
+
+    def test_phase1_manual_entry_never_touched_by_autopost(self, client):
+        # [COMPTA] NON-RÉGRESSION Phase 1 : une écriture MANUELLE postée n'est
+        # JAMAIS modifiée par l'auto-posting. Contre-passer une facture (retour
+        # draft) ne touche AUCUNE écriture `manual` (ni son statut, ni ses lignes,
+        # ni ses liens de contre-passation).
+        uid, org_id, h = _setup_org(client, "t14manual")
+        try:
+            server_module._ensure_chart_seeded(org_id, uid)
+            cash_id = _acct_id_by_num_db(org_id, "1000")     # Encaisse
+            equity_id = _acct_id_by_num_db(org_id, "3100")   # Apport
+            assert cash_id and equity_id
+            # Écriture manuelle POSTÉE (apport propriétaire Dr 1000 / Cr 3100).
+            rm = client.post("/api/ledger/entries", headers=h, json={
+                "entry_date": "2026-06-10",
+                "description": "Apport manuel propriétaire",
+                "status": "posted",
+                "lines": [
+                    {"account_id": cash_id, "debit": 500.0, "credit": 0.0},
+                    {"account_id": equity_id, "debit": 0.0, "credit": 500.0},
+                ],
+            })
+            assert rm.status_code == 201, rm.text
+            manual = rm.json()
+            manual_id = manual["id"]
+            assert manual["entry_type"] == "manual"
+            # Snapshot AVANT toute activité auto-post.
+            before = server_module.db.journal_entries.find_one(
+                {"id": manual_id, "organization_id": org_id}, {"_id": 0})
+
+            # Activité auto-post : facture sent (poste) → draft (contre-passe).
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            _set_status(client, h, inv["id"], "draft")
+
+            # L'écriture manuelle est INCHANGÉE au bit près.
+            after = server_module.db.journal_entries.find_one(
+                {"id": manual_id, "organization_id": org_id}, {"_id": 0})
+            assert after == before, "l'écriture manuelle a été modifiée !"
+            assert after["entry_type"] == "manual"
+            assert after["status"] == "posted"
+            assert after.get("reversed_by_entry_id") is None
+            # Aucune écriture auto ne référence l'écriture manuelle comme source.
+            auto_touching = list(server_module.db.journal_entries.find({
+                "organization_id": org_id, "entry_type": "auto",
+                "reverses_entry_id": manual_id,
+            }, {"_id": 0}))
+            assert auto_touching == [], "une contre-passation auto a visé le manuel"
+
+            # Balance de vérif inclut bien l'apport manuel (500) et reste
+            # équilibrée (Phase 1 intacte).
+            tb = _trial_balance(client, h).json()
+            assert tb["balanced"] is True, tb
+            eq = _tb_row(tb, "3100")
+            assert eq is not None and abs(eq["credit_balance"] - 500.0) < 0.01, tb
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_global_optout_posts_nothing_then_optin_posts(self, client):
+        # [COMPTA] OPT-IN GLOBAL : autopost_enabled=False sur toute la séquence
+        # POST facture / paiement / dépense → 0 écriture. Puis True → écritures
+        # créées (revenu, encaissement, charge).
+        uid, org_id, h = _setup_org(client, "t14optin", autopost_enabled=False)
+        try:
+            # --- OFF : rien ne doit être posté sur toute la séquence. ---
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            rp = _add_payment(client, h, inv["id"], 30.0)
+            assert rp.status_code == 200, rp.text
+            pid = rp.json()["payments"][0]["id"]
+            re = _create_expense(client, h, amount=115.0, gst=5.0, qst=9.98)
+            assert re.status_code == 200, re.text
+            exp_id = re.json()["id"]
+
+            assert _live_revenue_entries(org_id, inv["id"]) == [], "revenu posté OFF"
+            assert _live_payment_entries(org_id, pid) == [], "encaissement posté OFF"
+            assert _live_expense_entries(org_id, exp_id) == [], "charge postée OFF"
+            # Aucune écriture auto du tout dans l'org.
+            assert server_module.db.journal_entries.count_documents(
+                {"organization_id": org_id, "entry_type": "auto"}) == 0
+
+            # --- ON : réactive puis POST → écritures créées. ---
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            inv2 = _create_draft_invoice(client, h)
+            r2 = _set_status(client, h, inv2["id"], "sent")
+            assert r2.status_code == 200, r2.text
+            assert len(_live_revenue_entries(org_id, inv2["id"])) == 1, "revenu ON"
+            rp2 = _add_payment(client, h, inv2["id"], 20.0)
+            pid2 = rp2.json()["payments"][0]["id"]
+            assert len(_live_payment_entries(org_id, pid2)) == 1, "encaissement ON"
+            re2 = _create_expense(client, h, amount=50.0, gst=0.0, qst=0.0,
+                                  description="ON")
+            exp2 = re2.json()["id"]
+            assert len(_live_expense_entries(org_id, exp2)) == 1, "charge ON"
+
+            # balance de vérif équilibrée après les écritures ON.
+            tb = _trial_balance(client, h).json()
+            assert tb["balanced"] is True, tb
+        finally:
+            _cleanup(uid, org_id)
