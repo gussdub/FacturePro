@@ -6862,6 +6862,199 @@ def create_mileage_vehicle(payload: dict, current_user: CurrentUser = Depends(re
     return doc
 
 
+# ─── Carnet de route / kilométrage — trajets (feature #13) ───
+#
+# [CALCUL] Chemin end-to-end minimal apporté au T4 pour rendre le calcul
+# d'allocation EXERÇABLE et ENFORCÉ via HTTP (les helpers _mileage_allocation /
+# _mileage_ytd_before / _mileage_rate_for_year étaient corrects mais aucun
+# endpoint ne les appelait). Ces routes matérialisent :
+#   1. le calcul de bout en bout (POST/GET trips → allocation calculée + split
+#      au seuil 5000 km, cumul par personne+véhicule+année civile) ;
+#   2. le contrat « année sans taux → montant JAMAIS deviné » : allocation=None,
+#      drapeau rate_missing_year, ET écriture d'un mileage_rate_reminders (la
+#      collection est désormais réellement lue/écrite → l'org est signalée pour
+#      confirmation humaine du taux ARC) ;
+#   3. la conformité ARC (date/départ/arrivée/motif/km + cumul affiché) portée
+#      par le document trajet et exposée dans la réponse enrichie.
+# Le CRUD complet (PUT/DELETE), les favoris, la génération de dépense et le PDF
+# arrivent aux tâches 5-13 du plan ; ce bloc en est la fondation vérifiable.
+
+
+def _mileage_resolve_vehicle_id(scope, payload_vehicle_id):
+    """Retourne un vehicle_id valide de l'org. Si le payload en fournit un, il
+    doit appartenir à l'org ; sinon on prend le véhicule par défaut (sinon
+    n'importe lequel de l'org). Ne renvoie jamais un véhicule d'une autre org."""
+    if payload_vehicle_id:
+        v = db.mileage_vehicles.find_one({**scope, "id": payload_vehicle_id})
+        if not v:
+            raise HTTPException(status_code=400, detail="Véhicule introuvable")
+        return payload_vehicle_id
+    default = db.mileage_vehicles.find_one({**scope, "is_default": True})
+    if not default:
+        default = db.mileage_vehicles.find_one(scope)
+    return default["id"]
+
+
+def _mileage_validate_employee(scope, employee_id):
+    """Vérifie que employee_id (optionnel) appartient à l'org. Retourne
+    l'employee_id validé, ou None si absent."""
+    if not employee_id:
+        return None
+    emp = db.employees.find_one({**scope, "id": employee_id})
+    if not emp:
+        raise HTTPException(status_code=400, detail="Employé introuvable")
+    return employee_id
+
+
+def _mileage_flag_rate_missing(org_id, year):
+    """[CALCUL — contrat « année absente → bloqué »] Trace qu'une allocation n'a
+    pas pu être calculée faute de taux ARC pour `year`. Écrit un
+    mileage_rate_reminders (idempotent via l'id unique '{org}:{year}') afin que
+    la collection soit RÉELLEMENT alimentée dès qu'un trajet touche une année non
+    configurée — l'org est alors signalée pour vérification humaine du taux
+    (le cron annuel §7 réutilise le même id, sans double compter). Ne calcule
+    JAMAIS de montant de repli."""
+    reminder_id = f"{org_id}:{int(year)}"
+    if db.mileage_rate_reminders.find_one({"id": reminder_id}):
+        return
+    try:
+        db.mileage_rate_reminders.insert_one({
+            "id": reminder_id,
+            "organization_id": org_id,
+            "year": int(year),
+            "source": "trip_entry",
+            "flagged_at": datetime.now(timezone.utc).isoformat(),
+            "notified_at": None,
+        })
+    except Exception:
+        # Course possible avec le cron / un autre trajet : l'id unique garantit
+        # qu'il n'existe qu'un seul reminder par (org, année). L'échec d'insert
+        # concurrent est bénin (le reminder existe déjà) — ne bloque pas la
+        # saisie du trajet, qui reste permise (seule l'allocation $ attend).
+        pass
+
+
+def _mileage_enrich_trip(trip: dict, scope) -> dict:
+    """Enrichit un trajet de son allocation calculée À LA VOLÉE (jamais figée sur
+    le document). Forme de retour stable : {trip, allocation, ytd_before,
+    running_total_km, rate_missing_year}.
+
+    [CALCUL] C'est ici que le calcul devient exerçable de bout en bout :
+    - ytd_before = cumul des trajets antérieurs (même personne+véhicule+année) ;
+    - allocation = _mileage_allocation(distance, ytd_before, rates) avec split
+      au seuil 5000 km ;
+    - année sans taux → allocation=None + rate_missing_year (aucun montant
+      deviné) ; l'org est flaggée via _mileage_flag_rate_missing.
+    running_total_km = ytd_before + distance_km (cumul APRÈS ce trajet, colonne
+    « Cumul » exigée par l'ARC au carnet)."""
+    year = int(_mileage_trip_date_str(trip["trip_date"])[:4])
+    rates = _mileage_rate_for_year(year)
+    employee_key = _mileage_employee_key(trip.get("employee_id"), trip.get("created_by_user_id"))
+    ytd_before = _mileage_ytd_before(
+        scope, employee_key, trip["vehicle_id"], trip["trip_date"], trip["id"])
+    distance_km = float(trip.get("distance_km", 0.0))
+    running_total_km = round(ytd_before + distance_km, 2)
+    if rates is None:
+        _mileage_flag_rate_missing(trip["organization_id"], year)
+        return {
+            "trip": trip,
+            "allocation": None,
+            "ytd_before": ytd_before,
+            "running_total_km": running_total_km,
+            "rate_missing_year": year,
+        }
+    amount, breakdown = _mileage_allocation(distance_km, ytd_before, rates)
+    return {
+        "trip": trip,
+        "allocation": {"amount_cad": amount, "breakdown": breakdown},
+        "ytd_before": ytd_before,
+        "running_total_km": running_total_km,
+        "rate_missing_year": None,
+    }
+
+
+@app.post("/api/mileage/trips")
+def create_mileage_trip(payload: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    """Crée un trajet (date/départ/arrivée/motif/km, aller-retour) et retourne
+    le trajet ENRICHI de son allocation calculée (split au seuil 5000 km).
+    Invariants ARC forcés backend : motif obligatoire, km aller-simple > 0,
+    distance_km toujours recalculée (valeur client ignorée), date pure AAAA-MM-JJ
+    (contrat du cumul YTD, T3)."""
+    _ensure_default_vehicle(current_user.organization_id, current_user.id)
+    scope = _org_scope(current_user)
+
+    purpose = (payload.get("purpose") or "").strip()
+    if not purpose:
+        raise HTTPException(status_code=400, detail="Le motif du déplacement est obligatoire")
+
+    try:
+        one_way_km = float(payload.get("one_way_km"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Distance invalide")
+    if not math.isfinite(one_way_km) or one_way_km <= 0:
+        raise HTTPException(status_code=400, detail="La distance (aller simple) doit être supérieure à 0")
+
+    trip_date = (payload.get("trip_date") or "").strip()
+    if len(trip_date) != 10:
+        raise HTTPException(status_code=400, detail="Date de trajet invalide (AAAA-MM-JJ)")
+
+    round_trip = bool(payload.get("round_trip", False))
+    vehicle_id = _mileage_resolve_vehicle_id(scope, payload.get("vehicle_id"))
+    employee_id = _mileage_validate_employee(scope, payload.get("employee_id"))
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "employee_id": employee_id,
+        "vehicle_id": vehicle_id,
+        "trip_date": trip_date,
+        "origin": (payload.get("origin") or "").strip(),
+        "destination": (payload.get("destination") or "").strip(),
+        "purpose": purpose,
+        "one_way_km": round(one_way_km, 2),
+        "round_trip": round_trip,
+        "distance_km": _mileage_distance_km(one_way_km, round_trip),
+        "favorite_id": (payload.get("favorite_id") or None),
+        "expense_id": None,
+        "notes": (payload.get("notes") or None),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    db.mileage_trips.insert_one(doc)
+    doc.pop("_id", None)
+    return _mileage_enrich_trip(doc, scope)
+
+
+@app.get("/api/mileage/trips")
+def list_mileage_trips(year: int = None, month: int = None, vehicle_id: str = None,
+                       current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    """Liste les trajets filtrés (année/mois/véhicule), triés (trip_date, id),
+    chacun ENRICHI de son allocation + cumul YTD (calcul recalculé à la volée)."""
+    _ensure_default_vehicle(current_user.organization_id, current_user.id)
+    scope = _org_scope(current_user)
+    query = dict(scope)
+    if year and month:
+        prefix = f"{int(year):04d}-{int(month):02d}"
+        query["trip_date"] = {"$gte": f"{prefix}-01", "$lte": f"{prefix}-31"}
+    elif year:
+        query["trip_date"] = {"$gte": f"{int(year):04d}-01-01", "$lte": f"{int(year):04d}-12-31"}
+    if vehicle_id:
+        query["vehicle_id"] = vehicle_id
+    docs = list(db.mileage_trips.find(query, {"_id": 0}))
+    docs.sort(key=lambda d: (d["trip_date"], d["id"]))
+    return [_mileage_enrich_trip(d, scope) for d in docs]
+
+
+@app.get("/api/mileage/trips/{trip_id}")
+def get_mileage_trip(trip_id: str, current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    """Retourne un trajet enrichi (org-scopé). 404 si absent ou hors org."""
+    scope = _org_scope(current_user)
+    doc = db.mileage_trips.find_one({**scope, "id": trip_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Trajet introuvable")
+    return _mileage_enrich_trip(doc, scope)
+
+
 @app.get("/api/dashboard/expense-analytics")
 def get_expense_analytics(current_user: CurrentUser = Depends(require_permission("reports:read"))):
     expenses = list(db.expenses.find(

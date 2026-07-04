@@ -110,3 +110,209 @@ def test_create_and_list_vehicle(auth_headers):
 
     # Nettoyage : ne pas laisser traîner de véhicule non-défaut dans le seed org.
     db.mileage_vehicles.delete_one({"id": body["id"]})
+
+
+# ─── [CALCUL] Calcul d'allocation exercé de bout en bout via HTTP ───
+#
+# Ces tests répondent aux 4 problèmes [CALCUL] du FIX-PASS T4 : les helpers de
+# calcul (corrects, 21 tests unitaires verts) étaient PROUVÉS au niveau primitive
+# seulement — aucun endpoint ne les appelait. On exerce désormais le calcul via
+# POST/GET /api/mileage/trips (allocation, split au seuil 5000 km, cumul YTD) et
+# l'ENFORCEMENT du contrat « année sans taux → montant jamais deviné ».
+
+
+def _dedicated_vehicle(auth_headers, name):
+    """Crée un véhicule dédié à un test pour repartir d'un cumul YTD = 0
+    (le cumul est par personne+véhicule+année)."""
+    r = client.post("/api/mileage/vehicles", headers=auth_headers, json={"name": name})
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def _cleanup_vehicle(vehicle_id):
+    db.mileage_trips.delete_many({"vehicle_id": vehicle_id})
+    db.mileage_vehicles.delete_one({"id": vehicle_id})
+
+
+def _new_trip_payload(vehicle_id, **over):
+    base = {
+        "trip_date": "2026-03-10",
+        "origin": "Domicile, Québec",
+        "destination": "Client ABC, Lévis",
+        "purpose": "Rencontre client",
+        "one_way_km": 45.0,
+        "round_trip": True,
+        "vehicle_id": vehicle_id,
+    }
+    base.update(over)
+    return base
+
+
+def test_create_trip_requires_purpose(auth_headers):
+    # Problème [CALCUL] #4 (conformité ARC) : le motif est OBLIGATOIRE côté serveur.
+    vid = _dedicated_vehicle(auth_headers, "CALCUL purpose")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, purpose="   "), headers=auth_headers)
+        assert r.status_code == 400, r.text
+        assert "motif" in r.json()["detail"].lower()
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_create_trip_requires_positive_km(auth_headers):
+    vid = _dedicated_vehicle(auth_headers, "CALCUL km")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, one_way_km=0), headers=auth_headers)
+        assert r.status_code == 400, r.text
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_create_trip_round_trip_doubles_and_allocates(auth_headers):
+    # Problème [CALCUL] #1 : allocation = km × taux, exercée via HTTP réel.
+    vid = _dedicated_vehicle(auth_headers, "CALCUL AR")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, one_way_km=45, round_trip=True),
+                        headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["trip"]["distance_km"] == 90.0  # aller-retour doublé backend
+        # 2026, sous 5000 km : 90 × 0,73 = 65,70
+        assert body["allocation"]["amount_cad"] == round(90 * 0.73, 2)
+        assert body["allocation"]["breakdown"]["km_full"] == 90.0
+        assert body["allocation"]["breakdown"]["km_reduced"] == 0.0
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_create_trip_ignores_client_supplied_distance(auth_headers):
+    # Sécurité : distance_km recalculée backend, valeur client ignorée.
+    vid = _dedicated_vehicle(auth_headers, "CALCUL distance")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, one_way_km=10, round_trip=False,
+                                               distance_km=9999),
+                        headers=auth_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["trip"]["distance_km"] == 10.0
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_switch_5000km_split_end_to_end(auth_headers):
+    # Problème [CALCUL] #1 & #3 : le split au seuil 5000 km, prouvé en unitaire,
+    # est désormais exercé DANS UN FLUX HTTP réel (création + cumul YTD DB).
+    vid = _dedicated_vehicle(auth_headers, "CALCUL bascule")
+    try:
+        # 49 trajets de 100 km (aller simple) = 4900 km cumulés
+        for i in range(49):
+            rc = client.post("/api/mileage/trips",
+                             json=_new_trip_payload(vid, trip_date=f"2026-01-{(i % 28) + 1:02d}",
+                                                    one_way_km=100, round_trip=False),
+                             headers=auth_headers)
+            assert rc.status_code == 200, rc.text
+        # Trajet qui franchit le seuil : ytd 4900 + 200 → 100@0,73 + 100@0,67 = 140,00
+        crossing = client.post("/api/mileage/trips",
+                               json=_new_trip_payload(vid, trip_date="2026-06-15",
+                                                      one_way_km=200, round_trip=False),
+                               headers=auth_headers)
+        assert crossing.status_code == 200, crossing.text
+        cb = crossing.json()
+        assert cb["allocation"]["amount_cad"] == 140.00
+        assert cb["allocation"]["breakdown"]["km_full"] == 100.0
+        assert cb["allocation"]["breakdown"]["km_reduced"] == 100.0
+        assert cb["ytd_before"] == 4900.0
+        assert cb["running_total_km"] == 5100.0  # cumul ARC affiché après ce trajet
+        # Trajet suivant : tout au taux réduit
+        after = client.post("/api/mileage/trips",
+                            json=_new_trip_payload(vid, trip_date="2026-07-01",
+                                                   one_way_km=100, round_trip=False),
+                            headers=auth_headers)
+        assert after.status_code == 200, after.text
+        assert after.json()["allocation"]["amount_cad"] == round(100 * 0.67, 2)
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_list_trips_enriched_and_ordered(auth_headers):
+    # Problème [CALCUL] #4 : le carnet expose date/départ/arrivée/motif/km + cumul.
+    vid = _dedicated_vehicle(auth_headers, "CALCUL liste")
+    try:
+        client.post("/api/mileage/trips",
+                    json=_new_trip_payload(vid, trip_date="2026-04-15", one_way_km=20,
+                                           round_trip=False),
+                    headers=auth_headers)
+        client.post("/api/mileage/trips",
+                    json=_new_trip_payload(vid, trip_date="2026-04-02", one_way_km=10,
+                                           round_trip=False),
+                    headers=auth_headers)
+        r = client.get(f"/api/mileage/trips?year=2026&month=4&vehicle_id={vid}",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        rows = r.json()
+        assert len(rows) == 2
+        # trié (trip_date, id) : le 02 avant le 15
+        assert rows[0]["trip"]["trip_date"] == "2026-04-02"
+        assert rows[1]["trip"]["trip_date"] == "2026-04-15"
+        # cumul progressif ARC
+        assert rows[0]["running_total_km"] == 10.0
+        assert rows[1]["ytd_before"] == 10.0
+        assert rows[1]["running_total_km"] == 30.0
+        # champs ARC obligatoires présents
+        for row in rows:
+            t = row["trip"]
+            for field in ("trip_date", "origin", "destination", "purpose", "distance_km"):
+                assert field in t
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_missing_rate_year_blocks_allocation_and_flags_reminder(auth_headers):
+    # Problème [CALCUL] #2 : une année sans taux ne calcule JAMAIS silencieusement
+    # un montant erroné, ET la collection mileage_rate_reminders est réellement
+    # écrite (enforcement end-to-end, plus seulement au niveau helper).
+    vid = _dedicated_vehicle(auth_headers, "CALCUL sans taux")
+    org = client.get("/api/org/me", headers=auth_headers).json()
+    org_id = org["organization"]["id"]
+    reminder_id = f"{org_id}:2099"
+    db.mileage_rate_reminders.delete_one({"id": reminder_id})  # état propre
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, trip_date="2099-05-01",
+                                               one_way_km=10, round_trip=False),
+                        headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # aucun montant deviné
+        assert body["allocation"] is None
+        assert body["rate_missing_year"] == 2099
+        # cumul km toujours tenu (le carnet reste utilisable), seule l'allocation $ attend
+        assert body["running_total_km"] == 10.0
+        # la collection de rappel est désormais alimentée (n'était jamais écrite)
+        rem = db.mileage_rate_reminders.find_one({"id": reminder_id})
+        assert rem is not None
+        assert rem["year"] == 2099
+        assert rem["organization_id"] == org_id
+    finally:
+        db.mileage_rate_reminders.delete_one({"id": reminder_id})
+        _cleanup_vehicle(vid)
+
+
+def test_trip_cross_org_isolation(auth_headers):
+    # Un trajet créé par l'org courante n'est pas accessible par id sans le scope.
+    # (isolation garantie par _org_scope ; ici on vérifie le 404 hors org via un
+    # id inexistant, l'isolation cross-org complète est couverte au Task 9.)
+    vid = _dedicated_vehicle(auth_headers, "CALCUL iso")
+    try:
+        created = client.post("/api/mileage/trips",
+                              json=_new_trip_payload(vid), headers=auth_headers)
+        tid = created.json()["trip"]["id"]
+        # le même user (même org) y accède
+        assert client.get(f"/api/mileage/trips/{tid}", headers=auth_headers).status_code == 200
+        # un id inconnu → 404
+        assert client.get("/api/mileage/trips/does-not-exist", headers=auth_headers).status_code == 404
+    finally:
+        _cleanup_vehicle(vid)

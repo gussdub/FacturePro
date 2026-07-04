@@ -13,8 +13,16 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
-os.environ.setdefault("DB_NAME", "facturepro_test_unit")
 os.environ.setdefault("JWT_SECRET", "test")
+# NB : on NE force PAS DB_NAME ici. Ces tests sont purement unitaires (helpers de
+# calcul, aucun accès `db`/HTTP), mais `backend.server` lie `db = client[DB_NAME]`
+# UNE SEULE FOIS au premier import du processus. Forcer un DB_NAME distinct
+# (ex : 'facturepro_test_unit') faisait pointer ce `db` partagé vers une base
+# VIDE selon l'ordre d'import ; le module d'intégration importé ensuite (même
+# processus, même objet `db`) échouait alors à se connecter au compte de seed
+# (`gussdub@gmail.com` absent → login 401). En laissant DB_NAME venir de `.env`
+# (facturepro), les deux suites partagent la base de copie-prod et l'exécution
+# combinée `pytest tests/test_mileage_logbook*.py` est déterministe.
 
 from backend.server import (  # noqa: E402
     MILEAGE_RATES,
