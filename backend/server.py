@@ -5,9 +5,10 @@ import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pymongo import MongoClient, ReturnDocument
-from pymongo.errors import OperationFailure
+from pymongo.errors import OperationFailure, DuplicateKeyError
 import os
 import math
+import logging
 import jwt
 import bcrypt
 import resend
@@ -101,6 +102,11 @@ def normalize_tax_fields(data):
 
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
+
+# Logger serveur. L'auto-posting (feature #12, Phase 2) y écrit un diagnostic
+# SANS détail sensible (type d'exception seulement, jamais str(e) — pattern
+# anti-leak feature #8). Le message stocké côté doc source reste générique.
+logger = logging.getLogger("facturepro")
 
 def _take_regs(doc):
     """Extrait les 5 numéros officiels d'un doc (settings ou client).
@@ -1808,6 +1814,115 @@ def _unpost_source_entry(organization_id: str, user_id: str, source_type: str,
         organization_id, user_id, live,
         rev_date=rev_date or live["entry_date"],
         source_type=source_type, source_id=source_id)
+
+
+def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
+                   org_scope: dict) -> None:
+    """Garde-fou robustesse (décision #6, spec §6.3).
+
+    Enveloppe TOUT appel d'auto-posting : l'opération métier (facture, paiement,
+    dépense) a DÉJÀ réussi avant d'arriver ici, donc une erreur de post ne doit
+    JAMAIS remonter. En cas d'échec on avale l'exception et on marque le doc
+    source d'un `autopost_error` GÉNÉRIQUE horodaté ; au succès on efface le champ.
+
+    [SÉCURITÉ] On ne stocke JAMAIS `str(e)` (pattern anti-leak feature #8) :
+    une exception peut charrier des données sensibles. Seul le TYPE d'exception
+    part au log serveur ; le doc source ne reçoit qu'un message générique.
+
+    L'update est TOUJOURS scopé org via `org_scope` (jamais par `id` seul)."""
+    try:
+        fn()
+        db[source_doc_collection].update_one(
+            {"id": source_doc_id, **org_scope},
+            {"$unset": {"autopost_error": ""}})
+    except Exception as e:
+        # NE JAMAIS propager : l'opération métier a déjà réussi.
+        logger.warning("autopost failed for %s: %s", source_doc_id,
+                       type(e).__name__)
+        db[source_doc_collection].update_one(
+            {"id": source_doc_id, **org_scope},
+            {"$set": {"autopost_error":
+                      f"{datetime.now(timezone.utc).isoformat()} — échec auto-posting"}})
+
+
+def _resolve_ledger_account(organization_id: str, user_id: str,
+                            account_number: str, create_if_missing: bool = False,
+                            kind: str = None, name: str = None) -> Optional[dict]:
+    """Résout un compte du plan par NUMÉRO canonique (spec §5, §6.1).
+
+    Déclenche d'abord le seed lazy `_ensure_chart_seeded` : une org qui n'a
+    jamais ouvert le module GL n'a aucun compte, et l'auto-posting doit pouvoir
+    résoudre 4000/1100/2100/… quand même. `_ensure_chart_seeded` est idempotent
+    (no-op si le plan existe déjà) — aucun re-seed coûteux sur un plan seedé.
+
+    Cherche `account_number` scopé org. Absent + `create_if_missing` → crée un
+    compte SYSTÈME à la volée (comptes de taxe ON 2120/1220, §5.1). Idempotent :
+    on re-`find_one` après création pour absorber une race (l'index unique
+    `(organization_id, account_number)` lève `DuplicateKeyError` sur un insert
+    concurrent → on relit le gagnant). Sinon retourne None."""
+    _ensure_chart_seeded(organization_id, user_id)
+
+    def _find():
+        return db.chart_of_accounts.find_one(
+            {"organization_id": organization_id,
+             "account_number": account_number}, {"_id": 0})
+
+    acc = _find()
+    if acc is not None:
+        return acc
+    if not create_if_missing:
+        return None
+
+    account_type = kind or _account_type_for_number(account_number)
+    if account_type is None:
+        # Numéro hors des plages canoniques et aucun kind fourni : on ne devine
+        # pas un type comptable → pas de création (retour None).
+        return None
+    new_doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": organization_id,
+        "created_by_user_id": user_id,
+        "account_number": account_number,
+        "name": name or f"Compte {account_number}",
+        "account_type": account_type,
+        "sub_type": _default_sub_type_for(account_type, account_number),
+        "normal_balance": _normal_balance_for_type(account_type),
+        "is_active": True,
+        "is_system": True,
+        "expense_category_code": None,
+        "description": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        db.chart_of_accounts.insert_one(dict(new_doc))
+    except DuplicateKeyError:
+        # Race : un autre appel concurrent a créé le compte entre-temps.
+        pass
+    # Relit systématiquement le gagnant (le nôtre ou celui de la race).
+    return _find()
+
+
+def _default_sub_type_for(account_type: str, account_number: str) -> Optional[str]:
+    """Sous-type par défaut d'un compte créé à la volée (§3.1). Les comptes de
+    taxe (1200-1299 recouvrable, 2100-2199 payable) prennent le sous-type fiscal
+    adéquat pour que le regroupement du bilan reste correct ; sinon on retombe
+    sur le sous-type courant du type, ou None si aucun n'est pertinent."""
+    try:
+        n = int(str(account_number))
+    except (TypeError, ValueError):
+        n = None
+    if account_type == "asset" and n is not None and 1200 <= n <= 1299:
+        return "tax_recoverable"
+    if account_type == "liability" and n is not None and 2100 <= n <= 2199:
+        return "tax_payable"
+    defaults = {
+        "asset": "current_asset",
+        "liability": "current_liability",
+        "equity": "other_equity",
+        "revenue": "operating_revenue",
+        "expense": "operating_expense",
+    }
+    return defaults.get(account_type)
 
 
 def migrate_organizations_v1():

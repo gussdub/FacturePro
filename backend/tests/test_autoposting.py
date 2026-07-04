@@ -429,3 +429,172 @@ class TestSourceEntryPrimitives:
         finally:
             _cleanup_org(org_a)
             _cleanup_org(org_b)
+
+
+class TestSafeAutopost:
+    """Tâche 4 — _safe_autopost : garde-fou robustesse (décision #6).
+
+    L'auto-posting ne fait JAMAIS échouer l'opération métier : toute exception
+    est avalée, un `autopost_error` GÉNÉRIQUE horodaté est posé sur le doc source
+    (jamais `str(e)` — pattern anti-leak feature #8). Au succès, le champ est
+    effacé. Le scope org est toujours appliqué à l'update.
+    """
+
+    def _make_source_doc(self, org_id, extra=None):
+        """Insère un doc jetable dans `invoices` (collection source réelle)."""
+        doc = {"id": f"inv-{uuid.uuid4().hex[:8]}", "organization_id": org_id}
+        if extra:
+            doc.update(extra)
+        server_module.db.invoices.insert_one(dict(doc))
+        return doc["id"]
+
+    def test_safe_autopost_swallows_and_records(self):
+        org_id = str(uuid.uuid4())
+        inv_id = self._make_source_doc(org_id)
+        try:
+            # fn qui lève : _safe_autopost NE DOIT PAS propager.
+            def _boom():
+                raise RuntimeError("boom")
+
+            # Ne lève pas.
+            server_module._safe_autopost(
+                _boom, "invoices", inv_id, {"organization_id": org_id})
+
+            doc = server_module.db.invoices.find_one(
+                {"id": inv_id, "organization_id": org_id}, {"_id": 0})
+            assert doc is not None
+            err = doc.get("autopost_error")
+            assert isinstance(err, str) and err
+            # Message générique horodaté : NE contient PAS le détail de l'exception.
+            assert "boom" not in err
+            assert "RuntimeError" not in err
+        finally:
+            server_module.db.invoices.delete_many({"organization_id": org_id})
+
+    def test_safe_autopost_clears_on_success(self):
+        org_id = str(uuid.uuid4())
+        # Doc qui porte DÉJÀ un autopost_error d'un échec antérieur.
+        inv_id = self._make_source_doc(
+            org_id, extra={"autopost_error": "2026-01-01T00:00:00+00:00 — échec"})
+        try:
+            calls = {"n": 0}
+
+            def _ok():
+                calls["n"] += 1
+
+            server_module._safe_autopost(
+                _ok, "invoices", inv_id, {"organization_id": org_id})
+
+            assert calls["n"] == 1  # fn a bien été exécutée
+            doc = server_module.db.invoices.find_one(
+                {"id": inv_id, "organization_id": org_id}, {"_id": 0})
+            # $unset : le champ a disparu.
+            assert "autopost_error" not in doc
+        finally:
+            server_module.db.invoices.delete_many({"organization_id": org_id})
+
+    def test_safe_autopost_scoped_by_org(self):
+        # Le doc d'une AUTRE org portant le même id n'est jamais touché
+        # (org_scope appliqué à l'update).
+        org_a = str(uuid.uuid4())
+        org_b = str(uuid.uuid4())
+        shared_id = f"inv-{uuid.uuid4().hex[:8]}"
+        try:
+            server_module.db.invoices.insert_one(
+                {"id": shared_id, "organization_id": org_a})
+            server_module.db.invoices.insert_one(
+                {"id": shared_id, "organization_id": org_b})
+
+            def _boom():
+                raise RuntimeError("x")
+
+            server_module._safe_autopost(
+                _boom, "invoices", shared_id, {"organization_id": org_a})
+
+            doc_a = server_module.db.invoices.find_one(
+                {"id": shared_id, "organization_id": org_a}, {"_id": 0})
+            doc_b = server_module.db.invoices.find_one(
+                {"id": shared_id, "organization_id": org_b}, {"_id": 0})
+            assert doc_a.get("autopost_error")           # org A marquée
+            assert "autopost_error" not in doc_b         # org B intacte
+        finally:
+            server_module.db.invoices.delete_many(
+                {"organization_id": {"$in": [org_a, org_b]}})
+
+
+class TestResolveLedgerAccount:
+    """Tâche 4 — _resolve_ledger_account : résolution de compte par numéro
+    canonique avec seed lazy déclenché + création à la volée idempotente.
+    """
+
+    def test_resolve_ledger_account_seeds_and_finds(self):
+        # Org qui n'a JAMAIS ouvert le GL (aucun compte) → _resolve_ledger_account
+        # déclenche _ensure_chart_seeded puis retourne le compte 4000.
+        org_id = str(uuid.uuid4())
+        user_id = f"ap-{uuid.uuid4().hex[:8]}"
+        try:
+            assert server_module.db.chart_of_accounts.count_documents(
+                {"organization_id": org_id}) == 0
+            acc = server_module._resolve_ledger_account(org_id, user_id, "4000")
+            assert acc is not None
+            assert acc["account_number"] == "4000"
+            assert acc["organization_id"] == org_id
+            # Le plan a bien été seedé (lazy).
+            assert server_module.db.chart_of_accounts.count_documents(
+                {"organization_id": org_id}) > 0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_resolve_ledger_account_missing_returns_none(self):
+        # Compte absent, sans create_if_missing → None (pas d'exception).
+        org_id, user_id = _make_org()
+        try:
+            assert server_module._resolve_ledger_account(
+                org_id, user_id, "9999") is None
+        finally:
+            _cleanup_org(org_id)
+
+    def test_resolve_ledger_account_creates_on_the_fly(self):
+        # 2120 absent du plan par défaut → créé à la volée (compte système).
+        # Idempotent : un 2e appel ne duplique pas.
+        org_id, user_id = _make_org()
+        try:
+            assert server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "2120"}) is None
+
+            acc = server_module._resolve_ledger_account(
+                org_id, user_id, "2120", create_if_missing=True,
+                kind="liability", name="TVH à payer")
+            assert acc is not None
+            assert acc["account_number"] == "2120"
+            assert acc["account_type"] == "liability"
+            assert acc["name"] == "TVH à payer"
+            assert acc["is_system"] is True
+            assert acc["normal_balance"] == "credit"
+
+            # 2e appel : idempotent, retourne le MÊME compte, aucun doublon.
+            acc2 = server_module._resolve_ledger_account(
+                org_id, user_id, "2120", create_if_missing=True,
+                kind="liability", name="TVH à payer")
+            assert acc2["id"] == acc["id"]
+            assert server_module.db.chart_of_accounts.count_documents(
+                {"organization_id": org_id, "account_number": "2120"}) == 1
+        finally:
+            _cleanup_org(org_id)
+
+    def test_resolve_ledger_account_create_isolated_by_org(self):
+        # Isolation : créer 2120 dans org A ne le crée pas dans org B.
+        org_a, user_a = _make_org()
+        org_b, user_b = _make_org()
+        try:
+            server_module._resolve_ledger_account(
+                org_a, user_a, "2120", create_if_missing=True,
+                kind="liability", name="TVH à payer")
+            assert server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_b, "account_number": "2120"}) is None
+            # org B ne le résout pas non plus (sans create).
+            assert server_module._resolve_ledger_account(
+                org_b, user_b, "2120") is None
+        finally:
+            _cleanup_org(org_a)
+            _cleanup_org(org_b)
