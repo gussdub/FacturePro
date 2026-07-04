@@ -6995,7 +6995,20 @@ def create_mileage_trip(payload: dict, current_user: CurrentUser = Depends(requi
         raise HTTPException(status_code=400, detail="La distance (aller simple) doit être supérieure à 0")
 
     trip_date = (payload.get("trip_date") or "").strip()
-    if len(trip_date) != 10:
+    # Invariant backend : date pure AAAA-MM-JJ calendaire réelle ET canonique
+    # (zéro-paddée, 10 char). On EXIGE une date valide avant l'insert, sinon un
+    # document corrompu (ex. 'abcd-ef-gh', '2026/13/99', '2026-13-99') serait
+    # persisté puis ferait lever _mileage_enrich_trip (int(trip_date[:4])) en 500
+    # APRÈS écriture — orphelin non nettoyable qui empoisonnerait durablement la
+    # liste non filtrée. strptime rejette longueur/format/valeurs hors calendrier,
+    # MAIS il est laxiste sur le zéro-padding ('2026-1-5' passe) ; or la forme
+    # non paddée casserait le tri/cumul YTD par comparaison de chaînes
+    # ('2026-1-5' > '2026-01-05'). On exige donc le round-trip strftime canonique.
+    try:
+        parsed = datetime.strptime(trip_date, "%Y-%m-%d")
+        if parsed.strftime("%Y-%m-%d") != trip_date:
+            raise ValueError("format non canonique (attendu AAAA-MM-JJ zéro-paddé)")
+    except ValueError:
         raise HTTPException(status_code=400, detail="Date de trajet invalide (AAAA-MM-JJ)")
 
     round_trip = bool(payload.get("round_trip", False))

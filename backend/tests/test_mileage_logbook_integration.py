@@ -170,6 +170,51 @@ def test_create_trip_requires_positive_km(auth_headers):
         _cleanup_vehicle(vid)
 
 
+@pytest.mark.parametrize("bad_date", [
+    "abcd-ef-gh",   # 10 char, préfixe non numérique
+    "XXXXXXXXXX",   # 10 char, aucun tiret
+    "2026/13/99",   # 10 char, mauvais séparateur + valeurs hors plage
+    "2026-13-99",   # 10 char, format ok mais mois/jour hors calendrier
+    "2026-02-30",   # 10 char, jour inexistant (février)
+    "2026-1-5",     # trop court
+    "",             # vide
+])
+def test_create_trip_rejects_invalid_date_before_insert(auth_headers, bad_date):
+    # Fix T4 [CALCUL] : le contrat « date pure AAAA-MM-JJ calendaire » est ENFORCÉ
+    # avant l'insert (strptime), pas un simple len()==10. Une date non calendaire
+    # doit renvoyer 400 SANS persister d'orphelin qui ferait ensuite lever 500
+    # _mileage_enrich_trip (int(trip_date[:4])) et empoisonnerait la liste.
+    vid = _dedicated_vehicle(auth_headers, f"CALCUL date {bad_date!r}")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, trip_date=bad_date),
+                        headers=auth_headers)
+        assert r.status_code == 400, r.text
+        # aucun document orphelin n'a été inséré
+        assert db.mileage_trips.count_documents({"vehicle_id": vid}) == 0
+        # et la liste NON filtrée reste accessible (pas de 500 permanent)
+        lst = client.get("/api/mileage/trips", headers=auth_headers)
+        assert lst.status_code == 200, lst.text
+    finally:
+        _cleanup_vehicle(vid)
+
+
+def test_create_trip_accepts_valid_calendar_date(auth_headers):
+    # Complément du fix : une vraie date calendaire limite (29 fév. bissextile) passe.
+    vid = _dedicated_vehicle(auth_headers, "CALCUL date ok")
+    try:
+        r = client.post("/api/mileage/trips",
+                        json=_new_trip_payload(vid, trip_date="2028-02-29"),
+                        headers=auth_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["trip"]["trip_date"] == "2028-02-29"
+        # la liste non filtrée se recharge sans 500
+        lst = client.get("/api/mileage/trips", headers=auth_headers)
+        assert lst.status_code == 200, lst.text
+    finally:
+        _cleanup_vehicle(vid)
+
+
 def test_create_trip_round_trip_doubles_and_allocates(auth_headers):
     # Problème [CALCUL] #1 : allocation = km × taux, exercée via HTTP réel.
     vid = _dedicated_vehicle(auth_headers, "CALCUL AR")
