@@ -1121,7 +1121,9 @@ def test_logbook_pdf_missing_rate_year(auth_headers):
         body = rj.json()
         assert body["current_year_missing"] is True
         assert body["rows"][0]["allocation_cad"] is None
-        assert body["total_allocation_cad"] == 0.0
+        # Année sans taux : total None (« en attente »), jamais 0.0 (qui se lirait
+        # comme « allocation nulle » plutôt que « en attente de confirmation »).
+        assert body["total_allocation_cad"] is None
         assert body["total_km"] == 10.0
         # Le PDF se rend malgré l'absence de taux.
         rp = client.get(
@@ -1134,3 +1136,42 @@ def test_logbook_pdf_missing_rate_year(auth_headers):
         # La saisie d'un trajet sur une année sans taux flague un reminder ARC ;
         # on le nettoie pour ne pas salir le seed org.
         db.mileage_rate_reminders.delete_one({"id": f"{org}:{missing_year}"})
+
+
+def test_logbook_without_vehicle_id_is_per_default_vehicle(auth_headers):
+    # FIX-PASS T11 problème #4 : un carnet ARC est PAR VÉHICULE. Sans vehicle_id,
+    # le carnet (JSON + PDF) ne doit lister QUE le véhicule par défaut — jamais
+    # mélanger les trajets de plusieurs véhicules sous un entête mono-véhicule
+    # (ce qui rendait la colonne « Cumul » non monotone). On crée un trajet sur un
+    # véhicule DÉDIÉ (non-défaut) et on vérifie qu'il n'apparaît pas dans le carnet
+    # non filtré, dont l'entête pointe le véhicule par défaut.
+    _ensure_default = client.get("/api/mileage/vehicles", headers=auth_headers)
+    assert _ensure_default.status_code == 200, _ensure_default.text
+    default_v = next(v for v in _ensure_default.json() if v["is_default"])
+
+    other_vid = _dedicated_vehicle(auth_headers, "T11 autre véhicule")
+    try:
+        # Trajet sur le véhicule dédié, année 2026.
+        client.post("/api/mileage/trips",
+                    json=_new_trip_payload(other_vid, trip_date="2026-05-05",
+                                           one_way_km=300, round_trip=False),
+                    headers=auth_headers)
+        # Carnet JSON SANS vehicle_id → doit cibler le véhicule par défaut,
+        # donc NE PAS contenir le trajet de 300 km du véhicule dédié.
+        r = client.get("/api/mileage/logbook?year=2026", headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["vehicle"] is not None
+        assert body["vehicle"]["id"] == default_v["id"]
+        assert body["vehicle"]["is_default"] is True
+        assert all(row["distance_km"] != 300.0 for row in body["rows"])
+        # Cumul monotone : running_total_km strictement croissant (un seul véhicule).
+        running = [row["running_total_km"] for row in body["rows"]]
+        assert running == sorted(running)
+        # PDF SANS vehicle_id → se rend, entête = véhicule par défaut (pas de 500,
+        # pas de mélange). On valide le magic number PDF.
+        rp = client.get("/api/mileage/logbook/pdf?year=2026", headers=auth_headers)
+        assert rp.status_code == 200, rp.text
+        assert rp.content[:4] == b"%PDF"
+    finally:
+        _cleanup_vehicle(other_vid)

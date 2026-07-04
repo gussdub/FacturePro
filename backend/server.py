@@ -7516,22 +7516,30 @@ def _mileage_logbook_rows(scope, year, vehicle_id):
 @app.get("/api/mileage/logbook")
 def get_mileage_logbook(year: int, vehicle_id: str = None,
                         current_user: CurrentUser = Depends(require_permission("expenses:read"))):
-    """Carnet de route JSON d'une année (org-scopé, filtrable par véhicule).
+    """Carnet de route JSON d'une année (org-scopé, PAR VÉHICULE).
     Chaque ligne : date/départ/arrivée/motif/km/cumul/allocation (conforme ARC).
-    Année sans taux → allocations None + drapeau current_year_missing."""
+    Sans vehicle_id, retombe sur le véhicule par défaut de l'org : un carnet ARC
+    est mono-véhicule, sinon la colonne « Cumul » (tenue par personne+véhicule)
+    sauterait d'un véhicule à l'autre (non monotone).
+    Année sans taux → allocations None + total None + current_year_missing."""
     _ensure_default_vehicle(current_user.organization_id, current_user.id)
     scope = _org_scope(current_user)
-    rows, totals = _mileage_logbook_rows(scope, int(year), vehicle_id)
-    vehicle = None
-    if vehicle_id:
-        vehicle = db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0})
+    vehicle = db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0}) if vehicle_id \
+        else db.mileage_vehicles.find_one({**scope, "is_default": True}, {"_id": 0})
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Véhicule introuvable")
+    rows, totals = _mileage_logbook_rows(scope, int(year), vehicle["id"])
+    current_year_missing = _mileage_rate_for_year(int(year)) is None
+    # Année sans taux : allocation « en attente », pas « nulle » → total None (et non
+    # 0.0) pour lever toute ambiguïté avec un carnet réellement à allocation nulle.
+    total_allocation = None if current_year_missing else totals["total_allocation_cad"]
     return {
         "year": int(year),
         "vehicle": vehicle,
         "rows": rows,
         "total_km": totals["total_km"],
-        "total_allocation_cad": totals["total_allocation_cad"],
-        "current_year_missing": _mileage_rate_for_year(int(year)) is None,
+        "total_allocation_cad": total_allocation,
+        "current_year_missing": current_year_missing,
     }
 
 
@@ -7591,8 +7599,12 @@ def _render_mileage_logbook_pdf(year, vehicle, company, rows, totals) -> bytes:
     story.append(Paragraph(
         f"Total des km {year} : {_t2125_format_money(totals['total_km']).replace(' $', '')} km",
         styles["Normal"]))
+    # Année sans taux : « en attente » plutôt que 0,00 $ (cohérent avec le JSON qui
+    # renvoie total None) — un total à 0 se lirait à tort comme « allocation nulle ».
+    total_alloc_txt = (_t2125_format_money(totals["total_allocation_cad"])
+                       if totals["rates"] else "en attente (taux ARC à confirmer)")
     story.append(Paragraph(
-        f"Total de l'allocation {year} : {_t2125_format_money(totals['total_allocation_cad'])}",
+        f"Total de l'allocation {year} : {total_alloc_txt}",
         styles["Normal"]))
     if totals["rates"]:
         story.append(Paragraph(
@@ -7611,12 +7623,21 @@ def _render_mileage_logbook_pdf(year, vehicle, company, rows, totals) -> bytes:
 def get_mileage_logbook_pdf(year: int, vehicle_id: str = None,
                             current_user: CurrentUser = Depends(require_permission("expenses:read"))):
     """PDF du carnet de route (org-scopé). Sans vehicle_id, retombe sur le
-    véhicule par défaut de l'org. No-store (données fiscales sensibles)."""
+    véhicule par défaut de l'org. No-store (données fiscales sensibles).
+
+    Un carnet ARC est PAR VÉHICULE : le véhicule est résolu AVANT de charger les
+    lignes, puis les lignes sont filtrées sur CE véhicule. On ne mélange jamais
+    les trajets de plusieurs véhicules sous un entête mono-véhicule (sinon la
+    colonne « Cumul », tenue par personne+véhicule, deviendrait non monotone)."""
     _ensure_default_vehicle(current_user.organization_id, current_user.id)
     scope = _org_scope(current_user)
-    rows, totals = _mileage_logbook_rows(scope, int(year), vehicle_id)
     vehicle = db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0}) if vehicle_id \
         else db.mileage_vehicles.find_one({**scope, "is_default": True}, {"_id": 0})
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Véhicule introuvable")
+    # Filtre les lignes sur le véhicule résolu (défaut si aucun fourni) : entête
+    # et tableau décrivent le même véhicule, cumul monotone.
+    rows, totals = _mileage_logbook_rows(scope, int(year), vehicle["id"])
     company = db.company_settings.find_one(scope, {"_id": 0})
     pdf_bytes = _render_mileage_logbook_pdf(int(year), vehicle, company, rows, totals)
     return Response(
