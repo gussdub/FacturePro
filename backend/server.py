@@ -2117,19 +2117,63 @@ def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> lis
 
     `amount` est saisi TTC (taxes incluses ; cohérent avec un reçu scanné,
     feature #8) → `amount_cad` est le décaissement TOTAL. Les `*_paid_cad` sont la
-    part de taxe récupérable DÉJÀ en CAD (create_expense les stocke en CAD). La
-    charge nette est calculée PAR DIFFÉRENCE (amount_cad − Σ taxes_cad) → l'écriture
-    est TOUJOURS équilibrée (Dr charge nette + Dr taxes 12xx == Cr amount_cad),
-    quelle que soit la combinaison de taxes.
+    part de taxe récupérable ; elles sont saisies dans la DEVISE de la dépense
+    (create_expense les stocke VERBATIM, sans conversion, alors qu'il convertit
+    `amount_cad`) → on les reconvertit ici au taux `exchange_rate_to_cad` pour une
+    dépense en devise étrangère, EXACTEMENT comme _build_invoice_revenue_lines le
+    fait pour les taxes de facture (§5.1). No-op pour une dépense CAD (cas dominant,
+    feature #8). La charge nette est calculée PAR DIFFÉRENCE (amount_cad − Σ taxes)
+    → l'écriture est TOUJOURS équilibrée (Dr charge nette + Dr taxes 12xx ==
+    Cr amount_cad), quelle que soit la combinaison de taxes.
+
+    GARDE-FOU [COMPTA] : si les taxes récupérables saisies dépassent le décaissement
+    total (erreur de saisie : on ne récupère jamais plus de taxe que le montant TTC
+    payé), la charge nette par différence deviendrait NÉGATIVE → ligne de débit < 0,
+    illégale, rejetée par _validate_entry_balance (l'écriture ne serait alors PAS
+    postée du tout, seul un autopost_error resterait — trou comptable silencieux).
+    On PLAFONNE donc les taxes à `amount_cad` (proportionnellement si plusieurs) →
+    net = 0, aucune ligne négative, écriture équilibrée et POSTÉE.
 
     Dr 5xxx (charge nette, compte résolu par catégorie, fallback 5900) /
     Dr 1200/1210/1220 (taxes récupérables, si > 0 ; 1220 créé à la volée) /
     Cr 1000 (Encaisse, défaut) OU 2000 (Comptes fournisseurs) selon le flag org
     `expense_default_credit_account` (validé ∈ {"1000","2000"}, défaut "1000")."""
     amount_cad = round(float(expense.get("amount_cad", 0) or 0), 2)
-    gst_cad = round(float(expense.get("gst_paid_cad", 0) or 0), 2)
-    qst_cad = round(float(expense.get("qst_paid_cad", 0) or 0), 2)
-    hst_cad = round(float(expense.get("hst_paid_cad", 0) or 0), 2)
+
+    # Reconversion des taxes en CAD (devise de dépense → CAD), comme pour les taxes
+    # de facture. Divise par le taux uniquement si la dépense est en devise
+    # étrangère et le taux est valide ; sinon prend la valeur telle quelle.
+    rate = expense.get("exchange_rate_to_cad") or 1.0
+    is_foreign = expense.get("currency") not in (None, "", "CAD") and rate > 0
+
+    def _tax_cad(x):
+        x = float(x or 0)
+        return round((x / rate), 2) if is_foreign else round(x, 2)
+
+    gst_cad = _tax_cad(expense.get("gst_paid_cad"))
+    qst_cad = _tax_cad(expense.get("qst_paid_cad"))
+    hst_cad = _tax_cad(expense.get("hst_paid_cad"))
+
+    # [COMPTA] Plafonne les taxes récupérables à amount_cad si leur somme le dépasse
+    # (erreur de saisie). Réduction PROPORTIONNELLE pour préserver la ventilation
+    # relative TPS/TVQ/TVH ; le reliquat d'arrondi va sur la première taxe non nulle
+    # pour que Σ taxes == amount_cad au cent exact (net = 0, équilibre exact).
+    total_tax = round(gst_cad + qst_cad + hst_cad, 2)
+    if total_tax > amount_cad and total_tax > 0:
+        ratio = amount_cad / total_tax
+        gst_cad = round(gst_cad * ratio, 2)
+        qst_cad = round(qst_cad * ratio, 2)
+        hst_cad = round(hst_cad * ratio, 2)
+        drift = round(amount_cad - (gst_cad + qst_cad + hst_cad), 2)
+        # Le reliquat d'arrondi va sur la 1re taxe non nulle → Σ taxes == amount_cad.
+        if drift != 0:
+            if gst_cad > 0:
+                gst_cad = round(gst_cad + drift, 2)
+            elif qst_cad > 0:
+                qst_cad = round(qst_cad + drift, 2)
+            elif hst_cad > 0:
+                hst_cad = round(hst_cad + drift, 2)
+
     net_cad = round(amount_cad - gst_cad - qst_cad - hst_cad, 2)
 
     # Compte de crédit : Encaisse (défaut) ou Comptes fournisseurs selon le flag.
@@ -2144,9 +2188,14 @@ def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> lis
     if expense_acc is None:
         raise ValueError("Compte de charge introuvable (5900 attendu)")
 
-    lines = [
-        {"account_id": expense_acc["id"], "debit": net_cad, "credit": 0.0},
-    ]
+    # La ligne de charge n'est incluse QUE si net_cad > 0. Quand les taxes ont été
+    # plafonnées à amount_cad (net = 0), aucune charge n'est à comptabiliser :
+    # inclure une ligne débit=0/crédit=0 serait rejeté par _validate_entry_balance
+    # (« soit un débit soit un crédit, pas les deux » — 0 des deux côtés).
+    lines = []
+    if net_cad > 0:
+        lines.append({"account_id": expense_acc["id"], "debit": net_cad,
+                      "credit": 0.0})
     if gst_cad > 0:
         lines.append(_autopost_debit(org_id, user_id, "1200", gst_cad))
     if qst_cad > 0:

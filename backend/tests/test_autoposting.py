@@ -1237,3 +1237,99 @@ class TestExpenseChargeMapping:
             assert abs(round(agg[0]["d"], 2) - round(agg[0]["c"], 2)) <= 0.005
         finally:
             _cleanup_org(org_id)
+
+    # -- FIX-PASS Tâche 6 -----------------------------------------------------
+
+    def test_negative_net_taxes_exceed_amount_still_balanced(self):
+        # [COMPTA/FIX] Erreur de saisie : Σ taxes récupérables > amount_cad TTC.
+        # La charge nette par différence deviendrait NÉGATIVE (débit < 0 illégal →
+        # _validate_entry_balance rejetterait l'écriture). Le mapping doit PLAFONNER
+        # les taxes à amount_cad (on ne récupère jamais plus de taxe que le
+        # décaissement total) → net = 0, écriture équilibrée et POSTÉE, pas de
+        # débit négatif, pas de rejet silencieux.
+        org_id, user_id = _make_org()
+        try:
+            # amount_cad 100, taxes 60+55 = 115 > 100 → net brut = -15.
+            exp = self._expense(org_id, category_code="office_expenses",
+                                amount_cad=100.0, gst_paid_cad=60.0,
+                                qst_paid_cad=55.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            assert entry is not None, "l'écriture doit être postée, pas rejetée"
+            _assert_balanced(entry["lines"])
+            # Aucune ligne à débit négatif.
+            for ln in entry["lines"]:
+                assert round(float(ln.get("debit", 0) or 0), 2) >= 0
+                assert round(float(ln.get("credit", 0) or 0), 2) >= 0
+            by = _lines_by_number(org_id, entry["lines"])
+            # Charge nette plafonnée à 0 → aucune ligne de charge 5xxx (une ligne
+            # débit=0 serait rejetée par _validate_entry_balance).
+            assert "5000" not in by
+            # Σ taxes récupérables plafonnée à amount_cad (== crédit).
+            assert round(by["1200"]["debit"] + by["1210"]["debit"], 2) == 100.0
+            assert by["1000"]["credit"] == 100.0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_negative_net_single_tax_capped(self):
+        # [COMPTA/FIX] Une seule taxe > amount_cad → plafonnée à amount_cad, net 0.
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, category_code="office_expenses",
+                                amount_cad=50.0, gst_paid_cad=80.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            assert entry is not None
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            assert "5000" not in by  # net = 0 → pas de ligne de charge
+            assert by["1200"]["debit"] == 50.0
+            assert by["1000"]["credit"] == 50.0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_foreign_currency_expense_taxes_converted_to_cad(self):
+        # [COMPTA/FIX] Dépense en devise étrangère : les taxes sont saisies en
+        # devise native (create_expense ne les convertit PAS, contrairement à
+        # amount_cad). Le mapping doit les reconvertir en CAD via
+        # exchange_rate_to_cad (même convention DIVISION que create_expense et
+        # _build_invoice_revenue_lines : amount_cad = amount / rate), sinon la
+        # ventilation Dr 12xx est fausse.
+        org_id, user_id = _make_org()
+        try:
+            # USD, taux 1.25 (convention codebase : CAD = natif / taux).
+            # amount natif ≈ 156.25 USD → amount_cad = 156.25 / 1.25 = 125.
+            # Taxes en USD : gst 5, qst 9.975 → CAD : 5/1.25=4.00 ; 9.975/1.25=7.98.
+            exp = self._expense(
+                org_id, category_code="office_expenses",
+                currency="USD", exchange_rate_to_cad=1.25,
+                amount_cad=125.0, gst_paid_cad=5.0, qst_paid_cad=9.975)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            assert entry is not None
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            # Taxes reconverties en CAD (÷ 1.25), pas prises verbatim.
+            assert by["1200"]["debit"] == round(5.0 / 1.25, 2)      # 4.00
+            assert by["1210"]["debit"] == round(9.975 / 1.25, 2)    # 7.98
+            # Charge nette = amount_cad − Σ taxes_cad (par différence).
+            assert by["5000"]["debit"] == round(
+                125.0 - round(5.0 / 1.25, 2) - round(9.975 / 1.25, 2), 2)
+            # Crédit = décaissement total CAD.
+            assert by["1000"]["credit"] == 125.0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_cad_expense_taxes_not_converted(self):
+        # [COMPTA/FIX] Non-régression : dépense CAD → taxes prises telles quelles
+        # (aucune conversion). Le fix devise ne doit PAS toucher le cas dominant.
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, category_code="office_expenses",
+                                currency="CAD", exchange_rate_to_cad=1.0,
+                                amount_cad=115.0, gst_paid_cad=5.0,
+                                qst_paid_cad=9.975)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["1200"]["debit"] == 5.0
+            assert by["1210"]["debit"] == round(9.975, 2)  # 9.97
+            assert by["1000"]["credit"] == 115.0
+        finally:
+            _cleanup_org(org_id)
