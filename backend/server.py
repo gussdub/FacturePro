@@ -5,6 +5,7 @@ import httpx
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pymongo import MongoClient, ReturnDocument
+from pymongo.errors import OperationFailure
 import os
 import math
 import jwt
@@ -1851,6 +1852,45 @@ def migrate_general_ledger_v1():
     db.journal_entries.create_index(
         [("organization_id", 1), ("source_type", 1), ("source_id", 1)])
     db.ledger_counters.create_index("id", unique=True)
+
+
+def migrate_general_ledger_autopost_v1(target=None):
+    """Idempotente. Grand livre Phase 2 — auto-posting (feature #12).
+
+    1. Backfill des flags org sur `company_settings` par `setdefault` (jamais
+       d'écrasement d'une valeur existante) :
+       - `autopost_enabled` défaut False (opt-in par org, décision #10) ;
+       - `expense_default_credit_account` défaut "1000" (Encaisse, point ouvert #1).
+    2. Index d'unicité PARTIEL `uniq_live_auto_source` : garantit qu'il n'existe
+       jamais deux écritures AUTO **vivantes** (`entry_type="auto"`,
+       `reverses_entry_id=None`) pour le même `(organization_id, source_type,
+       source_id)`. Les miroirs de contre-passation (`entry_type="reversal"`)
+       sont hors du filtre partiel → autorisés à partager la clé source.
+
+    Rejouable à chaque boot : les `$set` ne ciblent que les docs où le champ
+    manque, et la création d'index est no-op si l'index existe déjà.
+    """
+    target = target if target is not None else db
+    # 1. Flags org — sémantique `setdefault` : pose la valeur SEULEMENT si absente.
+    target.company_settings.update_many(
+        {"autopost_enabled": {"$exists": False}},
+        {"$set": {"autopost_enabled": False}},
+    )
+    target.company_settings.update_many(
+        {"expense_default_credit_account": {"$exists": False}},
+        {"$set": {"expense_default_credit_account": "1000"}},
+    )
+    # 2. Index unique partiel sur le post auto vivant. Tolérant à un index déjà
+    # présent (nom ou spec conflictuels) : on log et on continue sans casser le boot.
+    try:
+        target.journal_entries.create_index(
+            [("organization_id", 1), ("source_type", 1), ("source_id", 1)],
+            unique=True,
+            partialFilterExpression={"entry_type": "auto", "reverses_entry_id": None},
+            name="uniq_live_auto_source",
+        )
+    except OperationFailure as exc:
+        print(f"WARNING: uniq_live_auto_source index skipped ({exc})")
 
 
 # ─── Auth Dependencies ───
@@ -7032,6 +7072,9 @@ def seed_data():
 
         # Migration feature #12 — grand livre (idempotente)
         migrate_general_ledger_v1()
+
+        # Migration feature #12 Phase 2 — auto-posting (idempotente)
+        migrate_general_ledger_autopost_v1(db)
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(

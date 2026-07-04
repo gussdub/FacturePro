@@ -13,6 +13,7 @@ _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
 
 import uuid
 import pytest
+import pymongo
 
 import server as server_module
 
@@ -29,6 +30,7 @@ def _cleanup_org(org_id):
     server_module.db.chart_of_accounts.delete_many({"organization_id": org_id})
     server_module.db.journal_entries.delete_many({"organization_id": org_id})
     server_module.db.ledger_counters.delete_many({"organization_id": org_id})
+    server_module.db.company_settings.delete_many({"organization_id": org_id})
 
 
 def _account_id(org_id, account_number):
@@ -84,5 +86,107 @@ class TestCreateJournalEntryThreadsSource:
                 {"id": entry["id"], "organization_id": org_id}, {"_id": 0})
             assert doc["source_type"] is None
             assert doc["source_id"] is None
+        finally:
+            _cleanup_org(org_id)
+
+
+class TestAutopostMigration:
+    """Tâche 2 — migrate_general_ledger_autopost_v1 : flags org + index partiel."""
+
+    def test_migration_seeds_autopost_settings(self):
+        # Org SANS les champs → gagne les défauts (setdefault, pas d'écrasement).
+        org_missing = str(uuid.uuid4())
+        # Org qui a DÉJÀ autopost_enabled=True → NON écrasée (idempotence).
+        org_preset = str(uuid.uuid4())
+        try:
+            server_module.db.company_settings.insert_one({
+                "id": str(uuid.uuid4()),
+                "organization_id": org_missing,
+                "company_name": "Missing Co",
+            })
+            server_module.db.company_settings.insert_one({
+                "id": str(uuid.uuid4()),
+                "organization_id": org_preset,
+                "company_name": "Preset Co",
+                "autopost_enabled": True,
+                "expense_default_credit_account": "2000",
+            })
+
+            server_module.migrate_general_ledger_autopost_v1(server_module.db)
+
+            seeded = server_module.db.company_settings.find_one(
+                {"organization_id": org_missing}, {"_id": 0})
+            assert seeded["autopost_enabled"] is False
+            assert seeded["expense_default_credit_account"] == "1000"
+
+            preset = server_module.db.company_settings.find_one(
+                {"organization_id": org_preset}, {"_id": 0})
+            # Valeurs pré-existantes préservées — jamais écrasées.
+            assert preset["autopost_enabled"] is True
+            assert preset["expense_default_credit_account"] == "2000"
+        finally:
+            server_module.db.company_settings.delete_many(
+                {"organization_id": {"$in": [org_missing, org_preset]}})
+
+    def test_migration_rejouable(self):
+        # Rejouer la migration deux fois ne change rien la 2e fois (idempotence).
+        org_id = str(uuid.uuid4())
+        try:
+            server_module.db.company_settings.insert_one({
+                "id": str(uuid.uuid4()),
+                "organization_id": org_id,
+                "company_name": "Replay Co",
+            })
+            server_module.migrate_general_ledger_autopost_v1(server_module.db)
+            first = server_module.db.company_settings.find_one(
+                {"organization_id": org_id}, {"_id": 0})
+            # L'utilisateur bascule le flag après la 1re migration.
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+            server_module.migrate_general_ledger_autopost_v1(server_module.db)
+            second = server_module.db.company_settings.find_one(
+                {"organization_id": org_id}, {"_id": 0})
+            assert first["autopost_enabled"] is False
+            # 2e passage NE ré-écrase PAS le choix utilisateur.
+            assert second["autopost_enabled"] is True
+            assert second["expense_default_credit_account"] == "1000"
+        finally:
+            server_module.db.company_settings.delete_many({"organization_id": org_id})
+
+    def test_autopost_unique_partial_index(self):
+        # L'index unique partiel bloque un 2e post AUTO vivant même (org, source),
+        # mais laisse passer un miroir reversal (hors du partialFilterExpression).
+        org_id, user_id = _make_org()
+        # S'assure que l'index existe (créé par la migration au boot ou ci-dessous).
+        server_module.migrate_general_ledger_autopost_v1(server_module.db)
+        try:
+            base = {
+                "organization_id": org_id,
+                "source_type": "invoice",
+                "source_id": "inv-dup",
+                "entry_type": "auto",
+                "reverses_entry_id": None,
+                "reversed_by_entry_id": None,
+            }
+            server_module.db.journal_entries.insert_one(
+                {**base, "id": str(uuid.uuid4()), "entry_number": "JE-D1"})
+            # 2e écriture auto vivante, mêmes clés → DuplicateKeyError.
+            with pytest.raises(pymongo.errors.DuplicateKeyError):
+                server_module.db.journal_entries.insert_one(
+                    {**base, "id": str(uuid.uuid4()), "entry_number": "JE-D2"})
+            # Un miroir reversal avec les mêmes (org, source) est ACCEPTÉ
+            # (entry_type != "auto" → hors du filtre partiel).
+            mirror = {
+                **base,
+                "id": str(uuid.uuid4()),
+                "entry_number": "JE-D3",
+                "entry_type": "reversal",
+                "reverses_entry_id": "some-live-id",
+            }
+            server_module.db.journal_entries.insert_one(mirror)
+            count = server_module.db.journal_entries.count_documents(
+                {"organization_id": org_id, "source_id": "inv-dup"})
+            assert count == 2  # 1 auto vivant + 1 miroir reversal
         finally:
             _cleanup_org(org_id)
