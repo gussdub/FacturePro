@@ -329,14 +329,25 @@ def _pct_delta(previous, current):
 def _aggregate_pnl(scope, start, end, basis):
     """Calcule la portion 'current' (sans comparaison) du P&L pour la période [start, end].
 
-    basis = 'accrual' : status ∈ {sent, paid, overdue}
+    basis = 'accrual' : status ∈ {sent, partial, paid, overdue}
     basis = 'cash'    : status == paid
     `scope` : filtre Mongo qui identifie l'organisation.
+
+    [COMPTA] 'partial' EST un revenu accrual (feature #6 : facture émise, en
+    partie payée) : le revenu est intégralement gagné dès l'émission, le paiement
+    partiel ne fait que réduire le solde à recevoir, pas le revenu. Il DOIT donc
+    entrer dans le P&L accrual — comme dans l'auto-posting (`_INVOICE_NON_DRAFT_
+    STATUSES` inclut 'partial') et dans la réconciliation (filtre `status != draft`
+    → 'partial' inclus). Auparavant 'partial' était ABSENT de ce filtre : le revenu
+    de toute facture partiellement payée disparaissait du P&L (feature #5) et du
+    rapport TPS/TVQ (feature #4), et faisait basculer /api/ledger/reconciliation en
+    `balanced=false` À TORT (P&L=0 mais GL=revenu → diff=−subtotal). On aligne les
+    trois chemins sur 'partial' inclus.
     """
     if basis == "cash":
         status_filter = "paid"
     else:
-        status_filter = {"$in": ["sent", "paid", "overdue"]}
+        status_filter = {"$in": ["sent", "partial", "paid", "overdue"]}
     # [COMPTA] Bornes de période comparées en Python (via _in_period) et NON par
     # un $gte/$lte de CHAÎNES Mongo : issue_date/expense_date sont stockés tantôt
     # en 'YYYY-MM-DD', tantôt en ISO datetime complet (défaut serveur
@@ -7802,9 +7813,13 @@ def _aggregate_sales_tax(scope, start, end):
 
     `scope` : filtre Mongo qui identifie l'organisation (dict ex. {"$or": [...]}).
     """
+    # [COMPTA] 'partial' inclus (accrual) : la taxe est perçue/déclarée dès
+    # l'émission de la facture, pas au paiement. L'exclure sous-comptait la TPS/TVQ
+    # collectée dès qu'une facture était partiellement payée. Aligné sur
+    # _aggregate_pnl et l'auto-posting (statuts non-draft).
     invoices = list(db.invoices.find({
         **scope,
-        "status": {"$in": ["sent", "paid", "overdue"]},
+        "status": {"$in": ["sent", "partial", "paid", "overdue"]},
         "issue_date": {"$gte": start, "$lte": end},
     }, {"_id": 0}))
     expenses = list(db.expenses.find({

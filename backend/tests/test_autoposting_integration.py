@@ -2275,6 +2275,34 @@ class TestAutopostReconciliation:
         finally:
             _cleanup(uid, org_id)
 
+    def test_partial_invoice_stays_balanced(self, client):
+        # [COMPTA] Régression FALSE-IMBALANCE 'partial' (T16 fix-pass, problème #1).
+        # Une facture 'sent' poste le revenu au GL (accrual). Un paiement PARTIEL
+        # la fait passer 'partial' SANS re-poster le revenu (l'écriture reste
+        # vivante). AVANT le fix : _aggregate_pnl filtrait {sent,paid,overdue} et
+        # EXCLUAIT 'partial' → revenue.pnl chutait à 0 alors que revenue.gl gardait
+        # le revenu → diff = −subtotal, balanced=False (FAUSSE ALARME). APRÈS :
+        # 'partial' est dans le filtre accrual → P&L compte le revenu comme le GL.
+        uid, org_id, h = _setup_org(client, "t13partial")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")  # poste le revenu (GL)
+            # Paiement partiel (< total) → statut recalculé à 'partial'.
+            rp = _add_payment(client, h, inv["id"], amount=50.0)
+            assert rp.status_code == 200, rp.text
+            assert rp.json()["status"] == "partial", rp.json()
+
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # Le P&L compte le revenu de la facture partial, comme le GL.
+            assert body["revenue"]["pnl"] > 0, body
+            assert body["revenue"]["gl"] > 0, body
+            assert abs(body["revenue"]["diff"]) < 0.02, body
+            assert body["balanced"] is True, body
+        finally:
+            _cleanup(uid, org_id)
+
     def test_missing_entry_makes_unbalanced(self, client):
         # Facture NON postée (autopost_error) → revenue.diff > 0.02, balanced False.
         uid, org_id, h = _setup_org(client, "t13miss")
