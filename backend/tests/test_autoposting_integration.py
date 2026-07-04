@@ -2377,3 +2377,186 @@ class TestAutopostReconciliation:
             assert body["balanced"] is True, body
         finally:
             _cleanup(uid, org_id)
+
+
+class TestReconciliationDateBoundaryFix:
+    """[COMPTA] Régression FALSE-IMBALANCE (T13 fix-pass, problème #1).
+
+    Symétrie de filtrage de date entre les deux côtés de la réconciliation.
+    Avant le correctif, `_aggregate_pnl` (P&L) filtrait `issue_date`/`expense_date`
+    par comparaison de CHAÎNES Mongo (`{$gte, $lte}` contre des bornes nues
+    'YYYY-MM-DD'), alors que le GL filtre `entry_date` (normalisée en date nue)
+    via `_in_period` (parsing Python). Or `create_invoice`/`create_expense`
+    stockent par défaut `issue_date`/`expense_date = datetime.now().isoformat()`
+    (ISO datetime COMPLET) quand le client ne fournit rien. Une facture émise le
+    DERNIER jour de la période avec `issue_date='2026-03-31T22:00:00+00:00'` était
+    EXCLUE du P&L (`'...T22:00...' > '2026-03-31'` en tri lexical → $lte False)
+    mais INCLUSE dans le GL → diff=-100, balanced=False alors que les livres sont
+    corrects. Le correctif filtre le P&L via `_in_period` (parsing Python), comme
+    le GL et le backfill."""
+
+    def test_invoice_full_iso_issue_date_on_last_day_stays_balanced(self, client):
+        # Facture émise le DERNIER jour de la période avec un issue_date ISO
+        # datetime complet (comme le défaut serveur). P&L ET GL doivent la
+        # compter → balanced=True. AVANT le fix : P&L=0, GL=100, balanced=False.
+        uid, org_id, h = _setup_org(client, "t13iso_inv")
+        try:
+            # Émet la facture avec un issue_date nu, puis on force la forme ISO
+            # datetime complète en fin de journée (reproduit le défaut serveur).
+            inv = _create_draft_invoice(client, h)
+            server_module.db.invoices.update_one(
+                {"id": inv["id"]},
+                {"$set": {"issue_date": "2026-03-31T22:00:00+00:00"}})
+            _set_status(client, h, inv["id"], "sent")  # poste le revenu (GL)
+
+            # Période bornée EXACTEMENT à la date d'émission (borne de fin
+            # d'exercice, cas le plus courant).
+            r = _recon(client, h, start="2026-01-01", end="2026-03-31")
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # Les deux côtés comptent la facture : P&L > 0 ET GL > 0, concordants.
+            assert body["revenue"]["pnl"] > 0, body
+            assert body["revenue"]["gl"] > 0, body
+            assert abs(body["revenue"]["diff"]) < 0.02, body
+            assert body["balanced"] is True, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_full_iso_expense_date_on_last_day_stays_balanced(self, client):
+        # Idem côté dépense : expense_date ISO datetime complet en fin de période.
+        # AVANT le fix : pnl_gross exclut, gl_net/12xx incluent → diff, balanced False.
+        uid, org_id, h = _setup_org(client, "t13iso_exp", autopost_enabled=False)
+        try:
+            # Dépense créée avec un expense_date ISO datetime COMPLET en fin de
+            # période (reproduit le défaut serveur datetime.now().isoformat()).
+            # autopost OFF à la création → GL posté uniquement par le backfill,
+            # qui normalise l'entry_date en date nue (2026-03-31) via _in_period.
+            re = _create_expense(client, h, amount=115.0, gst=5.0, qst=9.98,
+                                 expense_date="2026-03-31T22:00:00+00:00")
+            assert re.status_code == 200, re.text
+            # backfill de la période pour poster la charge dans le GL.
+            rb = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false"
+                "&start=2026-01-01&end=2026-03-31", headers=h)
+            assert rb.status_code == 200, rb.text
+
+            r = _recon(client, h, start="2026-01-01", end="2026-03-31")
+            assert r.status_code == 200, r.text
+            body = r.json()["expenses"]
+            # Le P&L compte la dépense (pnl_gross > 0) tout comme le GL.
+            assert body["pnl_gross"] > 0, body
+            assert body["gl_net"] > 0, body
+            # diff = pnl_gross − (gl_net + recoverable_taxes) ≈ 0.
+            assert abs(body["diff"]) < 0.02, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_custom_12xx_non_tax_asset_not_counted_as_recoverable(self, client):
+        # [COMPTA] Problème #3 : un compte custom asset 1250 (créé hors des
+        # comptes de taxe seedés, sub_type=current_asset, PAS tax_recoverable)
+        # touché par une écriture manuelle NE doit PAS gonfler recoverable_taxes.
+        # Avant le fix, le préfixe '12' l'incluait à tort.
+        uid, org_id, h = _setup_org(client, "t13cust12")
+        try:
+            client.get("/api/ledger/accounts", headers=h)  # seed lazy du plan
+            acc1000 = server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "1000"})
+            # Compte custom 1250 : asset courant NON tax_recoverable.
+            acc1250 = {
+                "id": str(uuid.uuid4()), "organization_id": org_id,
+                "created_by_user_id": uid, "account_number": "1250",
+                "name": "Avances aux employés", "account_type": "asset",
+                "sub_type": "current_asset", "normal_balance": "debit",
+                "is_active": True, "is_system": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            server_module.db.chart_of_accounts.insert_one(dict(acc1250))
+            # Écriture manuelle POSTED : Dr 1250 200 / Cr 1000 200 (avance).
+            server_module.db.journal_entries.insert_one({
+                "id": str(uuid.uuid4()), "organization_id": org_id,
+                "entry_number": "JE-TEST", "entry_date": "2026-06-15",
+                "description": "Avance", "status": "posted",
+                "entry_type": "manual", "reverses_entry_id": None,
+                "reversed_by_entry_id": None,
+                "lines": [
+                    {"account_id": acc1250["id"], "account_number": "1250",
+                     "account_name": "Avances aux employés",
+                     "debit": 200.0, "credit": 0.0},
+                    {"account_id": acc1000["id"], "account_number": "1000",
+                     "account_name": acc1000["name"],
+                     "debit": 0.0, "credit": 200.0},
+                ],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # Le 1250 (non-taxe) ne doit PAS apparaître dans recoverable_taxes.
+            assert body["expenses"]["recoverable_taxes"] == 0.0, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_manual_entry_on_revenue_account_is_flagged_divergence(self, client):
+        # [COMPTA] Problème #2 : comportement de contrôle ASSUMÉ. Une écriture
+        # MANUELLE créditant 4000 (produit) entre dans revenue.gl mais jamais dans
+        # le P&L (qui ne lit que invoices/expenses) → balanced=False. C'est VOULU :
+        # un ajustement manuel sur un compte de résultat EST une divergence à
+        # signaler par rapport aux documents sources.
+        uid, org_id, h = _setup_org(client, "t13manrev")
+        try:
+            client.get("/api/ledger/accounts", headers=h)  # seed lazy du plan
+            acc4000 = server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "4000"})
+            acc1000 = server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "1000"})
+            # Écriture manuelle POSTED : Dr 1000 300 / Cr 4000 300 (ajustement).
+            server_module.db.journal_entries.insert_one({
+                "id": str(uuid.uuid4()), "organization_id": org_id,
+                "entry_number": "JE-MAN", "entry_date": "2026-06-15",
+                "description": "Ajustement manuel produit", "status": "posted",
+                "entry_type": "manual", "reverses_entry_id": None,
+                "reversed_by_entry_id": None,
+                "lines": [
+                    {"account_id": acc1000["id"], "account_number": "1000",
+                     "account_name": acc1000["name"], "debit": 300.0, "credit": 0.0},
+                    {"account_id": acc4000["id"], "account_number": "4000",
+                     "account_name": acc4000["name"], "debit": 0.0, "credit": 300.0},
+                ],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # revenue.gl compte l'ajustement manuel ; le P&L (pnl) l'ignore.
+            assert body["revenue"]["gl"] == 300.0, body
+            assert body["revenue"]["pnl"] == 0, body
+            # Divergence SIGNALÉE (comportement voulu, outil de contrôle).
+            assert body["balanced"] is False, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_hst_1220_still_counted_as_recoverable(self, client):
+        # [COMPTA] Non-régression du fix #3 : la TVH récupérable (compte 1220 créé
+        # à la volée avec sub_type=tax_recoverable) DOIT rester comptée dans
+        # recoverable_taxes. Le fix par sous-type ne doit pas exclure 1220.
+        uid, org_id, h = _setup_org(client, "t13hst")
+        try:
+            re = client.post("/api/expenses", headers=h, json={
+                "amount": 113.0, "currency": "CAD",
+                "category_code": "office_supplies",
+                "gst_paid_cad": 0.0, "qst_paid_cad": 0.0, "hst_paid_cad": 13.0,
+                "description": "Fourniture ON", "expense_date": "2026-06-15",
+            })
+            assert re.status_code == 200, re.text
+            rb = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert rb.status_code == 200, rb.text
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            exp = r.json()["expenses"]
+            # La TVH (1220) figure bien dans les taxes récupérables.
+            assert abs(exp["recoverable_taxes"] - 13.0) < 0.02, exp
+            # équilibre structurel préservé.
+            assert abs(exp["diff"]) < 0.02, exp
+        finally:
+            _cleanup(uid, org_id)

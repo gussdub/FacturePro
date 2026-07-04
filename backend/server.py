@@ -337,12 +337,25 @@ def _aggregate_pnl(scope, start, end, basis):
         status_filter = "paid"
     else:
         status_filter = {"$in": ["sent", "paid", "overdue"]}
+    # [COMPTA] Bornes de période comparées en Python (via _in_period) et NON par
+    # un $gte/$lte de CHAÎNES Mongo : issue_date/expense_date sont stockés tantôt
+    # en 'YYYY-MM-DD', tantôt en ISO datetime complet (défaut serveur
+    # datetime.now().isoformat(), cf. create_invoice/create_expense). Un $lte de
+    # chaînes exclurait à tort une facture émise le DERNIER jour de la période
+    # avec un issue_date='2026-03-31T22:00:00+00:00' ('...T22:00...' > '2026-03-31'
+    # en tri lexical). C'est ce filtrage-là qui faisait diverger le P&L du grand
+    # livre (qui, lui, filtre entry_date via _in_period) et déséquilibrait à tort
+    # /api/ledger/reconciliation (T13). On aligne les deux côtés sur _in_period.
+    _pnl_start = _parse_iso_date(start)
+    _pnl_end = _parse_iso_date(end)
     invoice_filter = {
         **scope,
-        "issue_date": {"$gte": start, "$lte": end},
         "status": status_filter,
     }
-    invoices = list(db.invoices.find(invoice_filter, {"_id": 0}))
+    invoices = [
+        inv for inv in db.invoices.find(invoice_filter, {"_id": 0})
+        if _in_period(inv.get("issue_date"), _pnl_start, _pnl_end)
+    ]
     revenue = 0.0
     for inv in invoices:
         rate = inv.get("exchange_rate_to_cad", 1.0) or 1.0
@@ -352,10 +365,12 @@ def _aggregate_pnl(scope, start, end, basis):
             subtotal = subtotal / float(rate)
         revenue += subtotal
 
-    expenses = list(db.expenses.find({
-        **scope,
-        "expense_date": {"$gte": start, "$lte": end},
-    }, {"_id": 0}))
+    # Même filtrage Python (_in_period) que les factures : tolère expense_date en
+    # ISO datetime complet en fin de borne (cf. commentaire ci-dessus).
+    expenses = [
+        exp for exp in db.expenses.find(scope, {"_id": 0})
+        if _in_period(exp.get("expense_date"), _pnl_start, _pnl_end)
+    ]
 
     by_code = {}
     for e in expenses:
@@ -4394,11 +4409,22 @@ def _in_period(raw_date, start_date, end_date) -> bool:
     `_parse_iso_date` — PAS via une comparaison de chaînes Mongo — car les
     dates métier sont stockées tantôt en 'YYYY-MM-DD' tantôt en ISO datetime
     complet ('2026-12-31T23:00:00') : un `$lte` de chaînes exclurait à tort une
-    date-heure en fin de borne. Une date illisible est exclue (jamais postée)."""
+    date-heure en fin de borne. Une date illisible est exclue (jamais postée).
+
+    Une borne `None` (start_date ou end_date) est traitée comme NON bornée de ce
+    côté : `_aggregate_pnl` peut recevoir un start/end non parsable depuis une
+    query non validée (ex. /api/reports/pnl) — on ne veut PAS lever un TypeError
+    (`None <= date`) qui deviendrait un 500. Sans borne, on n'exclut pas sur ce
+    côté (comportement le plus permissif, aligné sur l'ancien filtre Mongo qui ne
+    plantait pas non plus sur une borne farfelue)."""
     d = _parse_iso_date(raw_date)
     if d is None:
         return False
-    return start_date <= d <= end_date
+    if start_date is not None and d < start_date:
+        return False
+    if end_date is not None and d > end_date:
+        return False
+    return True
 
 
 def _backfill_failure(source_type: str, source_id: str) -> dict:
@@ -4640,6 +4666,45 @@ def _net_by_number_prefix(line_sums: dict, normal_balance: str,
     return round(total, 2)
 
 
+def _net_by_number_set(line_sums: dict, normal_balance: str,
+                       numbers: set) -> float:
+    """Solde NET (orienté par le solde normal) des comptes dont le numéro est dans
+    `numbers` — même orientation/logique NET que `_net_by_number_prefix`, mais sur
+    un ENSEMBLE explicite de numéros plutôt qu'un préfixe.
+
+    [COMPTA] Utilisé pour les taxes récupérables : le préfixe '12' (1200-1299)
+    est PLUS LARGE que l'ensemble réel des comptes tax_recoverable. Un compte
+    custom asset 1250 (créé via POST /api/ledger/accounts, sous-type courant) NON
+    fiscal serait à tort compté dans recoverable_taxes s'il était touché par une
+    écriture manuelle. On passe donc par l'ensemble exact des numéros dont le
+    `sub_type == 'tax_recoverable'` dans le plan comptable de l'org."""
+    total = 0.0
+    for num, slot in line_sums.items():
+        if str(num) not in numbers:
+            continue
+        debit = slot.get("debit", 0.0)
+        credit = slot.get("credit", 0.0)
+        total += (debit - credit) if normal_balance == "debit" else (credit - debit)
+    return round(total, 2)
+
+
+def _tax_recoverable_numbers(org_id: str) -> set:
+    """Ensemble des NUMÉROS de compte dont le `sub_type == 'tax_recoverable'` dans
+    le plan comptable de l'org (1200 TPS / 1210 TVQ / 1220 TVH seedés + tout compte
+    de taxe récupérable créé à la volée dans la plage 1200-1299, cf.
+    `_default_sub_type_for`). Filtré `organization_id` explicite (§10 isolation).
+
+    [COMPTA] Discriminant PRÉCIS des taxes récupérables pour la réconciliation :
+    ne dépend pas du seul préfixe numérique '12' (qui engloberait un compte asset
+    custom non fiscal comme 1250). Les lignes d'écriture ne dénormalisent que
+    `account_number`/`account_name` (_snapshot_lines), pas le sous-type → on résout
+    ici l'ensemble depuis le plan, puis on filtre les sommes GL sur cet ensemble."""
+    cursor = db.chart_of_accounts.find(
+        {"organization_id": org_id, "sub_type": "tax_recoverable"},
+        {"_id": 0, "account_number": 1})
+    return {str(a["account_number"]) for a in cursor if a.get("account_number")}
+
+
 @app.get("/api/ledger/reconciliation")
 def ledger_reconciliation(
     response: Response,
@@ -4662,10 +4727,22 @@ def ledger_reconciliation(
         (revenu posté PAR DIFFÉRENCE, taxes reconverties CAD, §5.1).
       • Dépenses : `expenses.pnl_gross` = Σ `amount_cad` TTC (vue gestion P&L) ;
         `expenses.gl_net` = Σ DÉBITS des charges 5xxx (charge NETTE de taxes) ;
-        `expenses.recoverable_taxes` = Σ DÉBITS des taxes récupérables 12xx
-        (1200 TPS / 1210 TVQ / 1220 TVH). ÉCART STRUCTUREL ASSUMÉ (§9.1, pas un
-        bug) : `gl_net = pnl_gross − recoverable_taxes`. La ligne `diff` l'absorbe :
-        `diff = pnl_gross − (gl_net + recoverable_taxes) ≈ 0`.
+        `expenses.recoverable_taxes` = Σ DÉBITS des comptes de taxe récupérable
+        (sous-type `tax_recoverable` : 1200 TPS / 1210 TVQ / 1220 TVH + créés à la
+        volée). Discriminant par SOUS-TYPE, pas par préfixe '12' — un compte custom
+        asset 1250 non fiscal ne fausse pas le total. ÉCART STRUCTUREL ASSUMÉ
+        (§9.1, pas un bug) : `gl_net = pnl_gross − recoverable_taxes`. La ligne
+        `diff` l'absorbe : `diff = pnl_gross − (gl_net + recoverable_taxes) ≈ 0`.
+
+    [COMPTA — divergence de contrôle ASSUMÉE (problème #2)] Le grand livre agrège
+    TOUTES les écritures postées de l'org, y compris les écritures MANUELLES et
+    d'ouverture. Une écriture manuelle touchant 4000 (produit) ou un 5xxx (charge)
+    entre dans `revenue.gl` / `expenses.gl_net` mais JAMAIS dans le P&L (qui ne lit
+    que `invoices`/`expenses`) → `balanced=false`. C'est VOULU : la réconciliation
+    est un outil de CONTRÔLE ; un ajustement manuel au grand livre EST une
+    divergence à signaler par rapport aux documents sources. Pour équilibrer, passer
+    l'ajustement par une facture/dépense (auto-postée) plutôt que par une écriture
+    manuelle sur un compte de résultat.
 
     `balanced` = |revenue.diff| < 0,02 ET |expenses.diff| < 0,02 (§9.2).
 
@@ -4697,8 +4774,12 @@ def ledger_reconciliation(
     revenue_gl = _net_by_number_prefix(line_sums, "credit", ("4",))
     # Dépenses GL nettes = solde débiteur net des comptes de charges 5xxx.
     expenses_gl_net = _net_by_number_prefix(line_sums, "debit", ("5",))
-    # Taxes récupérables = solde débiteur net des comptes 1200/1210/1220 (12xx).
-    recoverable_taxes = _net_by_number_prefix(line_sums, "debit", ("12",))
+    # Taxes récupérables = solde débiteur net des comptes dont le sous-type est
+    # 'tax_recoverable' (1200 TPS / 1210 TVQ / 1220 TVH + créés à la volée). On
+    # utilise l'ensemble EXACT des numéros tax_recoverable du plan, PAS le préfixe
+    # '12' : un compte custom asset 1250 non fiscal ne doit pas gonfler ce total.
+    recoverable_taxes = _net_by_number_set(
+        line_sums, "debit", _tax_recoverable_numbers(org_id))
 
     revenue_diff = round(revenue_pnl - revenue_gl, 2)
     # diff dépenses = brut P&L − (charge nette GL + taxes récupérables) ≈ 0.
