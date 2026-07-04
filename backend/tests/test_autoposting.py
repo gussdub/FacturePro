@@ -190,3 +190,73 @@ class TestAutopostMigration:
             assert count == 2  # 1 auto vivant + 1 miroir reversal
         finally:
             _cleanup_org(org_id)
+
+    def test_autopost_null_source_does_not_collide(self):
+        # RÉGRESSION (problème #4) : deux écritures auto vivantes SANS source
+        # réelle (source_type/source_id = None) NE doivent PAS entrer en collision
+        # sur l'index partiel. L'ancien filtre {entry_type:auto, reverses_entry_id:
+        # None} matchait la clé (org, null, null) et levait DuplicateKeyError dès le
+        # 2e post auto à source nulle, cassant toute opération métier future qui
+        # poste une écriture auto sans (source_type, source_id). Le filtre durci
+        # (source_type/source_id de type string) les exclut de la contrainte.
+        org_id, user_id = _make_org()
+        server_module.migrate_general_ledger_autopost_v1(server_module.db)
+        try:
+            base = {
+                "organization_id": org_id,
+                "source_type": None,
+                "source_id": None,
+                "entry_type": "auto",
+                "reverses_entry_id": None,
+                "reversed_by_entry_id": None,
+            }
+            server_module.db.journal_entries.insert_one(
+                {**base, "id": str(uuid.uuid4()), "entry_number": "JE-N1"})
+            # 2e écriture auto à source nulle : ACCEPTÉE (hors du filtre partiel).
+            server_module.db.journal_entries.insert_one(
+                {**base, "id": str(uuid.uuid4()), "entry_number": "JE-N2"})
+            count = server_module.db.journal_entries.count_documents(
+                {"organization_id": org_id, "entry_type": "auto",
+                 "source_type": None})
+            assert count == 2  # aucune collision sur les auto à source nulle
+        finally:
+            _cleanup_org(org_id)
+
+    def test_autopost_index_reconciles_stale_filter(self):
+        # RÉGRESSION : si un index homonyme préexiste avec l'ANCIEN filtre partiel
+        # (sans les gardes $type), la migration doit le réconcilier (drop+recreate)
+        # au lieu de le laisser en place. Après migration, deux auto à source nulle
+        # passent (preuve que le nouveau filtre est bien actif).
+        stale_org = str(uuid.uuid4())
+        try:
+            # Force l'ancien index (spec obsolète) directement.
+            try:
+                server_module.db.journal_entries.drop_index("uniq_live_auto_source")
+            except pymongo.errors.OperationFailure:
+                pass
+            server_module.db.journal_entries.create_index(
+                [("organization_id", 1), ("source_type", 1), ("source_id", 1)],
+                unique=True,
+                partialFilterExpression={
+                    "entry_type": "auto", "reverses_entry_id": None},
+                name="uniq_live_auto_source",
+            )
+            # La migration doit détecter la spec obsolète et la remplacer.
+            server_module.migrate_general_ledger_autopost_v1(server_module.db)
+            info = server_module.db.journal_entries.index_information()
+            pfe = dict(info["uniq_live_auto_source"]["partialFilterExpression"])
+            assert pfe.get("source_type") == {"$type": "string"}
+            assert pfe.get("source_id") == {"$type": "string"}
+            # Et fonctionnellement : deux auto à source nulle ne collisionnent plus.
+            base = {
+                "organization_id": stale_org, "source_type": None,
+                "source_id": None, "entry_type": "auto",
+                "reverses_entry_id": None, "reversed_by_entry_id": None,
+            }
+            server_module.db.journal_entries.insert_one(
+                {**base, "id": str(uuid.uuid4()), "entry_number": "JE-S1"})
+            server_module.db.journal_entries.insert_one(
+                {**base, "id": str(uuid.uuid4()), "entry_number": "JE-S2"})
+        finally:
+            server_module.db.journal_entries.delete_many(
+                {"organization_id": stale_org})

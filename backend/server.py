@@ -1867,8 +1867,21 @@ def migrate_general_ledger_autopost_v1(target=None):
        source_id)`. Les miroirs de contre-passation (`entry_type="reversal"`)
        sont hors du filtre partiel → autorisés à partager la clé source.
 
+       ⚠️ Le filtre exige EN PLUS `source_type`/`source_id` de type `string` : un
+       filtre `reverses_entry_id:None` matche aussi les docs où le champ est
+       ABSENT, et deux écritures `auto` à source NULLE (`source_type`/`source_id`
+       à `None`) entreraient en collision sur la clé `(org, null, null)` →
+       `DuplicateKeyError` dès le 2e post auto sans source réelle par org. En
+       restreignant le filtre partiel aux sources de type chaîne, les écritures
+       auto sans source (jamais produites par l'auto-post câblé, mais possibles
+       via `_create_journal_entry(entry_type="auto", ...)` sans source) sont
+       exclues de la contrainte → elles ne cassent jamais l'opération métier,
+       tandis que le garde-fou d'idempotence sur les vraies `(source_type,
+       source_id)` reste pleinement actif.
+
     Rejouable à chaque boot : les `$set` ne ciblent que les docs où le champ
-    manque, et la création d'index est no-op si l'index existe déjà.
+    manque, et la création d'index est réconciliée si sa définition a changé
+    (drop + recreate) — sinon no-op.
     """
     target = target if target is not None else db
     # 1. Flags org — sémantique `setdefault` : pose la valeur SEULEMENT si absente.
@@ -1880,14 +1893,33 @@ def migrate_general_ledger_autopost_v1(target=None):
         {"expense_default_credit_account": {"$exists": False}},
         {"$set": {"expense_default_credit_account": "1000"}},
     )
-    # 2. Index unique partiel sur le post auto vivant. Tolérant à un index déjà
-    # présent (nom ou spec conflictuels) : on log et on continue sans casser le boot.
+    # 2. Index unique partiel sur le post auto vivant AVEC source réelle.
+    index_name = "uniq_live_auto_source"
+    partial_filter = {
+        "entry_type": "auto",
+        "reverses_entry_id": None,
+        "source_type": {"$type": "string"},
+        "source_id": {"$type": "string"},
+    }
+    # Réconciliation : si un index homonyme existe avec un filtre partiel obsolète
+    # (ex. l'ancien filtre sans les gardes `$type`, qui laisse collisionner les
+    # écritures auto à source nulle), on le dépose pour recréer la bonne version.
+    try:
+        existing = target.journal_entries.index_information().get(index_name)
+        if existing is not None:
+            stored_pfe = existing.get("partialFilterExpression")
+            if stored_pfe is None or dict(stored_pfe) != partial_filter:
+                target.journal_entries.drop_index(index_name)
+    except OperationFailure as exc:
+        print(f"WARNING: uniq_live_auto_source index inspection skipped ({exc})")
+    # Création (no-op si un index identique existe déjà). Tolérant à un conflit
+    # résiduel : on log et on continue sans casser le boot.
     try:
         target.journal_entries.create_index(
             [("organization_id", 1), ("source_type", 1), ("source_id", 1)],
             unique=True,
-            partialFilterExpression={"entry_type": "auto", "reverses_entry_id": None},
-            name="uniq_live_auto_source",
+            partialFilterExpression=partial_filter,
+            name=index_name,
         )
     except OperationFailure as exc:
         print(f"WARNING: uniq_live_auto_source index skipped ({exc})")
