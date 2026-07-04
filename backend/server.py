@@ -201,6 +201,36 @@ def _mileage_rate_for_year(year) -> Optional[dict]:
     return MILEAGE_RATES.get(int(year))
 
 
+def _mileage_distance_km(one_way_km: float, round_trip: bool) -> float:
+    """Distance derivee, toujours recalculee backend (la valeur envoyee par le
+    client est ignoree). Aller simple = one_way_km ; aller-retour = doublee."""
+    factor = 2 if round_trip else 1
+    return round(float(one_way_km) * factor, 2)
+
+
+def _mileage_allocation(distance_km, ytd_before, rates, threshold=MILEAGE_RATE_THRESHOLD_KM):
+    """Retourne (amount_cad, breakdown).
+    Applique le taux plein aux km jusqu'a `threshold` cumule, le taux reduit
+    au-dela. Un trajet a cheval sur le seuil est SCINDE.
+
+    Ex: ytd_before=4900, distance=200, threshold=5000, full=0.73, reduced=0.67
+        -> 100 km @ 0.73 + 100 km @ 0.67 = 73.00 + 67.00 = 140.00
+    """
+    distance_km = float(distance_km)
+    ytd_before = float(ytd_before)
+    remaining_full = max(0.0, threshold - ytd_before)
+    km_full = min(distance_km, remaining_full)
+    km_reduced = distance_km - km_full
+    amount = round(km_full * rates["full"] + km_reduced * rates["reduced"], 2)
+    return amount, {
+        "km_full": round(km_full, 2),
+        "rate_full": rates["full"],
+        "km_reduced": round(km_reduced, 2),
+        "rate_reduced": rates["reduced"],
+        "ytd_before": round(ytd_before, 2),
+    }
+
+
 def _find_category(code):
     """Retourne le dict catalogue correspondant à code, ou None si inconnu/vide/None."""
     if not code:
