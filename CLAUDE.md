@@ -95,6 +95,8 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 4. Render redéploie `facturepro-backend` automatiquement (~3 min)
 5. Vercel redéploie `facturepro.ca` automatiquement (~2 min)
 
+> **Trunk-based — le travail vit sur `main`.** Le déploiement suit **exclusivement** `git push origin main` (étape 3). Toute branche de fonctionnalité/fix doit être **fast-forward-mergée dans `main`** avant d'être poussée, sinon le travail reste **bloqué hors du tronc** et n'atteint jamais la prod (piège rencontré au GL Phase 2 T16 : les commits T6→T16 étaient restés sur `fix/gl-p2-t6-compta`, absent de `main` et de `origin`, donc invisibles au workflow de push). Vérifier avant de pousser : `git rev-parse HEAD` == `git rev-parse main`, et `git status` indique `main` en avance sur `origin/main`.
+
 `DEPLOYMENT_GUIDE.md` à la racine est **obsolète** (parle de l'ancienne setup MongoDB Atlas + Render). Ce CLAUDE.md est la source de vérité.
 
 ## Pour Claude
