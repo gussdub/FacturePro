@@ -2146,3 +2146,234 @@ class TestAutopostBackfill:
             assert r.status_code == 403, r.text
         finally:
             _cleanup(uid, org_id)
+
+
+# ─── Tâche 13 — Endpoint réconciliation P&L /api/ledger/reconciliation (§9) ───
+
+
+_RECON_START = "2026-01-01"
+_RECON_END = "2026-12-31"
+
+
+def _recon(client, headers, start=_RECON_START, end=_RECON_END):
+    return client.get(
+        f"/api/ledger/reconciliation?start={start}&end={end}", headers=headers)
+
+
+class TestAutopostReconciliation:
+    """Tâche 13 — /api/ledger/reconciliation (§9).
+
+    Compare le P&L accrual (_aggregate_pnl, feature #5) au grand livre auto :
+    revenus = Σ Cr 4000 ; dépenses (gestion) = Σ Dr 5xxx (net) + Σ Dr 12xx
+    (taxes récupérables). L'écart structurel dépenses (P&L brut TTC vs charge
+    nette GL) est exactement les taxes récupérables (§9.1) — la ligne `diff`
+    l'absorbe. `balanced` bascule à false dès qu'une écriture manque (facture
+    non postée). Orgs jetables + cleanup en finally (ne salit pas le seed)."""
+
+    def test_shape_exact(self, client):
+        # La réponse a exactement la forme spec §9.2.
+        uid, org_id, h = _setup_org(client, "t13shape")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert set(body.keys()) == {"revenue", "expenses", "balanced"}
+            assert set(body["revenue"].keys()) == {"pnl", "gl", "diff"}
+            assert set(body["expenses"].keys()) == {
+                "pnl_gross", "gl_net", "recoverable_taxes", "diff"}
+            assert isinstance(body["balanced"], bool)
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_revenue_gl_matches_pnl_after_backfill(self, client):
+        # Après backfill, revenue.gl (Σ Cr 4000) ≈ revenue.pnl (_aggregate_pnl).
+        uid, org_id, h = _setup_org(client, "t13rev")
+        try:
+            # 2 factures sent QC + 1 facture USD (revenu reconverti CAD).
+            i1 = _create_draft_invoice(client, h)
+            _set_status(client, h, i1["id"], "sent")
+            i2 = _create_draft_invoice(client, h)
+            _set_status(client, h, i2["id"], "sent")
+            # backfill de l'exercice (poste ce qui manque, idempotent).
+            rb = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert rb.status_code == 200, rb.text
+
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            rev = r.json()["revenue"]
+            # concordance revenus < 0.02 (arrondi de conversion, §9.1).
+            assert abs(rev["diff"]) < 0.02, rev
+            assert abs(rev["gl"] - rev["pnl"]) < 0.02, rev
+            assert rev["pnl"] > 0
+
+            # cohérence avec le P&L (feature #5) : même agrégat de revenus.
+            rp = client.get(
+                f"/api/reports/pnl?start={_RECON_START}&end={_RECON_END}"
+                "&basis=accrual", headers=h)
+            assert rp.status_code == 200, rp.text
+            assert abs(rp.json()["revenue"]["current"] - rev["pnl"]) < 0.005
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_diff_is_recoverable_taxes(self, client):
+        # gl_net = pnl_gross − recoverable_taxes ; diff ≈ 0 ; l'écart structurel
+        # est bien les taxes récupérables (§9.1).
+        uid, org_id, h = _setup_org(client, "t13exp")
+        try:
+            # dépense TTC 115 avec TPS 5 + TVQ 9.98 → net GL 100.02, taxes 14.98.
+            _create_expense(client, h, amount=115.0, gst=5.0, qst=9.98)
+            # 2e dépense sans taxe → net == brut.
+            _create_expense(client, h, amount=50.0, gst=0.0, qst=0.0,
+                            description="Sans taxe")
+            rb = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert rb.status_code == 200, rb.text
+
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            exp = r.json()["expenses"]
+            # relation structurelle exacte (au cent près).
+            assert abs(exp["gl_net"]
+                       - (exp["pnl_gross"] - exp["recoverable_taxes"])) < 0.02, exp
+            # diff = pnl_gross − (gl_net + recoverable_taxes) ≈ 0.
+            assert abs(exp["diff"]) < 0.02, exp
+            # l'écart structurel = les taxes récupérables (14.98 attendu).
+            assert abs(exp["recoverable_taxes"] - 14.98) < 0.02, exp
+            # gl_net < pnl_gross (charge nette de taxes).
+            assert exp["gl_net"] < exp["pnl_gross"]
+
+            # cohérence P&L : pnl_gross == total_expenses.gross (feature #5).
+            rp = client.get(
+                f"/api/reports/pnl?start={_RECON_START}&end={_RECON_END}"
+                "&basis=accrual", headers=h)
+            assert rp.status_code == 200, rp.text
+            pnl_gross = rp.json()["total_expenses"]["current"]["gross"]
+            assert abs(pnl_gross - exp["pnl_gross"]) < 0.005
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_balanced_true_when_fully_posted(self, client):
+        # Facture + dépense entièrement postées → balanced == True.
+        uid, org_id, h = _setup_org(client, "t13bal")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            _create_expense(client, h, amount=115.0, gst=5.0, qst=9.98)
+            rb = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert rb.status_code == 200, rb.text
+
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert abs(body["revenue"]["diff"]) < 0.02, body
+            assert abs(body["expenses"]["diff"]) < 0.02, body
+            assert body["balanced"] is True, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_missing_entry_makes_unbalanced(self, client):
+        # Facture NON postée (autopost_error) → revenue.diff > 0.02, balanced False.
+        uid, org_id, h = _setup_org(client, "t13miss")
+        try:
+            # facture sent MAIS sans écriture de revenu (autopost OFF le temps de
+            # la transition) → le P&L la compte, le GL non → déséquilibre.
+            _make_unposted_sent_invoice(client, h, org_id)
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # P&L compte le revenu, GL = 0 → diff > seuil.
+            assert body["revenue"]["pnl"] > 0
+            assert abs(body["revenue"]["diff"]) > 0.02, body
+            assert body["balanced"] is False, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_empty_period_is_balanced(self, client):
+        # Aucune facture/dépense dans la période → tout à 0, balanced True.
+        uid, org_id, h = _setup_org(client, "t13empty")
+        try:
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["revenue"]["pnl"] == 0
+            assert body["revenue"]["gl"] == 0
+            assert body["expenses"]["pnl_gross"] == 0
+            assert body["expenses"]["gl_net"] == 0
+            assert body["expenses"]["recoverable_taxes"] == 0
+            assert body["balanced"] is True, body
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_isolated_by_org(self, client):
+        # Org B ne voit aucune écriture/facture de l'org A (cross-org isolation).
+        uid_a, org_a, ha = _setup_org(client, "t13iso_a")
+        uid_b, org_b, hb = _setup_org(client, "t13iso_b")
+        try:
+            # A poste une facture + une dépense.
+            inv = _create_draft_invoice(client, ha)
+            _set_status(client, ha, inv["id"], "sent")
+            _create_expense(client, ha, amount=115.0, gst=5.0, qst=9.98)
+            client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=ha)
+            # B, vide, ne voit RIEN de A.
+            r = _recon(client, hb)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["revenue"]["pnl"] == 0
+            assert body["revenue"]["gl"] == 0
+            assert body["expenses"]["pnl_gross"] == 0
+            assert body["expenses"]["gl_net"] == 0
+            assert body["balanced"] is True, body
+        finally:
+            _cleanup(uid_a, org_a)
+            _cleanup(uid_b, org_b)
+
+    def test_reconciliation_requires_read_permission(self, client):
+        # La réconciliation exige accounting:read.
+        uid, org_id, h = _setup_org(client, "t13perm")
+        try:
+            server_module.db.users.update_one(
+                {"id": uid}, {"$set": {"role": "viewer"}})
+            server_module.db.organizations.update_one(
+                {"id": org_id},
+                {"$set": {"role_permissions.viewer": []}})
+            r = _recon(client, h)
+            assert r.status_code == 403, r.text
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_missing_params_rejected(self, client):
+        # start/end sont obligatoires (Query required).
+        uid, org_id, h = _setup_org(client, "t13noparam")
+        try:
+            r = client.get("/api/ledger/reconciliation", headers=h)
+            assert r.status_code == 422, r.text
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_reversed_invoice_nets_to_zero(self, client):
+        # [COMPTA] Facture postée (sent) PUIS repassée en draft → revenu
+        # contre-passé (miroir POSTED, net zéro). Le GL somme TOUTES les écritures
+        # postées (origine + miroir), donc revenue.gl revient à 0 ; le P&L exclut
+        # la draft (status ∉ {sent,paid,overdue}) → revenue.pnl = 0 aussi.
+        # balanced reste True : une facture annulée ne gonfle PAS les revenus.
+        uid, org_id, h = _setup_org(client, "t13rev0")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")   # poste le revenu
+            r1 = _recon(client, h)
+            assert r1.json()["revenue"]["gl"] > 0        # revenu comptabilisé
+            _set_status(client, h, inv["id"], "draft")   # contre-passe le revenu
+
+            r = _recon(client, h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["revenue"]["gl"] == 0, body       # net zéro (origine+miroir)
+            assert body["revenue"]["pnl"] == 0, body      # draft exclue du P&L
+            assert body["balanced"] is True, body
+        finally:
+            _cleanup(uid, org_id)

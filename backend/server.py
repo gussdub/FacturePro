@@ -4573,6 +4573,157 @@ def autopost_backfill(
     return {"created": created, "failed": failed, "period": period}
 
 
+# ─── Auto-posting — réconciliation P&L (§9) (T13) ───
+
+# Seuil de concordance (§9.2) : un écart < 0,02 $ est de l'arrondi de conversion
+# (revenu calculé par différence, taxes reconverties CAD), pas une écriture
+# manquante. Au-delà → `balanced=false` (facture non postée / backfill partiel).
+_RECON_THRESHOLD = 0.02
+
+
+def _gl_line_sums_by_number(org_id: str, start_date, end_date) -> dict:
+    """Somme les débits et crédits du GL par NUMÉRO de compte, sur les écritures
+    POSTÉES dont `entry_date ∈ [start_date, end_date]` (inclusif), filtrées org.
+
+    Renvoie `{account_number: {"debit": float, "credit": float}}`.
+
+    [COMPTA] Agrège TOUTES les écritures `status='posted'` (auto vivantes,
+    origines contre-passées ET leurs miroirs — cf. _account_balance §5.2/§5.3) :
+    une contre-passation ramène le net à zéro par construction, donc les factures
+    annulées / repassées en draft ne gonflent pas les revenus. Le filtrage de date
+    passe par `_in_period` (Python) et NON par un `$lte`/`$gte` de chaînes Mongo,
+    car `entry_date` peut être stocké tantôt en 'YYYY-MM-DD' tantôt en ISO datetime
+    complet — cohérent avec le backfill (§7.2) et _in_period.
+
+    `account_number` est dénormalisé sur chaque ligne au snapshot (_snapshot_lines,
+    Phase 1) → agrégation directe par numéro, sans re-résoudre le plan comptable."""
+    sums: dict = {}
+    cursor = db.journal_entries.find(
+        {"organization_id": org_id, "status": "posted"},
+        {"_id": 0, "entry_date": 1, "lines": 1})
+    for entry in cursor:
+        if not _in_period(entry.get("entry_date"), start_date, end_date):
+            continue
+        for ln in entry.get("lines", []):
+            num = ln.get("account_number")
+            if num is None:
+                continue
+            slot = sums.setdefault(num, {"debit": 0.0, "credit": 0.0})
+            slot["debit"] += float(ln.get("debit", 0) or 0)
+            slot["credit"] += float(ln.get("credit", 0) or 0)
+    return sums
+
+
+def _net_by_number_prefix(line_sums: dict, normal_balance: str,
+                          prefixes: tuple) -> float:
+    """Solde NET (orienté par le solde normal) des comptes dont le numéro commence
+    par l'un des `prefixes` — même orientation que `_account_balance` (§5.2/§5.3).
+
+    normal_balance='debit'  → Σ(débits − crédits) : charges 5xxx, taxes récup. 12xx.
+    normal_balance='credit' → Σ(crédits − débits) : produits 4000.
+
+    [COMPTA CRITIQUE] On calcule le NET (pas les crédits/débits bruts d'un seul
+    côté) pour que la CONTRE-PASSATION nette à zéro : une facture repassée en draft
+    a son revenu contre-passé par un miroir POSTED (Dr 4000 = montant d'origine). En
+    net, Σcrédits − Σdébits sur 4000 = 0 → `revenue.gl` revient à 0, exactement
+    comme le P&L exclut la draft. Sommer les crédits bruts gonflerait `revenue.gl`
+    d'une facture annulée (déséquilibre fantôme). Idem charges/taxes contre-passées.
+    Aligné sur l'invariant net-zéro Phase 1 (_account_balance ne retire jamais une
+    écriture contre-passée mais compte son miroir de signe opposé). Arrondi au cent."""
+    total = 0.0
+    for num, slot in line_sums.items():
+        if not str(num).startswith(prefixes):
+            continue
+        debit = slot.get("debit", 0.0)
+        credit = slot.get("credit", 0.0)
+        total += (debit - credit) if normal_balance == "debit" else (credit - debit)
+    return round(total, 2)
+
+
+@app.get("/api/ledger/reconciliation")
+def ledger_reconciliation(
+    response: Response,
+    start: str = Query(...),
+    end: str = Query(...),
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """Réconciliation P&L accrual (feature #5) ↔ grand livre auto (spec §9).
+
+    Outil de contrôle comptable : compare, sur la période [start, end], le P&L
+    calculé DIRECTEMENT sur `invoices`/`expenses` (`_aggregate_pnl`, base exercice)
+    au grand livre calculé sur les ÉCRITURES auto postées. En base exercice, les
+    deux doivent concorder ; une divergence signale une écriture manquante
+    (facture non postée → `autopost_error`, ou backfill partiel).
+
+    Correspondances (§9.1) :
+      • Revenus : `revenue.pnl` = Σ subtotal CAD des factures non-draft
+        (`_aggregate_pnl` accrual) ; `revenue.gl` = Σ CRÉDITS du compte 4000 sur
+        `entry_date ∈ période`. Doivent concorder à l'arrondi de conversion près
+        (revenu posté PAR DIFFÉRENCE, taxes reconverties CAD, §5.1).
+      • Dépenses : `expenses.pnl_gross` = Σ `amount_cad` TTC (vue gestion P&L) ;
+        `expenses.gl_net` = Σ DÉBITS des charges 5xxx (charge NETTE de taxes) ;
+        `expenses.recoverable_taxes` = Σ DÉBITS des taxes récupérables 12xx
+        (1200 TPS / 1210 TVQ / 1220 TVH). ÉCART STRUCTUREL ASSUMÉ (§9.1, pas un
+        bug) : `gl_net = pnl_gross − recoverable_taxes`. La ligne `diff` l'absorbe :
+        `diff = pnl_gross − (gl_net + recoverable_taxes) ≈ 0`.
+
+    `balanced` = |revenue.diff| < 0,02 ET |expenses.diff| < 0,02 (§9.2).
+
+    [ISOLATION] `_aggregate_pnl` reçoit `_org_scope` (couvre les docs legacy sans
+    organization_id) ; le GL est filtré `organization_id` explicite (jamais par
+    source_id seul, §10). Aucun doc d'une autre org n'entre dans les sommes.
+
+    [COMPTA] no-store : chiffre financier jamais mis en cache."""
+    _apply_ledger_no_store(response)
+    org_id = current_user.organization_id
+    scope = _org_scope(current_user)
+
+    start_date = _parse_iso_date(start)
+    end_date = _parse_iso_date(end)
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            400, "start/end doivent être des dates ISO 'YYYY-MM-DD' valides")
+
+    # ── P&L accrual (feature #5), même agrégation/arrondi que /api/reports/pnl. ──
+    pnl = _aggregate_pnl(scope, start, end, basis="accrual")
+    revenue_pnl = round(float(pnl["revenue"]), 2)
+    expenses_pnl_gross = round(float(pnl["total_expenses"]["gross"]), 2)
+
+    # ── Grand livre : soldes NETS par n° de compte sur les écritures postées.
+    # NET (Dr−Cr / Cr−Dr) et non brut → les contre-passations nettent à zéro
+    # (facture annulée / repassée en draft ne gonfle rien, cf. _net_by_number_prefix).
+    line_sums = _gl_line_sums_by_number(org_id, start_date, end_date)
+    # Revenus GL = solde créditeur net du compte de produits 4000.
+    revenue_gl = _net_by_number_prefix(line_sums, "credit", ("4",))
+    # Dépenses GL nettes = solde débiteur net des comptes de charges 5xxx.
+    expenses_gl_net = _net_by_number_prefix(line_sums, "debit", ("5",))
+    # Taxes récupérables = solde débiteur net des comptes 1200/1210/1220 (12xx).
+    recoverable_taxes = _net_by_number_prefix(line_sums, "debit", ("12",))
+
+    revenue_diff = round(revenue_pnl - revenue_gl, 2)
+    # diff dépenses = brut P&L − (charge nette GL + taxes récupérables) ≈ 0.
+    expenses_diff = round(
+        expenses_pnl_gross - (expenses_gl_net + recoverable_taxes), 2)
+
+    balanced = (abs(revenue_diff) < _RECON_THRESHOLD
+                and abs(expenses_diff) < _RECON_THRESHOLD)
+
+    return {
+        "revenue": {
+            "pnl": revenue_pnl,
+            "gl": revenue_gl,
+            "diff": revenue_diff,
+        },
+        "expenses": {
+            "pnl_gross": expenses_pnl_gross,
+            "gl_net": expenses_gl_net,
+            "recoverable_taxes": recoverable_taxes,
+            "diff": expenses_diff,
+        },
+        "balanced": balanced,
+    }
+
+
 # ─── Health ───
 @app.get("/")
 def root():
