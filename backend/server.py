@@ -3496,6 +3496,28 @@ def get_entry(
     return entry
 
 
+def _is_machine_entry(entry: dict) -> bool:
+    """True si l'écriture est générée/gérée par la MACHINE et ne doit JAMAIS
+    être mutée via les 4 endpoints manuels (T10, décision #4 : le document
+    source est le SEUL point de mutation).
+
+    Couvre deux familles :
+    - `entry_type == "auto"` : l'écriture auto vivante d'un doc source.
+    - `source_id is not None` : TOUTE écriture liée à un doc source, y compris
+      le MIROIR interne de contre-passation, qui porte `entry_type="reversal"`
+      (donc échappe au seul filtre 'auto') tout en threadant source_type/
+      source_id (cf. _unpost_source_entry → _reverse_entry_internal). Sans ce
+      2e critère, POST /reverse sur le miroir interne créerait un 2e miroir et
+      RÉ-INSTAURErait un revenu/A-R fantôme sur un doc repassé en 'draft'
+      (FAUX en compta ; l'invariant global Dr=Cr NE le détecte PAS car le 2e
+      miroir est équilibré par construction).
+
+    Sûr pour Phase 1 : les contre-passations MANUELLES (reverse_entry ne
+    threade aucune source) et le bilan d'ouverture (OB-0001, endpoints dédiés)
+    ont source_type/source_id = None → non matchés."""
+    return entry.get("entry_type") == "auto" or entry.get("source_id") is not None
+
+
 @app.post("/api/ledger/entries", status_code=201)
 def create_entry(
     body: dict,
@@ -3528,7 +3550,7 @@ def update_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
-    if entry.get("entry_type") == "auto":
+    if _is_machine_entry(entry):
         raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] == "posted":
         raise HTTPException(400, "Écriture figée — contre-passez-la")
@@ -3561,7 +3583,7 @@ def post_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
-    if entry.get("entry_type") == "auto":
+    if _is_machine_entry(entry):
         raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] != "draft":
         raise HTTPException(400, "Seule une écriture brouillon peut être postée")
@@ -3592,7 +3614,7 @@ def reverse_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
-    if entry.get("entry_type") == "auto":
+    if _is_machine_entry(entry):
         raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] != "posted":
         raise HTTPException(400, "Seule une écriture postée peut être contre-passée")
@@ -3618,7 +3640,7 @@ def delete_entry(
     }, {"_id": 0})
     if not entry:
         raise HTTPException(404, "Écriture introuvable")
-    if entry.get("entry_type") == "auto":
+    if _is_machine_entry(entry):
         raise HTTPException(400, "Écriture générée automatiquement — modifiez le document source")
     if entry["status"] == "posted":
         raise HTTPException(400, "Écriture figée — seuls les brouillons sont supprimables")

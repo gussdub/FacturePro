@@ -1265,3 +1265,110 @@ class TestManualEndpointsLockAutoEntries:
                 f"net non nul après contre-passation interne: {net}"
         finally:
             _cleanup(uid, org_id)
+
+    # ── FIX T10 : le verrou couvre AUSSI le miroir interne (entry_type='reversal'
+    #    mais porteur de source_type/source_id). Sans quoi contre-passer le miroir
+    #    ré-instaure un revenu fantôme sur une facture 'draft' (FAUX en compta). ──
+
+    def _internal_reversal_mirror(self, client, org_id, h):
+        """Crée l'auto-posting d'une facture (draft→sent) PUIS le miroir interne
+        (sent→draft). Renvoie (inv_id, mirror_entry) : le miroir porte
+        entry_type='reversal', source_type='invoice', source_id=inv_id."""
+        inv_id, _origin = _posted_auto_entry(client, org_id, h)
+        r = _set_status(client, h, inv_id, "draft")
+        assert r.status_code == 200, r.text
+        alle = _all_invoice_entries(org_id, inv_id)
+        mirrors = [e for e in alle if e["entry_type"] == "reversal"]
+        assert len(mirrors) == 1, "1 miroir interne attendu"
+        mirror = mirrors[0]
+        assert mirror["source_type"] == "invoice"
+        assert mirror["source_id"] == inv_id
+        assert mirror["status"] == "posted"
+        return inv_id, mirror
+
+    def test_reverse_on_internal_mirror_returns_400(self, client):
+        # Vecteur [COMPTA] : contre-passer manuellement le miroir interne (type
+        # 'reversal', porteur de source_id) ré-instaurerait le revenu fantôme sur
+        # une facture 'draft'. Le verrou durci (source_id is not None) doit le
+        # refuser (400) et laisser le net à zéro.
+        uid, org_id, h = _setup_org(client, "t10mirrev")
+        try:
+            inv_id, mirror = self._internal_reversal_mirror(client, org_id, h)
+            r = client.post(f"/api/ledger/entries/{mirror['id']}/reverse",
+                            headers=h, json={})
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == _AUTO_LOCK_MSG
+            # Aucun 2e miroir : toujours 2 écritures (origine + 1 miroir), net nul.
+            alle = _all_invoice_entries(org_id, inv_id)
+            assert len(alle) == 2, "pas de 2e miroir créé"
+            net = _net_by_number(org_id, alle)
+            assert all(abs(v) <= 0.005 for v in net.values()), \
+                f"revenu fantôme ré-instauré sur facture draft: {net}"
+            # Le miroir n'a PAS gagné de reversed_by_entry_id.
+            fresh = server_module.db.journal_entries.find_one(
+                {"id": mirror["id"], "organization_id": org_id}, {"_id": 0})
+            assert fresh.get("reversed_by_entry_id") is None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_put_post_delete_on_internal_mirror_return_400(self, client):
+        # Les 3 autres endpoints manuels doivent aussi refuser le miroir interne
+        # porteur de source_id (write machine liée à un doc source).
+        uid, org_id, h = _setup_org(client, "t10mirmut")
+        try:
+            _inv_id, mirror = self._internal_reversal_mirror(client, org_id, h)
+            mid = mirror["id"]
+            r_put = client.put(f"/api/ledger/entries/{mid}", headers=h,
+                               json={"description": "hack"})
+            assert r_put.status_code == 400, r_put.text
+            assert r_put.json()["detail"] == _AUTO_LOCK_MSG
+            r_post = client.post(f"/api/ledger/entries/{mid}/post", headers=h)
+            assert r_post.status_code == 400, r_post.text
+            assert r_post.json()["detail"] == _AUTO_LOCK_MSG
+            r_del = client.delete(f"/api/ledger/entries/{mid}", headers=h)
+            assert r_del.status_code == 400, r_del.text
+            assert r_del.json()["detail"] == _AUTO_LOCK_MSG
+            # Miroir intact.
+            assert server_module.db.journal_entries.find_one(
+                {"id": mid, "organization_id": org_id}) is not None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_manual_reversal_of_manual_entry_not_blocked_by_fix(self, client):
+        # Non-régression du FIX : la contre-passation MANUELLE d'une écriture
+        # manuelle postée (source_type/source_id = None) doit rester 201. Le
+        # verrou durci ne matche que 'auto' OU source_id non nul — un manuel n'a
+        # NI l'un NI l'autre. Puis le miroir manuel produit (source=None) reste
+        # lui-même contre-passable (chaîne de corrections manuelles Phase 1).
+        uid, org_id, h = _setup_org(client, "t10manrev")
+        try:
+            cash = _account_id_by_number(client, h, "1000")
+            capital = _account_id_by_number(client, h, "3100")
+            r = client.post("/api/ledger/entries", headers=h, json={
+                "entry_date": "2026-06-15", "description": "Manuel à contre-passer",
+                "status": "draft",
+                "lines": [
+                    {"account_id": cash, "debit": 60.0, "credit": 0.0},
+                    {"account_id": capital, "debit": 0.0, "credit": 60.0},
+                ],
+            })
+            assert r.status_code == 201, r.text
+            eid = r.json()["id"]
+            assert r.json()["entry_type"] == "manual"
+            assert r.json()["source_id"] is None
+            r_post = client.post(f"/api/ledger/entries/{eid}/post", headers=h)
+            assert r_post.status_code == 200, r_post.text
+            # Reverse manuel → 201 (PAS bloqué par le verrou durci).
+            r_rev = client.post(f"/api/ledger/entries/{eid}/reverse", headers=h,
+                                json={})
+            assert r_rev.status_code == 201, r_rev.text
+            mirror = r_rev.json()
+            assert mirror["reverses_entry_id"] == eid
+            assert mirror["source_type"] is None
+            assert mirror["source_id"] is None
+            # Le miroir manuel (source=None) est lui-même contre-passable.
+            r_rev2 = client.post(
+                f"/api/ledger/entries/{mirror['id']}/reverse", headers=h, json={})
+            assert r_rev2.status_code == 201, r_rev2.text
+        finally:
+            _cleanup(uid, org_id)
