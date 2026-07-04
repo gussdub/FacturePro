@@ -151,7 +151,7 @@ function AccountsTab() {
   );
 }
 
-function JournalTab() {
+export function JournalTab() {
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('accounting:write');
   const [entries, setEntries] = useState([]);
@@ -382,7 +382,7 @@ function JournalTab() {
 // ─── Onglet Auto-posting (feature #12 Phase 2, §12) ───
 // Gaté `accounting:read` au niveau route (App.js). Les actions d'écriture
 // (toggle, sélecteur, réparation, backfill) sont gatées `accounting:write`.
-function AutopostTab() {
+export function AutopostTab() {
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('accounting:write');
 
