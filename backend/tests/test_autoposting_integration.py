@@ -9,6 +9,7 @@ process, aucun serveur externe sur :8000 n'est nécessaire.
 
 Tâche 7 — Hook PUT /api/invoices/{id}/status (table de transitions §5.5).
 Tâche 8 — Hooks paiements POST/DELETE (§5.2 encaissement / §5.3 contre-passation).
+Tâche 9 — Hook DELETE facture (cascade §5.4) + dépenses POST/PUT/DELETE (§5.6/§5.7).
 """
 import sys as _sys
 import os as _os
@@ -68,6 +69,7 @@ def _cleanup(uid, org_id):
     server_module.db.journal_entries.delete_many({"organization_id": org_id})
     server_module.db.ledger_counters.delete_many({"organization_id": org_id})
     server_module.db.invoices.delete_many({"organization_id": org_id})
+    server_module.db.expenses.delete_many({"organization_id": org_id})
 
 
 def _create_draft_invoice(client, headers, total=115.0, province="QC"):
@@ -135,6 +137,36 @@ def _all_payment_entries(org_id, payment_id):
         "organization_id": org_id, "source_type": "invoice_payment",
         "source_id": payment_id,
     }, {"_id": 0}))
+
+
+def _live_expense_entries(org_id, expense_id):
+    """Écritures auto VIVANTES pour source=expense/expense_id."""
+    return list(server_module.db.journal_entries.find({
+        "organization_id": org_id, "source_type": "expense",
+        "source_id": expense_id, "entry_type": "auto",
+        "reversed_by_entry_id": None,
+    }, {"_id": 0}))
+
+
+def _all_expense_entries(org_id, expense_id):
+    """TOUTES les écritures auto (vivantes + miroirs) source=expense/expense_id."""
+    return list(server_module.db.journal_entries.find({
+        "organization_id": org_id, "source_type": "expense",
+        "source_id": expense_id,
+    }, {"_id": 0}))
+
+
+def _create_expense(client, headers, amount=115.0, category_code="office_supplies",
+                    gst=5.0, qst=9.98, description="Fournitures",
+                    expense_date="2026-06-15"):
+    """Crée une dépense CAD via POST /api/expenses."""
+    body = {
+        "amount": amount, "currency": "CAD",
+        "category_code": category_code,
+        "gst_paid_cad": gst, "qst_paid_cad": qst,
+        "description": description, "expense_date": expense_date,
+    }
+    return client.post("/api/expenses", headers=headers, json=body)
 
 
 def _num_by_id(org_id, account_id):
@@ -495,5 +527,311 @@ class TestPaymentHooks:
             res = server_module._autopost_payment(org_id, uid, inv, payment)
             assert res is None, "amount 0 → no-op (None)"
             assert _all_payment_entries(org_id, payment["id"]) == []
+        finally:
+            _cleanup(uid, org_id)
+
+
+class TestDeleteInvoiceCascade:
+    """Tâche 9 — DELETE /api/invoices/{id} contre-passe le revenu ET tous les
+    encaissements liés en cascade (§5.4)."""
+
+    def test_delete_invoice_reverses_revenue_and_all_payments(self, client):
+        # Facture sent + 2 paiements → DELETE → revenu ET les 2 encaissements
+        # contre-passés ; net zéro global ; aucun vivant restant.
+        uid, org_id, h = _setup_org(client, "s")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            r1 = _add_payment(client, h, inv["id"], 30.0)
+            pid1 = r1.json()["payments"][0]["id"]
+            r2 = _add_payment(client, h, inv["id"], 20.0)
+            pid2 = r2.json()["payments"][1]["id"]
+            assert len(_live_payment_entries(org_id, pid1)) == 1
+            assert len(_live_payment_entries(org_id, pid2)) == 1
+
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+
+            # plus aucune écriture vivante : ni revenu ni encaissements
+            assert _live_revenue_entries(org_id, inv["id"]) == [], \
+                "le revenu doit être contre-passé"
+            assert _live_payment_entries(org_id, pid1) == []
+            assert _live_payment_entries(org_id, pid2) == []
+            # net zéro global (origine + miroir) sur chaque source
+            inv_net = _net_by_number(org_id, _all_invoice_entries(org_id, inv["id"]))
+            assert inv_net.get("1100", 0.0) == 0.0
+            assert inv_net.get("4000", 0.0) == 0.0
+            for pid in (pid1, pid2):
+                pnet = _net_by_number(org_id, _all_payment_entries(org_id, pid))
+                assert pnet.get("1000", 0.0) == 0.0
+                assert pnet.get("1100", 0.0) == 0.0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_invoice_no_payments_reverses_revenue(self, client):
+        # Facture sent sans paiement → DELETE → revenu seul contre-passé.
+        uid, org_id, h = _setup_org(client, "t")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+            net = _net_by_number(org_id, _all_invoice_entries(org_id, inv["id"]))
+            assert net.get("1100", 0.0) == 0.0
+            assert net.get("4000", 0.0) == 0.0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_invoice_disabled_posts_nothing(self, client):
+        # autopost_enabled=False → DELETE facture ne touche à aucune écriture.
+        uid, org_id, h = _setup_org(client, "u", autopost_enabled=False)
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            assert _all_invoice_entries(org_id, inv["id"]) == []
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+            assert _all_invoice_entries(org_id, inv["id"]) == []
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_invoice_still_works_business(self, client):
+        # Non-régression métier : la facture est bien supprimée (404 ensuite).
+        uid, org_id, h = _setup_org(client, "v")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+            r2 = client.get(f"/api/invoices/{inv['id']}", headers=h)
+            assert r2.status_code == 404
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_invoice_autopost_failure_does_not_break_delete(
+            self, client, monkeypatch):
+        # Robustesse (§6.3) : si la cascade de contre-passation lève, le DELETE
+        # reste 200 et la facture est bien supprimée.
+        uid, org_id, h = _setup_org(client, "w")
+        try:
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+
+            def _boom(*a, **k):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(server_module, "_unpost_source_entry", _boom)
+            r = client.delete(f"/api/invoices/{inv['id']}", headers=h)
+            assert r.status_code == 200, r.text
+            r2 = client.get(f"/api/invoices/{inv['id']}", headers=h)
+            assert r2.status_code == 404
+        finally:
+            _cleanup(uid, org_id)
+
+
+class TestExpenseHooks:
+    """Tâche 9 — POST/PUT/DELETE /api/expenses câblent la charge (§5.6/§5.7)."""
+
+    def test_post_expense_posts_charge(self, client):
+        # POST expense → 1 écriture équilibrée : charge nette + taxes 12xx + crédit.
+        uid, org_id, h = _setup_org(client, "x")
+        try:
+            r = _create_expense(client, h, amount=114.98, gst=5.0, qst=9.98)
+            assert r.status_code == 200, r.text
+            exp = r.json()
+            live = _live_expense_entries(org_id, exp["id"])
+            assert len(live) == 1, "1 écriture de dépense vivante attendue"
+            entry = live[0]
+            _assert_balanced_entry(org_id, entry)
+            net = _net_by_number(org_id, [entry])
+            # charge nette = 114.98 − 5.00 − 9.98 = 100.00 sur 5010 (office_supplies)
+            assert net.get("5010") == 100.0, "charge nette par différence"
+            assert net.get("1200") == 5.0, "Dr TPS 1200"
+            assert net.get("1210") == 9.98, "Dr TVQ 1210"
+            assert net.get("1000") == -114.98, "Cr Encaisse = amount_cad total"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_post_expense_unmapped_category_falls_back_5900(self, client):
+        # Catégorie non mappée → charge sur 5900 (Dépenses diverses).
+        uid, org_id, h = _setup_org(client, "y")
+        try:
+            r = _create_expense(client, h, amount=50.0, category_code="other",
+                                gst=0.0, qst=0.0)
+            assert r.status_code == 200, r.text
+            exp = r.json()
+            live = _live_expense_entries(org_id, exp["id"])
+            assert len(live) == 1
+            _assert_balanced_entry(org_id, live[0])
+            net = _net_by_number(org_id, live)
+            assert net.get("5900") == 50.0, "fallback 5900"
+            assert net.get("1000") == -50.0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_put_expense_amount_change_regenerates(self, client):
+        # PUT expense avec amount modifié → ancienne contre-passée + nouvelle
+        # postée ; 1 seul vivant ; somme (ancien + miroir) = 0 sur les comptes
+        # de l'ancienne écriture ; le vivant reflète le nouveau montant.
+        uid, org_id, h = _setup_org(client, "z")
+        try:
+            r = _create_expense(client, h, amount=114.98, gst=5.0, qst=9.98)
+            exp = r.json()
+            assert len(_live_expense_entries(org_id, exp["id"])) == 1
+            # PUT : nouveau montant (sans taxes pour simplifier la lecture nette)
+            r2 = client.put(f"/api/expenses/{exp['id']}", headers=h, json={
+                "amount": 200.0, "gst_paid_cad": 0.0, "qst_paid_cad": 0.0,
+            })
+            assert r2.status_code == 200, r2.text
+            live = _live_expense_entries(org_id, exp["id"])
+            assert len(live) == 1, "1 seul vivant après régénération"
+            _assert_balanced_entry(org_id, live[0])
+            # le vivant reflète le nouveau montant : charge nette 200 sur 5010
+            live_net = _net_by_number(org_id, live)
+            assert live_net.get("5010") == 200.0
+            assert live_net.get("1000") == -200.0
+            # net GLOBAL (toutes les écritures : ancienne + miroir + nouvelle) =
+            # exactement la nouvelle écriture (l'ancienne + son miroir s'annulent).
+            all_net = _net_by_number(org_id, _all_expense_entries(org_id, exp["id"]))
+            assert all_net.get("5010") == 200.0
+            assert all_net.get("1000") == -200.0
+            # les taxes de l'ancienne écriture (1200/1210) sont net zéro
+            assert all_net.get("1200", 0.0) == 0.0
+            assert all_net.get("1210", 0.0) == 0.0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_delete_expense_reverses(self, client):
+        # DELETE expense → contre-passée, net zéro, aucun vivant.
+        uid, org_id, h = _setup_org(client, "aa")
+        try:
+            r = _create_expense(client, h, amount=114.98, gst=5.0, qst=9.98)
+            exp = r.json()
+            assert len(_live_expense_entries(org_id, exp["id"])) == 1
+            r2 = client.delete(f"/api/expenses/{exp['id']}", headers=h)
+            assert r2.status_code == 200, r2.text
+            assert _live_expense_entries(org_id, exp["id"]) == []
+            net = _net_by_number(org_id, _all_expense_entries(org_id, exp["id"]))
+            assert net.get("5010", 0.0) == 0.0
+            assert net.get("1200", 0.0) == 0.0
+            assert net.get("1210", 0.0) == 0.0
+            assert net.get("1000", 0.0) == 0.0
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_credit_account_flag_ap(self, client):
+        # expense_default_credit_account="2000" → crédit sur Comptes fournisseurs.
+        uid, org_id, h = _setup_org(client, "ab")
+        try:
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"expense_default_credit_account": "2000"}})
+            r = _create_expense(client, h, amount=50.0, category_code="other",
+                                gst=0.0, qst=0.0)
+            exp = r.json()
+            live = _live_expense_entries(org_id, exp["id"])
+            assert len(live) == 1
+            net = _net_by_number(org_id, live)
+            assert net.get("2000") == -50.0, "crédit sur 2000 (A/P)"
+            assert net.get("1000") is None, "aucun crédit Encaisse"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_autopost_disabled_posts_nothing(self, client):
+        # autopost_enabled=False → aucun des hooks dépense ne crée d'écriture.
+        uid, org_id, h = _setup_org(client, "ac", autopost_enabled=False)
+        try:
+            r = _create_expense(client, h, amount=114.98, gst=5.0, qst=9.98)
+            exp = r.json()
+            assert _all_expense_entries(org_id, exp["id"]) == [], \
+                "POST : autopost_enabled=False → aucune écriture"
+            r2 = client.put(f"/api/expenses/{exp['id']}", headers=h,
+                            json={"amount": 200.0})
+            assert r2.status_code == 200, r2.text
+            assert _all_expense_entries(org_id, exp["id"]) == [], \
+                "PUT : autopost_enabled=False → aucune écriture"
+            r3 = client.delete(f"/api/expenses/{exp['id']}", headers=h)
+            assert r3.status_code == 200, r3.text
+            assert _all_expense_entries(org_id, exp["id"]) == [], \
+                "DELETE : autopost_enabled=False → aucune écriture"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_hooks_still_work_business(self, client):
+        # Non-régression métier : POST/PUT/DELETE dépense fonctionnent (données
+        # métier intactes) même avec les hooks branchés.
+        uid, org_id, h = _setup_org(client, "ad")
+        try:
+            r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            assert r.status_code == 200, r.text
+            exp = r.json()
+            assert exp["amount"] == 100.0
+            r2 = client.put(f"/api/expenses/{exp['id']}", headers=h,
+                            json={"amount": 150.0})
+            assert r2.status_code == 200, r2.text
+            assert r2.json()["amount"] == 150.0
+            r3 = client.delete(f"/api/expenses/{exp['id']}", headers=h)
+            assert r3.status_code == 200, r3.text
+            # la dépense est bien physiquement supprimée (pas de GET single, on
+            # vérifie via la DB org-scopée).
+            assert server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}) is None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_post_autopost_failure_does_not_break_post(
+            self, client, monkeypatch):
+        # Robustesse (§6.3) : si l'auto-post lève, le POST reste 200 et la
+        # dépense est bien enregistrée.
+        uid, org_id, h = _setup_org(client, "ae")
+        try:
+            def _boom(*a, **k):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(server_module, "_autopost_expense", _boom)
+            r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            assert r.status_code == 200, r.text
+            exp = r.json()
+            assert exp["amount"] == 100.0
+            doc = server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+            assert "boom" not in doc["autopost_error"]
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_delete_autopost_failure_does_not_break_delete(
+            self, client, monkeypatch):
+        # Robustesse : si la contre-passation lève au DELETE, la dépense est
+        # quand même supprimée (op métier prioritaire).
+        uid, org_id, h = _setup_org(client, "af")
+        try:
+            r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            exp = r.json()
+
+            def _boom(*a, **k):
+                raise RuntimeError("boom")
+
+            monkeypatch.setattr(server_module, "_unpost_source_entry", _boom)
+            r2 = client.delete(f"/api/expenses/{exp['id']}", headers=h)
+            assert r2.status_code == 200, r2.text
+            assert server_module.db.expenses.find_one(
+                {"id": exp["id"], "organization_id": org_id}) is None
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_expense_idempotent_double_post(self, client):
+        # Idempotence : appeler le mapping 2× avec le même expense.id → 1 vivant.
+        uid, org_id, h = _setup_org(client, "ag")
+        try:
+            r = _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            exp = r.json()
+            assert len(_live_expense_entries(org_id, exp["id"])) == 1
+            server_module._autopost_expense(org_id, uid, exp)
+            assert len(_live_expense_entries(org_id, exp["id"])) == 1, \
+                "2 appels avec le même expense.id → 1 écriture"
         finally:
             _cleanup(uid, org_id)

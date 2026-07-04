@@ -4553,6 +4553,28 @@ def delete_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_
             btx_id = payment.get("bank_transaction_id")
             if btx_id:
                 _release_bank_transaction(btx_id, _org_scope(current_user))
+    # [GL P2 — T9] Cascade de contre-passation auto (§5.4), opt-in par org. On
+    # contre-passe le revenu de la facture ET chaque encaissement lié (miroirs
+    # POSTED, net zéro garanti). Fait AVANT le delete_one : l'écriture n'a pas
+    # besoin de la facture (elle porte source_type/source_id), mais on lit ici la
+    # liste des paiements du doc encore présent. On ne supprime JAMAIS
+    # physiquement une écriture postée (immuabilité Phase 1) — uniquement
+    # contre-passation. _safe_autopost avale toute erreur → DELETE reste 200.
+    if inv:
+        org_id = current_user.organization_id
+        settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+        if settings.get("autopost_enabled"):
+            _ensure_chart_seeded(org_id, current_user.id)
+            payment_ids = [p.get("id") for p in (inv.get("payments", []) or [])
+                           if p.get("id")]
+
+            def _cascade_unpost():
+                _unpost_source_entry(org_id, current_user.id, "invoice", invoice_id)
+                for pid in payment_ids:
+                    _unpost_source_entry(org_id, current_user.id, "invoice_payment", pid)
+
+            _safe_autopost(_cascade_unpost, "invoices", invoice_id,
+                           {"organization_id": org_id})
     result = db.invoices.delete_one({"id": invoice_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Invoice not found")
@@ -5655,6 +5677,17 @@ def create_expense(expense_data: dict, current_user: CurrentUser = Depends(requi
     }
     doc["receipt_file_id"] = expense_data.get("receipt_file_id")
     db.expenses.insert_one(doc)
+    # [GL P2 — T9] Écriture de charge auto (§5.6), opt-in par org : Dr 5xxx (charge
+    # nette par différence) + Dr taxes 12xx récupérables + Cr 1000/2000. Idempotent
+    # (_post_source_entry no-op si vivant). _safe_autopost avale toute erreur → le
+    # POST reste 200 et la dépense est enregistrée quand même.
+    org_id = current_user.organization_id
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        _safe_autopost(
+            lambda: _autopost_expense(org_id, current_user.id, doc),
+            "expenses", doc["id"], {"organization_id": org_id})
     return clean_doc(doc)
 
 @app.put("/api/expenses/{expense_id}")
@@ -5697,7 +5730,25 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
                 {"$set": {"is_deleted": True}},
             )
     db.expenses.update_one({"id": expense_id, **_org_scope(current_user)}, {"$set": expense_data})
-    return clean_doc(db.expenses.find_one({"id": expense_id}, {"_id": 0}))
+    updated = db.expenses.find_one({"id": expense_id, **_org_scope(current_user)}, {"_id": 0})
+    # [GL P2 — T9] Régénération auto de l'écriture de charge (§5.7), opt-in par org.
+    # On CONTRE-PASSE l'ancienne écriture (miroir POSTED — l'origine reste posted,
+    # net zéro) puis on POSTE la nouvelle avec les valeurs à jour. Toujours
+    # régénérer (pas d'optimisation de court-circuit pour cette version) : le plus
+    # sûr, l'idempotence est garantie par le tandem unpost/post. _safe_autopost
+    # avale toute erreur → le PUT reste 200.
+    org_id = current_user.organization_id
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if settings.get("autopost_enabled") and updated is not None:
+        _ensure_chart_seeded(org_id, current_user.id)
+
+        def _regenerate():
+            _unpost_source_entry(org_id, current_user.id, "expense", expense_id)
+            _autopost_expense(org_id, current_user.id, updated)
+
+        _safe_autopost(_regenerate, "expenses", expense_id,
+                       {"organization_id": org_id})
+    return clean_doc(updated)
 
 @app.put("/api/expenses/{expense_id}/status")
 def update_expense_status(expense_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
@@ -5717,6 +5768,19 @@ def delete_expense(expense_id: str, current_user: CurrentUser = Depends(require_
             {"id": exp["receipt_file_id"], **_org_scope(current_user)},
             {"$set": {"is_deleted": True}},
         )
+    # [GL P2 — T9] Contre-passation auto de l'écriture de charge (§5.7), opt-in par
+    # org. Miroir POSTED (net zéro sur 5xxx/12xx/1000|2000) ; l'écriture d'origine
+    # reste posted (immuabilité Phase 1 — jamais de suppression physique).
+    # _safe_autopost avale toute erreur → le DELETE reste 200.
+    if exp:
+        org_id = current_user.organization_id
+        settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+        if settings.get("autopost_enabled"):
+            _ensure_chart_seeded(org_id, current_user.id)
+            _safe_autopost(
+                lambda: _unpost_source_entry(
+                    org_id, current_user.id, "expense", expense_id),
+                "expenses", expense_id, {"organization_id": org_id})
     result = db.expenses.delete_one({"id": expense_id, **_org_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Expense not found")
