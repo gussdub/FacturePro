@@ -1691,6 +1691,391 @@ class TestAutopostStatusRepair:
         finally:
             _cleanup(uid, org_id)
 
+
+# ─── Tâche 12 — Endpoint backfill (dry-run + apply, idempotent) (§7) ───
+
+
+def _count_org_entries(org_id):
+    """Nombre TOTAL d'écritures en base pour l'org (toutes, vivantes + miroirs)."""
+    return server_module.db.journal_entries.count_documents(
+        {"organization_id": org_id})
+
+
+def _count_live_auto_entries(org_id, source_type):
+    """Nombre d'écritures auto VIVANTES d'un type de source dans l'org."""
+    return server_module.db.journal_entries.count_documents({
+        "organization_id": org_id, "source_type": source_type,
+        "entry_type": "auto", "reversed_by_entry_id": None,
+    })
+
+
+def _make_unposted_sent_invoice(client, headers, org_id, total_hint=115.0):
+    """Crée une facture 'sent' SANS écriture auto (autopost désactivé le temps
+    de la transition, puis rétabli). Renvoie le dict facture."""
+    server_module.db.company_settings.update_one(
+        {"organization_id": org_id}, {"$set": {"autopost_enabled": False}})
+    inv = _create_draft_invoice(client, headers, total=total_hint)
+    r = _set_status(client, headers, inv["id"], "sent")
+    assert r.status_code == 200, r.text
+    server_module.db.company_settings.update_one(
+        {"organization_id": org_id}, {"$set": {"autopost_enabled": True}})
+    return inv  # dict de la facture (contient 'id') — le PUT /status ne renvoie que {message}
+
+
+class TestAutopostBackfill:
+    """Tâche 12 — /api/ledger/autopost/backfill (§7, point ouvert #2).
+
+    Dry-run n'écrit rien et renvoie les comptes par type + skipped_existing +
+    période. Apply poste dans l'ordre facture→paiements→dépenses, protégé par
+    _safe_autopost, renvoie créés/échecs ; idempotent (relance = 0 nouveau).
+    Filtré par org et par période ; indépendant de autopost_enabled."""
+
+    def test_dry_run_counts_without_writing(self, client):
+        # 3 factures sent (dont 1 déjà postée), leurs paiements, 2 dépenses.
+        # dry_run=true ne crée AUCUNE écriture et compte les would_create.
+        uid, org_id, h = _setup_org(client, "t12dry")
+        try:
+            # inv1 : déjà postée (draft→sent avec autopost ON) + 1 paiement posté.
+            inv1 = _create_draft_invoice(client, h)
+            _set_status(client, h, inv1["id"], "sent")
+            _add_payment(client, h, inv1["id"], 50.0, date="2026-06-20")
+            # inv2, inv3 : sent SANS écriture (à backfiller), chacune 1 paiement.
+            inv2 = _make_unposted_sent_invoice(client, h, org_id)
+            inv3 = _make_unposted_sent_invoice(client, h, org_id)
+            # 2 dépenses : créées avec autopost OFF → non postées (à backfiller).
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            _create_expense(client, h, amount=50.0, gst=0.0, qst=0.0)
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+            # ajoute un paiement à inv2 et inv3 (POST payment sur une facture non
+            # postée poste QUAND MÊME le paiement — mais le revenu reste absent).
+            # Pour garder inv2/inv3 vraiment "non postées", on ajoute leurs
+            # paiements avec autopost OFF.
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            _add_payment(client, h, inv2["id"], 40.0, date="2026-06-21")
+            _add_payment(client, h, inv3["id"], 30.0, date="2026-06-22")
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            before = _count_org_entries(org_id)
+            r = client.post(
+                "/api/ledger/autopost/backfill?dry_run=true", headers=h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # shape complet.
+            assert set(body.keys()) == {
+                "would_create", "skipped_existing", "period"}
+            wc = body["would_create"]
+            assert set(wc.keys()) == {"invoice", "invoice_payment", "expense"}
+            # inv2, inv3 à créer ; inv1 déjà postée → skipped.
+            assert wc["invoice"] == 2, "inv2+inv3 à backfiller (inv1 déjà postée)"
+            # paiements : inv2+inv3 (leur paiement non posté) ; inv1 déjà posté.
+            assert wc["invoice_payment"] == 2
+            # 2 dépenses non postées.
+            assert wc["expense"] == 2
+            # skipped_existing : inv1 (revenu) + son paiement = 2 sources.
+            assert body["skipped_existing"] == 2
+            # période présente.
+            assert set(body["period"].keys()) == {"start", "end"}
+            # RIEN écrit.
+            assert _count_org_entries(org_id) == before
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_apply_posts_in_order(self, client):
+        # dry_run=false poste réellement dans l'ordre facture→paiements→dépenses
+        # et renvoie {created, failed, period}.
+        uid, org_id, h = _setup_org(client, "t12apply")
+        try:
+            inv = _make_unposted_sent_invoice(client, h, org_id)
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            _add_payment(client, h, inv["id"], 50.0, date="2026-06-20")
+            _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            r = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert set(body.keys()) == {"created", "failed", "period"}
+            created = body["created"]
+            assert created["invoice"] == 1
+            assert created["invoice_payment"] == 1
+            assert created["expense"] == 1
+            assert body["failed"] == []
+            # écritures vivantes bel et bien créées.
+            assert _count_live_auto_entries(org_id, "invoice") == 1
+            assert _count_live_auto_entries(org_id, "invoice_payment") == 1
+            assert _count_live_auto_entries(org_id, "expense") == 1
+            # [COMPTA] chaque écriture backfillée est ÉQUILIBRÉE (Dr==Cr).
+            for e in _live_revenue_entries(org_id, inv["id"]):
+                _assert_balanced_entry(org_id, e)
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_apply_is_idempotent(self, client):
+        # Relancer dry_run=false → created tout à 0, skipped = tous, aucun doublon.
+        uid, org_id, h = _setup_org(client, "t12idem")
+        try:
+            inv = _make_unposted_sent_invoice(client, h, org_id)
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            _add_payment(client, h, inv["id"], 50.0, date="2026-06-20")
+            _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            r1 = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert r1.status_code == 200, r1.text
+            after_first = _count_org_entries(org_id)
+
+            # 2e apply → rien créé.
+            r2 = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert r2.status_code == 200, r2.text
+            body2 = r2.json()
+            assert body2["created"] == {
+                "invoice": 0, "invoice_payment": 0, "expense": 0}
+            assert body2["failed"] == []
+            # aucune écriture supplémentaire.
+            assert _count_org_entries(org_id) == after_first
+
+            # dry-run après apply → tous en skipped_existing, would_create nul.
+            r3 = client.post(
+                "/api/ledger/autopost/backfill?dry_run=true", headers=h)
+            body3 = r3.json()
+            assert body3["would_create"] == {
+                "invoice": 0, "invoice_payment": 0, "expense": 0}
+            assert body3["skipped_existing"] == 3  # inv + paiement + dépense
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_period_default_is_current_fiscal_year(self, client):
+        # Sans start/end, la période = l'exercice courant (_current_fiscal_year).
+        uid, org_id, h = _setup_org(client, "t12fy")
+        try:
+            r = client.post(
+                "/api/ledger/autopost/backfill?dry_run=true", headers=h)
+            assert r.status_code == 200, r.text
+            period = r.json()["period"]
+            from datetime import date as _date
+            settings = server_module.db.company_settings.find_one(
+                {"organization_id": org_id}, {"_id": 0}) or {}
+            fy_start, fy_end = server_module._current_fiscal_year(
+                _date.today(),
+                settings.get("fiscal_year_end_month", 12),
+                settings.get("fiscal_year_end_day", 31))
+            assert period["start"] == fy_start.isoformat()
+            assert period["end"] == fy_end.isoformat()
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_period_excludes_out_of_bounds(self, client):
+        # Une période explicite exclut les docs hors bornes.
+        uid, org_id, h = _setup_org(client, "t12bounds")
+        try:
+            # facture DANS la période (issue_date 2026-06-15).
+            inv_in = _make_unposted_sent_invoice(client, h, org_id)
+            # facture HORS période : issue_date 2020-01-01.
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            r = client.post("/api/invoices", headers=h, json={
+                "client_id": "",
+                "invoice_number": f"OLD-{uuid.uuid4().hex[:6]}",
+                "issue_date": "2020-01-01",
+                "province": "QC",
+                "items": [{"description": "Old", "quantity": 1,
+                           "unit_price": 100.0}],
+            })
+            assert r.status_code == 200, r.text
+            inv_old = r.json()
+            _set_status(client, h, inv_old["id"], "sent")
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            # backfill borné à juin 2026 → n'inclut QUE inv_in.
+            r = client.post(
+                "/api/ledger/autopost/backfill"
+                "?dry_run=true&start=2026-06-01&end=2026-06-30", headers=h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["would_create"]["invoice"] == 1, \
+                "seule la facture dans la période est comptée"
+            assert body["period"]["start"] == "2026-06-01"
+            assert body["period"]["end"] == "2026-06-30"
+
+            # applique la période bornée → seule inv_in est postée.
+            r_ap = client.post(
+                "/api/ledger/autopost/backfill"
+                "?dry_run=false&start=2026-06-01&end=2026-06-30", headers=h)
+            assert r_ap.status_code == 200, r_ap.text
+            assert r_ap.json()["created"]["invoice"] == 1
+            assert len(_live_revenue_entries(org_id, inv_in["id"])) == 1
+            assert _live_revenue_entries(org_id, inv_old["id"]) == []
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_backfill_isolated_by_org(self, client):
+        # Le backfill de A n'inclut AUCUN doc de B.
+        uidA, orgA, hA = _setup_org(client, "t12isoa")
+        uidB, orgB, hB = _setup_org(client, "t12isob")
+        try:
+            # Org A : 1 facture sent non postée.
+            _make_unposted_sent_invoice(client, hA, orgA)
+            # Org B : 3 factures sent non postées + 2 dépenses (bruit).
+            for _ in range(3):
+                _make_unposted_sent_invoice(client, hB, orgB)
+            server_module.db.company_settings.update_one(
+                {"organization_id": orgB},
+                {"$set": {"autopost_enabled": False}})
+            _create_expense(client, hB, amount=10.0, gst=0.0, qst=0.0)
+            _create_expense(client, hB, amount=20.0, gst=0.0, qst=0.0)
+            server_module.db.company_settings.update_one(
+                {"organization_id": orgB},
+                {"$set": {"autopost_enabled": True}})
+
+            before_B = _count_org_entries(orgB)
+            r = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=hA)
+            assert r.status_code == 200, r.text
+            created = r.json()["created"]
+            assert created["invoice"] == 1, "A ne backfille QUE sa facture"
+            assert created["expense"] == 0
+            # aucune écriture créée côté B.
+            assert _count_org_entries(orgB) == before_B
+        finally:
+            _cleanup(uidA, orgA)
+            _cleanup(uidB, orgB)
+
+    def test_backfill_ignores_autopost_enabled_flag(self, client):
+        # Le backfill NE dépend PAS de autopost_enabled (action one-shot explicite).
+        uid, org_id, h = _setup_org(client, "t12flag", autopost_enabled=False)
+        try:
+            # autopost OFF pour toute la vie de l'org : la facture sent n'a pas
+            # d'écriture, la dépense non plus.
+            inv = _create_draft_invoice(client, h)
+            _set_status(client, h, inv["id"], "sent")
+            _create_expense(client, h, amount=100.0, gst=0.0, qst=0.0)
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+
+            # backfill apply malgré le flag OFF → poste quand même.
+            r = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert r.status_code == 200, r.text
+            created = r.json()["created"]
+            assert created["invoice"] == 1
+            assert created["expense"] == 1
+            assert len(_live_revenue_entries(org_id, inv["id"])) == 1
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_backfill_reports_failures(self, client):
+        # Un post qui échoue est listé dans failed (protégé par _safe_autopost),
+        # sans faire échouer l'endpoint (200).
+        uid, org_id, h = _setup_org(client, "t12fail")
+        try:
+            inv = _make_unposted_sent_invoice(client, h, org_id)
+            mp = pytest.MonkeyPatch()
+            try:
+                def _boom(*a, **k):
+                    raise RuntimeError("4000 introuvable")
+                mp.setattr(server_module, "_autopost_invoice_revenue", _boom)
+                r = client.post(
+                    "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+                assert r.status_code == 200, r.text
+                body = r.json()
+                assert body["created"]["invoice"] == 0
+                assert inv["id"] in body["failed"]
+            finally:
+                mp.undo()
+            # autopost_error posé sur la facture (diagnostic via /status).
+            doc = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" in doc
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_dry_run_default_true(self, client):
+        # Sans query dry_run, le défaut est true → aucune écriture.
+        uid, org_id, h = _setup_org(client, "t12def")
+        try:
+            inv = _make_unposted_sent_invoice(client, h, org_id)
+            before = _count_org_entries(org_id)
+            r = client.post("/api/ledger/autopost/backfill", headers=h)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # défaut dry-run → shape de preview (would_create), rien écrit.
+            assert "would_create" in body
+            assert body["would_create"]["invoice"] == 1
+            assert _count_org_entries(org_id) == before
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_backfill_foreign_currency_invoice_is_balanced(self, client):
+        # [COMPTA] Une facture USD backfillée produit une écriture ÉQUILIBRÉE :
+        # les taxes (devise facture) sont reconverties CAD via exchange_rate_to_cad,
+        # le Dr 1100 == total_cad, Σ Dr == Σ Cr. Sinon déséquilibre sur étrangère.
+        uid, org_id, h = _setup_org(client, "t12usd")
+        try:
+            inv_id = str(uuid.uuid4())
+            # Facture USD : montants en USD, total_cad = source de vérité en CAD.
+            # rate 1.35 : gst 5 USD → 3.70 CAD, tvq 9.98 USD → 7.39 CAD.
+            server_module.db.invoices.insert_one({
+                "id": inv_id, "organization_id": org_id, "user_id": uid,
+                "invoice_number": f"USD-{uuid.uuid4().hex[:6]}",
+                "status": "sent", "issue_date": "2026-06-15",
+                "currency": "USD", "exchange_rate_to_cad": 1.35,
+                "gst_amount": 5.0, "pst_amount": 9.98, "hst_amount": 0.0,
+                "total_cad": round(114.98 / 1.35, 2),  # total facture (USD) → CAD
+                "payments": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            r = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert r.status_code == 200, r.text
+            assert r.json()["created"]["invoice"] == 1
+            entries = _live_revenue_entries(org_id, inv_id)
+            assert len(entries) == 1
+            e = entries[0]
+            # écriture équilibrée malgré la conversion.
+            _assert_balanced_entry(org_id, e)
+            # Dr 1100 == total_cad (source de vérité du total en CAD).
+            net = _net_by_number(org_id, entries)
+            assert abs(net.get("1100", 0) - round(114.98 / 1.35, 2)) <= 0.01
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_backfill_requires_write_permission(self, client):
+        # Le backfill exige accounting:write.
+        uid, org_id, h = _setup_org(client, "t12perm")
+        try:
+            server_module.db.users.update_one(
+                {"id": uid}, {"$set": {"role": "viewer"}})
+            server_module.db.organizations.update_one(
+                {"id": org_id},
+                {"$set": {"role_permissions.viewer": ["accounting:read"]}})
+            r = client.post("/api/ledger/autopost/backfill", headers=h)
+            assert r.status_code == 403, r.text
+        finally:
+            _cleanup(uid, org_id)
+
     def test_repair_requires_write_permission(self, client):
         # Le repair exige accounting:write.
         uid, org_id, h = _setup_org(client, "t11permw")

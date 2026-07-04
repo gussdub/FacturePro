@@ -4356,6 +4356,188 @@ def autopost_repair(
     return {"repaired": repaired, "still_failing": still_failing}
 
 
+# ─── Auto-posting — backfill (dry-run + apply, idempotent), §7 (T12) ───
+
+def _resolve_backfill_period(org_id: str, start: Optional[str],
+                             end: Optional[str]) -> tuple:
+    """Résout la période du backfill (§7.2). Renvoie (start_iso, end_iso, start_date, end_date).
+
+    Sans start/end explicites → l'exercice financier COURANT via
+    `_current_fiscal_year` (mêmes fiscal_year_end_month/day que le bilan Phase 1,
+    cohérence de période). Une borne fournie est validée comme date ISO
+    calendaire ; une borne absente retombe sur l'exercice courant pour cette
+    borne. Les bornes sont INCLUSIVES."""
+    from datetime import date as _date
+    settings = db.company_settings.find_one(
+        {"organization_id": org_id}, {"_id": 0}) or {}
+    fy_start, fy_end = _current_fiscal_year(
+        _date.today(),
+        settings.get("fiscal_year_end_month", 12),
+        settings.get("fiscal_year_end_day", 31))
+    start_date = _parse_iso_date(start) if start else fy_start
+    end_date = _parse_iso_date(end) if end else fy_end
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            400, "start/end doivent être des dates ISO 'YYYY-MM-DD' valides")
+    return start_date.isoformat(), end_date.isoformat(), start_date, end_date
+
+
+def _in_period(raw_date, start_date, end_date) -> bool:
+    """Vrai si la date brute (str 'YYYY-MM-DD' ou ISO datetime) tombe dans
+    [start_date, end_date] inclusif. Le filtrage se fait en Python via
+    `_parse_iso_date` — PAS via une comparaison de chaînes Mongo — car les
+    dates métier sont stockées tantôt en 'YYYY-MM-DD' tantôt en ISO datetime
+    complet ('2026-12-31T23:00:00') : un `$lte` de chaînes exclurait à tort une
+    date-heure en fin de borne. Une date illisible est exclue (jamais postée)."""
+    d = _parse_iso_date(raw_date)
+    if d is None:
+        return False
+    return start_date <= d <= end_date
+
+
+@app.post("/api/ledger/autopost/backfill")
+def autopost_backfill(
+    response: Response,
+    dry_run: bool = True,
+    start: str = None,
+    end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:write")),
+):
+    """Backfill des écritures auto pour les docs déjà existants (spec §7).
+
+    Génère les écritures manquantes des factures/paiements/dépenses d'une période,
+    avec un aperçu (`dry_run=true`, DÉFAUT) avant application (`dry_run=false`).
+
+    [COMPTA] Ordre d'application : facture (revenu) → paiements (encaissements) →
+    dépenses (charges), le même que le déroulé naturel des hooks métier. Chaque
+    post passe par `_safe_autopost` : une source qui échoue est isolée (posée en
+    `autopost_error`, listée dans `failed`) sans faire échouer les autres ni
+    l'endpoint (toujours 200, décision #6).
+
+    [COMPTA] IDEMPOTENCE : `_post_source_entry` no-op si une écriture VIVANTE
+    existe déjà (`_find_live_source_entry`) → relancer le backfill ne crée JAMAIS
+    de doublon. Les docs déjà postés sont comptés dans `skipped_existing` (dry-run)
+    et n'apparaissent pas dans `created` (apply). L'équilibre Dr=Cr de chaque
+    écriture est garanti par les mappings réutilisés (revenu §5.1 taxes reconverties
+    CAD, encaissement §5.2, charge §5.6) — le backfill n'introduit aucune écriture.
+
+    [ISOLATION] Tous les docs sont scopés par l'org du caller (`_org_scope`, qui
+    couvre aussi les docs legacy sans organization_id). Les écritures sont posées
+    avec l'org courante → aucun doc d'une autre org n'est jamais touché.
+
+    Le backfill NE dépend PAS de `autopost_enabled` : c'est une action explicite
+    one-shot (décision #8), distincte des hooks métier opt-in (décision #10) et de
+    /repair (aligné sur le flag). Deux portes assumées : le flag garde les hooks
+    automatiques ; le backfill est un déclenchement manuel délibéré.
+
+    Période (§7.2) : `start`/`end` ISO inclusifs ; défaut = exercice courant
+    (`_current_fiscal_year`). Factures sur `issue_date`, paiements sur `date`,
+    dépenses sur `expense_date` — filtrées en Python (`_in_period`) pour tolérer
+    les dates stockées en ISO datetime complet.
+
+    [COMPTA] no-store : action comptable jamais mise en cache."""
+    _apply_ledger_no_store(response)
+    org_id = current_user.organization_id
+    scope = _org_scope(current_user)
+    org_scope = {"organization_id": org_id}
+    start_iso, end_iso, start_date, end_date = _resolve_backfill_period(
+        org_id, start, end)
+    period = {"start": start_iso, "end": end_iso}
+
+    # Docs candidats, bornés org + période. Les factures draft n'ont pas de revenu
+    # à comptabiliser (accrual §5.5) → exclues comme dans /status.
+    invoices = [
+        inv for inv in db.invoices.find(
+            {**scope, "status": {"$ne": "draft"}}, {"_id": 0})
+        if _in_period(inv.get("issue_date"), start_date, end_date)
+    ]
+    expenses = [
+        exp for exp in db.expenses.find(scope, {"_id": 0})
+        if _in_period(exp.get("expense_date"), start_date, end_date)
+    ]
+
+    # ── DRY-RUN : compte sans écrire (via _find_live_source_entry). ──
+    if dry_run:
+        would_inv = would_pay = would_exp = 0
+        skipped = 0
+        for inv in invoices:
+            if _find_live_source_entry(org_id, "invoice", inv["id"]):
+                skipped += 1
+            else:
+                would_inv += 1
+            for pay in (inv.get("payments") or []):
+                if not _in_period(pay.get("date"), start_date, end_date):
+                    continue
+                if round(float(pay.get("amount_cad", 0) or 0), 2) <= 0:
+                    continue  # paiement nul : aucun encaissement à comptabiliser
+                if _find_live_source_entry(
+                        org_id, "invoice_payment", pay["id"]):
+                    skipped += 1
+                else:
+                    would_pay += 1
+        for exp in expenses:
+            if _find_live_source_entry(org_id, "expense", exp["id"]):
+                skipped += 1
+            else:
+                would_exp += 1
+        return {
+            "would_create": {
+                "invoice": would_inv,
+                "invoice_payment": would_pay,
+                "expense": would_exp,
+            },
+            "skipped_existing": skipped,
+            "period": period,
+        }
+
+    # ── APPLY : poste réellement, ordre facture → paiements → dépenses. ──
+    _ensure_chart_seeded(org_id, current_user.id)
+    created = {"invoice": 0, "invoice_payment": 0, "expense": 0}
+    failed = []
+
+    for inv in invoices:
+        if not _find_live_source_entry(org_id, "invoice", inv["id"]):
+            _safe_autopost(
+                lambda inv=inv: _autopost_invoice_revenue(
+                    org_id, current_user.id, inv),
+                "invoices", inv["id"], org_scope,
+                legacy_user_id=current_user.id)
+            if _find_live_source_entry(org_id, "invoice", inv["id"]):
+                created["invoice"] += 1
+            else:
+                failed.append(inv["id"])
+        # Paiements de la facture (encaissements §5.2), dans la période.
+        for pay in (inv.get("payments") or []):
+            if not _in_period(pay.get("date"), start_date, end_date):
+                continue
+            if round(float(pay.get("amount_cad", 0) or 0), 2) <= 0:
+                continue  # no-op : aucun encaissement (aligné _autopost_payment)
+            if _find_live_source_entry(org_id, "invoice_payment", pay["id"]):
+                continue
+            _safe_autopost(
+                lambda inv=inv, pay=pay: _autopost_payment(
+                    org_id, current_user.id, inv, pay),
+                "invoices", inv["id"], org_scope,
+                legacy_user_id=current_user.id)
+            if _find_live_source_entry(org_id, "invoice_payment", pay["id"]):
+                created["invoice_payment"] += 1
+            else:
+                failed.append(pay["id"])
+
+    for exp in expenses:
+        if _find_live_source_entry(org_id, "expense", exp["id"]):
+            continue
+        _safe_autopost(
+            lambda exp=exp: _autopost_expense(org_id, current_user.id, exp),
+            "expenses", exp["id"], org_scope, legacy_user_id=current_user.id)
+        if _find_live_source_entry(org_id, "expense", exp["id"]):
+            created["expense"] += 1
+        else:
+            failed.append(exp["id"])
+
+    return {"created": created, "failed": failed, "period": period}
+
+
 # ─── Health ───
 @app.get("/")
 def root():
