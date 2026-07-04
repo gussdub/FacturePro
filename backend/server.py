@@ -2229,6 +2229,39 @@ def _autopost_expense(org_id: str, user_id: str,
         reference=None)
 
 
+# Ensemble des statuts « non-draft » d'une facture (spec §5.5). Une facture est
+# comptabilisée en revenu accrual dès qu'elle QUITTE l'état draft ; elle est
+# contre-passée si elle RETOURNE en draft. Les transitions internes au groupe
+# non-draft (sent↔overdue, →partial, →paid) sont des no-op côté revenu : le
+# revenu reste comptabilisé (accrual) et l'encaissement est géré séparément par
+# les paiements (§5.2, T8).
+_INVOICE_NON_DRAFT_STATUSES = {"sent", "partial", "paid", "overdue"}
+
+
+def _autopost_invoice_status_transition(org_id: str, user_id: str,
+                                        old_status: str, new_status: str,
+                                        inv: dict) -> None:
+    """Applique la table de vérité §5.5 sur une transition de statut de facture.
+
+    - draft → {sent, partial, paid, overdue} : POSTE le revenu (§5.1), idempotent
+      (_post_source_entry no-op si une écriture vivante existe déjà).
+    - {sent, partial, paid, overdue} → draft : CONTRE-PASSE le revenu (§5.4) via
+      _unpost_source_entry (miroir POSTED, net zéro garanti).
+    - tout autre cas (sent↔overdue, →paid via statut, no-change) : RIEN.
+
+    [IMPORTANT] Le recalcul automatique partial/paid via _recompute_invoice_status
+    (ajout de paiement, add_invoice_payment) NE passe PAS par ce chemin : il ne
+    faut JAMAIS re-poster le revenu sur partial/paid (le revenu est déjà
+    comptabilisé depuis sent, et le paiement poste séparément §5.2). Ce hook ne
+    poste le revenu QUE sur la transition draft → non-draft (source unique de
+    vérité : old_status == "draft")."""
+    if old_status == "draft" and new_status in _INVOICE_NON_DRAFT_STATUSES:
+        _autopost_invoice_revenue(org_id, user_id, inv)
+    elif old_status in _INVOICE_NON_DRAFT_STATUSES and new_status == "draft":
+        _unpost_source_entry(org_id, user_id, "invoice", inv["id"])
+    # else : transition interne au groupe non-draft ou statut inchangé → no-op.
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.
@@ -4402,9 +4435,29 @@ def update_invoice(invoice_id: str, invoice_data: dict, current_user: CurrentUse
 
 @app.put("/api/invoices/{invoice_id}/status")
 def update_invoice_status(invoice_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
-    result = db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": status_data.get("status", "draft")}})
+    # [GL P2 — T7] Lire l'ancien statut AVANT l'update pour décider de l'auto-
+    # posting (§5.5). Le find_one sert aussi de garde d'existence (404).
+    existing = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Invoice not found")
+    old_status = existing.get("status", "draft")
+    new_status = status_data.get("status", "draft")
+    result = db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
+    # Auto-posting (§5.5), opt-in par org (décision #10). NE DOIT JAMAIS faire
+    # échouer le PUT : encapsulé dans _safe_autopost (avale l'exception, pose un
+    # autopost_error générique sur la facture). Le doc `inv` passé au mapping
+    # reflète le nouveau statut mais garde les montants/dates existants.
+    org_id = current_user.organization_id
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if settings.get("autopost_enabled"):
+        _ensure_chart_seeded(org_id, current_user.id)
+        inv = {**existing, "status": new_status}
+        _safe_autopost(
+            lambda: _autopost_invoice_status_transition(
+                org_id, current_user.id, old_status, new_status, inv),
+            "invoices", invoice_id, {"organization_id": org_id})
     return {"message": "Status updated"}
 
 @app.post("/api/invoices/{invoice_id}/payments")
