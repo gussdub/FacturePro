@@ -2074,8 +2074,18 @@ def _autopost_payment(org_id: str, user_id: str, inv: dict,
     ISO datetime) → forme canonique, jamais de composante horaire sur l'écriture
     postée (cohérence des requêtes de solde datées). Un paiement à date
     invalide/absente lève HTTPException(400) EN AMONT du post → capté au câblage
-    (T8) par _safe_autopost, l'op métier (ajout du paiement) n'échouant pas."""
+    (T8) par _safe_autopost, l'op métier (ajout du paiement) n'échouant pas.
+
+    Montant <= 0 → NO-OP (retourne None, aucune écriture) : un paiement à 0 n'a
+    aucun encaissement à comptabiliser (événement économique nul) et un montant
+    négatif produirait une écriture Dr/Cr = 0 (rejetée par _validate_entry_balance,
+    ligne (d>0)==(c>0)) ou une ligne négative (empoisonnant _account_balance). Ce
+    garde-fou évite un autopost_error spurious sur une op métier valide/non
+    bloquante — add_invoice_payment ne valide pas amount>0 (gap feature #6). No-op
+    au même titre que l'idempotence (contrat Optional[dict] de _post_source_entry)."""
     amount_cad = round(float(payment.get("amount_cad", 0) or 0), 2)
+    if amount_cad <= 0:
+        return None  # rien à comptabiliser : no-op propre, pas d'autopost_error
     lines = [
         _autopost_debit(org_id, user_id, "1000", amount_cad),
         _autopost_credit(org_id, user_id, "1100", amount_cad),

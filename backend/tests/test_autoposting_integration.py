@@ -442,3 +442,58 @@ class TestPaymentHooks:
             assert len(fresh.get("payments", [])) == 0
         finally:
             _cleanup(uid, org_id)
+
+    def test_zero_amount_payment_no_entry_no_error(self, client):
+        # Edge case (§5.2) : un paiement à montant 0 n'a AUCUN encaissement à
+        # comptabiliser (événement économique nul). Le hook doit NO-OP proprement :
+        # aucune écriture postée ET aucun autopost_error spurious sur la facture
+        # (l'ancienne version tentait Dr 1000=0 / Cr 1100=0 → rejet
+        # _validate_entry_balance → autopost_error trompeur sur une op valide).
+        uid, org_id, h = _setup_org(client, "p")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], 0.0)
+            assert r.status_code == 200, r.text
+            pid = r.json()["payments"][0]["id"]
+            # aucune écriture d'encaissement (rien à comptabiliser)
+            assert _all_payment_entries(org_id, pid) == [], \
+                "un paiement à 0 ne poste aucun encaissement"
+            # AUCUN autopost_error : le no-op est légitime, pas un échec
+            doc = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" not in doc, \
+                "un paiement à 0 ne doit pas poser d'autopost_error"
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_negative_amount_payment_no_corrupt_entry(self, client):
+        # Edge case : un montant négatif ne doit JAMAIS produire d'écriture
+        # (une ligne négative empoisonnerait _account_balance). Le hook no-op,
+        # aucune écriture corrompue persistée, POST reste 200.
+        uid, org_id, h = _setup_org(client, "q")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            r = _add_payment(client, h, inv["id"], -10.0)
+            assert r.status_code == 200, r.text
+            pid = r.json()["payments"][0]["id"]
+            assert _all_payment_entries(org_id, pid) == [], \
+                "un montant négatif ne poste aucune écriture"
+            doc = server_module.db.invoices.find_one(
+                {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
+            assert "autopost_error" not in doc
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_direct_autopost_payment_zero_is_noop(self, client):
+        # Unité : appel direct de _autopost_payment avec amount_cad=0 → None,
+        # aucune écriture (no-op, contrat identique à _post_source_entry).
+        uid, org_id, h = _setup_org(client, "r")
+        try:
+            inv = self._sent_invoice(client, h, org_id)
+            payment = {"id": str(uuid.uuid4()), "amount_cad": 0.0,
+                       "date": "2026-06-20"}
+            res = server_module._autopost_payment(org_id, uid, inv, payment)
+            assert res is None, "amount 0 → no-op (None)"
+            assert _all_payment_entries(org_id, payment["id"]) == []
+        finally:
+            _cleanup(uid, org_id)
