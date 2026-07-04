@@ -2059,6 +2059,127 @@ def _autopost_invoice_revenue(org_id: str, user_id: str, inv: dict) -> Optional[
         reference=inv["invoice_number"])
 
 
+def _autopost_payment(org_id: str, user_id: str, inv: dict,
+                      payment: dict) -> Optional[dict]:
+    """Poste l'écriture d'encaissement d'un paiement de facture (§5.2), idempotent.
+
+    Dr 1000 (Encaisse) / Cr 1100 (A/R) = payment["amount_cad"]. Le montant est
+    DÉJÀ en CAD sur le paiement (add_invoice_payment stocke amount_cad) → AUCUNE
+    reconversion, contrairement aux taxes de facture (§5.1). L'écriture est
+    équilibrée PAR CONSTRUCTION : deux lignes miroir sur le même montant CAD.
+
+    source_type="invoice_payment", source_id=payment["id"] (une seule vivante par
+    paiement, garantie par l'index unique partiel). entry_date normalisée via
+    _require_entry_date (comme le revenu, T5) : payment["date"] ('YYYY-MM-DD' ou
+    ISO datetime) → forme canonique, jamais de composante horaire sur l'écriture
+    postée (cohérence des requêtes de solde datées). Un paiement à date
+    invalide/absente lève HTTPException(400) EN AMONT du post → capté au câblage
+    (T8) par _safe_autopost, l'op métier (ajout du paiement) n'échouant pas."""
+    amount_cad = round(float(payment.get("amount_cad", 0) or 0), 2)
+    lines = [
+        _autopost_debit(org_id, user_id, "1000", amount_cad),
+        _autopost_credit(org_id, user_id, "1100", amount_cad),
+    ]
+    entry_date = _require_entry_date(payment.get("date"))
+    return _post_source_entry(
+        org_id, user_id, "invoice_payment", payment["id"],
+        entry_date=entry_date,
+        description=f"Paiement facture {inv['invoice_number']}",
+        lines=lines,
+        reference=payment.get("reference") or None)
+
+
+def _resolve_expense_account(org_id: str, user_id: str,
+                             category_code: Optional[str]) -> Optional[dict]:
+    """Résout le compte de charge 5xxx d'une dépense par sa catégorie ARC (§5.6).
+
+    Cherche le compte du plan dont `expense_category_code == category_code`
+    (mapping garanti unique par org via _validate_expense_category_code, Phase 1).
+    FALLBACK 5900 (Dépenses diverses) si la catégorie n'est pas mappée : code
+    None/vide, "other", ou catégorie inconnue → toutes les dépenses non
+    catégorisées atterrissent sur 5900. Déclenche le seed lazy (5900 et les 5xxx
+    seedés sont alors présents). Retourne toujours un compte (jamais None sur un
+    plan seedé : 5900 est un compte de base)."""
+    _ensure_chart_seeded(org_id, user_id)
+    code = (category_code or "").strip()
+    if code:
+        acc = db.chart_of_accounts.find_one(
+            {"organization_id": org_id, "expense_category_code": code},
+            {"_id": 0})
+        if acc is not None:
+            return acc
+    # Non mappé → 5900 (Dépenses diverses).
+    return _resolve_ledger_account(org_id, user_id, "5900")
+
+
+def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> list:
+    """Lignes de l'écriture de dépense (spec §5.6).
+
+    `amount` est saisi TTC (taxes incluses ; cohérent avec un reçu scanné,
+    feature #8) → `amount_cad` est le décaissement TOTAL. Les `*_paid_cad` sont la
+    part de taxe récupérable DÉJÀ en CAD (create_expense les stocke en CAD). La
+    charge nette est calculée PAR DIFFÉRENCE (amount_cad − Σ taxes_cad) → l'écriture
+    est TOUJOURS équilibrée (Dr charge nette + Dr taxes 12xx == Cr amount_cad),
+    quelle que soit la combinaison de taxes.
+
+    Dr 5xxx (charge nette, compte résolu par catégorie, fallback 5900) /
+    Dr 1200/1210/1220 (taxes récupérables, si > 0 ; 1220 créé à la volée) /
+    Cr 1000 (Encaisse, défaut) OU 2000 (Comptes fournisseurs) selon le flag org
+    `expense_default_credit_account` (validé ∈ {"1000","2000"}, défaut "1000")."""
+    amount_cad = round(float(expense.get("amount_cad", 0) or 0), 2)
+    gst_cad = round(float(expense.get("gst_paid_cad", 0) or 0), 2)
+    qst_cad = round(float(expense.get("qst_paid_cad", 0) or 0), 2)
+    hst_cad = round(float(expense.get("hst_paid_cad", 0) or 0), 2)
+    net_cad = round(amount_cad - gst_cad - qst_cad - hst_cad, 2)
+
+    # Compte de crédit : Encaisse (défaut) ou Comptes fournisseurs selon le flag.
+    settings = db.company_settings.find_one(
+        {"organization_id": org_id}, {"_id": 0}) or {}
+    credit_number = settings.get("expense_default_credit_account", "1000")
+    if credit_number not in ("1000", "2000"):
+        credit_number = "1000"  # robuste : valeur inconnue → Encaisse
+
+    expense_acc = _resolve_expense_account(org_id, user_id,
+                                           expense.get("category_code"))
+    if expense_acc is None:
+        raise ValueError("Compte de charge introuvable (5900 attendu)")
+
+    lines = [
+        {"account_id": expense_acc["id"], "debit": net_cad, "credit": 0.0},
+    ]
+    if gst_cad > 0:
+        lines.append(_autopost_debit(org_id, user_id, "1200", gst_cad))
+    if qst_cad > 0:
+        lines.append(_autopost_debit(org_id, user_id, "1210", qst_cad))
+    if hst_cad > 0:
+        lines.append(_autopost_debit(
+            org_id, user_id, "1220", hst_cad,
+            create_if_missing=True, kind="asset", name="TVH à recouvrer"))
+    lines.append(_autopost_credit(org_id, user_id, credit_number, amount_cad))
+    return lines
+
+
+def _autopost_expense(org_id: str, user_id: str,
+                      expense: dict) -> Optional[dict]:
+    """Poste l'écriture de dépense (§5.6), idempotent.
+
+    Construit les lignes (§5.6) puis délègue à _post_source_entry
+    (source_type="expense", source_id=expense["id"]) : no-op → None si une
+    écriture vivante existe déjà. entry_date normalisée via _require_entry_date
+    (comme revenu/paiement) : un expense_date invalide/absent lève
+    HTTPException(400) EN AMONT du post → capté au câblage (T9) par _safe_autopost.
+    description = description non vide, sinon la catégorie ; reference = None."""
+    lines = _build_expense_charge_lines(org_id, user_id, expense)
+    entry_date = _require_entry_date(expense.get("expense_date"))
+    description = expense.get("description") or expense.get("category") or ""
+    return _post_source_entry(
+        org_id, user_id, "expense", expense["id"],
+        entry_date=entry_date,
+        description=description,
+        lines=lines,
+        reference=None)
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.

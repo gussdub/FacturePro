@@ -886,3 +886,354 @@ class TestInvoiceRevenueMapping:
             assert abs(round(agg[0]["d"], 2) - round(agg[0]["c"], 2)) <= 0.005
         finally:
             _cleanup_org(org_id)
+
+
+class TestPaymentEncaissementMapping:
+    """Tâche 6 — _autopost_payment (§5.2). Écriture d'encaissement :
+    Dr 1000 (Encaisse) / Cr 1100 (A/R) = payment["amount_cad"]. `amount_cad` est
+    DÉJÀ en CAD sur le paiement (server.py add_invoice_payment) → aucune
+    reconversion. source_type="invoice_payment", source_id=payment["id"].
+    Idempotent : (invoice_payment, id) → une seule écriture vivante.
+    """
+
+    def _invoice(self, **overrides):
+        inv = {
+            "id": f"inv-{uuid.uuid4().hex[:8]}",
+            "invoice_number": "INV-0042",
+        }
+        inv.update(overrides)
+        return inv
+
+    def _payment(self, **overrides):
+        pay = {
+            "id": f"pay-{uuid.uuid4().hex[:8]}",
+            "date": "2026-07-02",
+            "amount_cad": 100.0,
+            "method": "cash",
+            "reference": "CHQ-0001",
+        }
+        pay.update(overrides)
+        return pay
+
+    def test_payment_dr_1000_cr_1100_balanced(self):
+        # [COMPTA] Dr 1000 = Cr 1100 = amount_cad. Écriture équilibrée par
+        # construction (2 lignes miroir sur le même montant CAD).
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(invoice_number="INV-0007")
+            payment = self._payment(amount_cad=250.55)
+            entry = server_module._autopost_payment(org_id, user_id, inv, payment)
+            assert entry is not None
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["1000"]["debit"] == 250.55
+            assert by["1000"]["credit"] == 0.0
+            assert by["1100"]["credit"] == 250.55
+            assert by["1100"]["debit"] == 0.0
+            # Partie double explicite : Dr 1000 == Cr 1100, tolérance ≤ 0,005 $.
+            assert abs(by["1000"]["debit"] - by["1100"]["credit"]) <= 0.005
+            assert len(entry["lines"]) == 2
+        finally:
+            _cleanup_org(org_id)
+
+    def test_payment_metadata(self):
+        # Métadonnées de l'écriture postée (§5.2).
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(invoice_number="INV-0099")
+            payment = self._payment(
+                id="pay-abc123", date="2026-07-15", amount_cad=100.0,
+                reference="VIR-42")
+            entry = server_module._autopost_payment(org_id, user_id, inv, payment)
+            assert entry["source_type"] == "invoice_payment"
+            assert entry["source_id"] == "pay-abc123"
+            assert entry["entry_type"] == "auto"
+            assert entry["status"] == "posted"
+            assert entry["entry_date"] == "2026-07-15"
+            assert entry["description"] == "Paiement facture INV-0099"
+            assert entry["reference"] == "VIR-42"
+            assert round(entry["total_debit"], 2) == round(entry["total_credit"], 2)
+        finally:
+            _cleanup_org(org_id)
+
+    def test_payment_reference_optional(self):
+        # reference = payment.get("reference") → None si absent (pas de KeyError).
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice()
+            payment = self._payment()
+            payment.pop("reference", None)
+            entry = server_module._autopost_payment(org_id, user_id, inv, payment)
+            assert entry["reference"] is None
+        finally:
+            _cleanup_org(org_id)
+
+    def test_payment_idempotent(self):
+        # Deux appels → 1 seule écriture vivante (index unique partiel).
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice()
+            payment = self._payment()
+            first = server_module._autopost_payment(org_id, user_id, inv, payment)
+            assert first is not None
+            second = server_module._autopost_payment(org_id, user_id, inv, payment)
+            assert second is None  # no-op : déjà posté
+            n = server_module.db.journal_entries.count_documents({
+                "organization_id": org_id, "source_type": "invoice_payment",
+                "source_id": payment["id"], "entry_type": "auto",
+                "reversed_by_entry_id": None})
+            assert n == 1
+        finally:
+            _cleanup_org(org_id)
+
+    def test_payment_entry_date_normalized(self):
+        # entry_date passe par _require_entry_date : normalisée 'YYYY-MM-DD', jamais
+        # de composante horaire (cohérent avec le revenu, T5).
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice()
+            payment = self._payment(date="2026-07-15T23:59:59+00:00")
+            entry = server_module._autopost_payment(org_id, user_id, inv, payment)
+            assert entry["entry_date"] == "2026-07-15"
+            assert "T" not in entry["entry_date"]
+        finally:
+            _cleanup_org(org_id)
+
+
+class TestResolveExpenseAccount:
+    """Tâche 6 — _resolve_expense_account (§5.6). Résout le compte 5xxx dont
+    expense_category_code == category_code, fallback 5900 (Dépenses diverses)."""
+
+    def test_resolve_mapped_category(self):
+        org_id, user_id = _make_org()
+        try:
+            # office_expenses est seedé sur 5000 avec expense_category_code.
+            acc = server_module._resolve_expense_account(org_id, user_id,
+                                                          "office_expenses")
+            assert acc is not None
+            assert acc["account_number"] == "5000"
+        finally:
+            _cleanup_org(org_id)
+
+    def test_resolve_unmapped_falls_back_5900(self):
+        org_id, user_id = _make_org()
+        try:
+            # "other" (et tout code non mappé) → 5900.
+            acc = server_module._resolve_expense_account(org_id, user_id, "other")
+            assert acc is not None
+            assert acc["account_number"] == "5900"
+            # Code totalement inconnu → aussi 5900.
+            acc2 = server_module._resolve_expense_account(org_id, user_id,
+                                                          "code_bidon")
+            assert acc2["account_number"] == "5900"
+            # category_code None/vide → 5900 (graceful).
+            acc3 = server_module._resolve_expense_account(org_id, user_id, None)
+            assert acc3["account_number"] == "5900"
+        finally:
+            _cleanup_org(org_id)
+
+
+class TestExpenseChargeMapping:
+    """Tâche 6 — _autopost_expense (§5.6). Écriture de dépense :
+    Dr 5xxx (charge nette PAR DIFFÉRENCE) / Dr taxes récupérables 12xx /
+    Cr 1000 ou 2000 (= amount_cad, décaissement total TTC). `amount` est TTC →
+    charge nette = amount_cad − Σ taxes_cad → équilibre garanti dans tous les cas.
+    source_type="expense", source_id=expense["id"]. Idempotent.
+    """
+
+    def _expense(self, org_id, **overrides):
+        exp = {
+            "id": f"exp-{uuid.uuid4().hex[:8]}",
+            "organization_id": org_id,
+            "category_code": "office_expenses",
+            "category": "Frais de bureau",
+            "description": "Papeterie",
+            "expense_date": "2026-07-02T00:00:00+00:00",
+            "amount_cad": 115.0,
+            "gst_paid_cad": 0.0,
+            "qst_paid_cad": 0.0,
+            "hst_paid_cad": 0.0,
+        }
+        exp.update(overrides)
+        return exp
+
+    def _set_credit_account(self, org_id, value):
+        server_module.db.company_settings.update_one(
+            {"organization_id": org_id},
+            {"$set": {"expense_default_credit_account": value}},
+            upsert=True)
+
+    def test_qc_with_taxes_balanced_by_difference(self):
+        # [COMPTA] QC TTC : amount_cad 115, TPS 5, TVQ 9.975 → charge nette
+        # (par différence) sur 5xxx + Dr 1200=5 + Dr 1210=9.975 ; Cr 1000=115.
+        # Σ Dr == Σ Cr au cent près.
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(
+                org_id, category_code="office_expenses", amount_cad=115.0,
+                gst_paid_cad=5.0, qst_paid_cad=9.975, hst_paid_cad=0.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            assert entry is not None
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            gst = round(5.0, 2)
+            qst = round(9.975, 2)  # 9.97
+            assert by["1200"]["debit"] == gst
+            assert by["1210"]["debit"] == qst
+            # Charge nette = amount_cad − Σ taxes (par différence).
+            assert by["5000"]["debit"] == round(115.0 - gst - qst, 2)
+            # Crédit = décaissement total TTC sur 1000 (défaut).
+            assert by["1000"]["credit"] == 115.0
+            assert "2000" not in by
+            # Partie double : Dr(5000+1200+1210) == Cr 1000.
+            assert abs((by["5000"]["debit"] + by["1200"]["debit"]
+                        + by["1210"]["debit"]) - by["1000"]["credit"]) <= 0.005
+        finally:
+            _cleanup_org(org_id)
+
+    def test_no_tax_two_lines(self):
+        # Sans taxe : 2 lignes (Dr 5xxx = amount_cad / Cr 1000 = amount_cad).
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, category_code="office_expenses",
+                                amount_cad=80.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            _assert_balanced(entry["lines"])
+            assert len(entry["lines"]) == 2
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["5000"]["debit"] == 80.0
+            assert by["1000"]["credit"] == 80.0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_unmapped_category_uses_5900(self):
+        # Catégorie non mappée → charge sur 5900 (Dépenses diverses).
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, category_code="other", amount_cad=50.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["5900"]["debit"] == 50.0
+            assert by["1000"]["credit"] == 50.0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_ap_flag_credits_2000(self):
+        # expense_default_credit_account="2000" → crédit sur Comptes fournisseurs.
+        org_id, user_id = _make_org()
+        try:
+            self._set_credit_account(org_id, "2000")
+            exp = self._expense(org_id, category_code="office_expenses",
+                                amount_cad=115.0, gst_paid_cad=5.0,
+                                qst_paid_cad=9.975)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["2000"]["credit"] == 115.0
+            assert "1000" not in by
+        finally:
+            _cleanup_org(org_id)
+
+    def test_invalid_credit_flag_falls_back_1000(self):
+        # Valeur de flag invalide (hors {"1000","2000"}) → défaut 1000 (robuste).
+        org_id, user_id = _make_org()
+        try:
+            self._set_credit_account(org_id, "9999")
+            exp = self._expense(org_id, category_code="office_expenses",
+                                amount_cad=60.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["1000"]["credit"] == 60.0
+            assert "2000" not in by
+        finally:
+            _cleanup_org(org_id)
+
+    def test_hst_creates_1220_on_the_fly(self):
+        # [COMPTA] hst_paid_cad>0 → Dr 1220 (créé à la volée, non seedé QC).
+        # Écriture équilibrée.
+        org_id, user_id = _make_org()
+        try:
+            assert server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "1220"}) is None
+            exp = self._expense(org_id, category_code="office_expenses",
+                                amount_cad=113.0, hst_paid_cad=13.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            _assert_balanced(entry["lines"])
+            by = _lines_by_number(org_id, entry["lines"])
+            assert by["1220"]["debit"] == 13.0
+            assert by["5000"]["debit"] == round(113.0 - 13.0, 2)
+            assert by["1000"]["credit"] == 113.0
+            acc = server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "1220"}, {"_id": 0})
+            assert acc is not None
+            assert acc["is_system"] is True
+            assert acc["account_type"] == "asset"
+        finally:
+            _cleanup_org(org_id)
+
+    def test_expense_metadata(self):
+        # Métadonnées (§5.6) : source_type/id, entry_date, description, reference None.
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(
+                org_id, id="exp-xyz", description="Abonnement logiciel",
+                expense_date="2026-07-15T08:00:00+00:00", amount_cad=100.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            assert entry["source_type"] == "expense"
+            assert entry["source_id"] == "exp-xyz"
+            assert entry["entry_type"] == "auto"
+            assert entry["status"] == "posted"
+            assert entry["entry_date"] == "2026-07-15"
+            assert entry["description"] == "Abonnement logiciel"
+            assert entry["reference"] is None
+        finally:
+            _cleanup_org(org_id)
+
+    def test_description_falls_back_to_category(self):
+        # description = expense.get("description") or expense.get("category").
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, description="", category="Frais de bureau",
+                                amount_cad=40.0)
+            entry = server_module._autopost_expense(org_id, user_id, exp)
+            assert entry["description"] == "Frais de bureau"
+        finally:
+            _cleanup_org(org_id)
+
+    def test_expense_idempotent(self):
+        # Deux appels → 1 seule écriture vivante.
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, amount_cad=115.0, gst_paid_cad=5.0,
+                                qst_paid_cad=9.975)
+            first = server_module._autopost_expense(org_id, user_id, exp)
+            assert first is not None
+            second = server_module._autopost_expense(org_id, user_id, exp)
+            assert second is None
+            n = server_module.db.journal_entries.count_documents({
+                "organization_id": org_id, "source_type": "expense",
+                "source_id": exp["id"], "entry_type": "auto",
+                "reversed_by_entry_id": None})
+            assert n == 1
+        finally:
+            _cleanup_org(org_id)
+
+    def test_expense_posts_to_ledger_balanced(self):
+        # [COMPTA] Après post, la balance de vérification reste équilibrée.
+        org_id, user_id = _make_org()
+        try:
+            exp = self._expense(org_id, amount_cad=115.0, gst_paid_cad=5.0,
+                                qst_paid_cad=9.975)
+            server_module._autopost_expense(org_id, user_id, exp)
+            agg = list(server_module.db.journal_entries.aggregate([
+                {"$match": {"organization_id": org_id, "status": "posted"}},
+                {"$unwind": "$lines"},
+                {"$group": {"_id": None,
+                            "d": {"$sum": "$lines.debit"},
+                            "c": {"$sum": "$lines.credit"}}},
+            ]))
+            assert agg, "aucune écriture postée"
+            assert abs(round(agg[0]["d"], 2) - round(agg[0]["c"], 2)) <= 0.005
+        finally:
+            _cleanup_org(org_id)
