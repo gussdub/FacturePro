@@ -8785,6 +8785,91 @@ async def check_trial_expiry(request: Request):
     return {"notified": sent, "total_eligible": len(users_to_notify)}
 
 
+@app.post("/api/mileage/check-rate-update")
+async def check_mileage_rate_update(request: Request):
+    """[Carnet de route T12] Pingé par un cron externe (Render Cron /
+    cron-job.org) chaque janvier. Si le taux d'allocation automobile ARC de
+    l'ANNÉE COURANTE manque dans MILEAGE_RATES, notifie l'owner de chaque org
+    pour VÉRIFICATION HUMAINE du taux ARC officiel (canada.ca).
+
+    Ne met JAMAIS à jour le taux automatiquement — la table vit dans le code,
+    et un taux deviné produirait un mauvais montant d'allocation. Tant que le
+    taux manque, le calcul d'allocation de l'année reste bloqué (allocation
+    None, cf. _mileage_enrich_trip / _mileage_rate_for_year).
+
+    Idempotent par (org, année) via mileage_rate_reminders : on ne renotifie
+    pas une org déjà notifiée pour la même année (champ `notified_at`). Un
+    reminder pré-flaggé à la saisie d'un trajet (`_mileage_flag_rate_missing`,
+    `notified_at=None`) N'EST PAS considéré comme notifié : le cron l'upgrade en
+    posant `notified_at` après envoi réussi. Aucune auth (endpoint cron externe,
+    idempotent et sans effet destructif)."""
+    year = datetime.now(timezone.utc).year
+    if _mileage_rate_for_year(year) is not None:
+        return {"status": "ok", "year": year, "action": "rate_present"}
+
+    if not RESEND_API_KEY:
+        # Email non configuré : on ne trace RIEN (pas d'envoi = pas de reminder),
+        # pour que le prochain ping avec email configuré puisse notifier.
+        return {"status": "skipped", "year": year, "reason": "email_not_configured"}
+
+    notified = 0
+    for org in db.organizations.find({}, {"_id": 0}):
+        org_id = org.get("id")
+        if not org_id:
+            continue
+        reminder_id = f"{org_id}:{year}"
+        # Idempotence : ne renotifie pas si un envoi a DÉJÀ eu lieu pour (org,
+        # année). On teste `notified_at` renseigné, pas la simple existence de la
+        # ligne : un reminder flaggé à la saisie d'un trajet a `notified_at=None`
+        # et DOIT encore être notifié (sinon l'org ne serait jamais alertée).
+        existing = db.mileage_rate_reminders.find_one({"id": reminder_id})
+        if existing and existing.get("notified_at"):
+            continue
+        owner = db.users.find_one({"id": org.get("owner_id")}, {"_id": 0})
+        if not owner or not owner.get("email"):
+            continue
+        try:
+            params = {
+                "from": SENDER_EMAIL,
+                "to": [owner["email"]],
+                "subject": f"FacturePro — Taux d'allocation automobile ARC {year} a confirmer",
+                "html": (
+                    f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+<h2 style="color:#1f2937">Taux d'allocation automobile {year}</h2>
+<p>Le taux d'allocation automobile de l'ARC pour <strong>{year}</strong> n'est pas encore configure dans <strong>FacturePro</strong>.</p>
+<p>Verifiez le taux officiel sur <a href="https://www.canada.ca">canada.ca</a> (allocations pour frais d'automobile), puis mettez a jour l'application.</p>
+<p>En attendant, le calcul d'allocation du carnet de route pour {year} est <strong>bloque</strong> avec un message explicite — aucun montant n'est devine.</p>
+<p style="color:#6b7280;font-size:13px">Ce rappel est automatique et ne sera envoye qu'une fois par annee.</p>
+</div>"""
+                ),
+            }
+            resend.Emails.send(params)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            # Upsert : crée la ligne si absente, ou pose `notified_at` sur une
+            # ligne pré-flaggée à la saisie d'un trajet. L'état n'est écrit
+            # qu'APRÈS envoi réussi -> retente au prochain ping si l'envoi échoue.
+            db.mileage_rate_reminders.update_one(
+                {"id": reminder_id},
+                {
+                    "$set": {
+                        "organization_id": org_id,
+                        "year": year,
+                        "notified_at": now_iso,
+                        "source": "cron_annual",
+                    },
+                    "$setOnInsert": {"id": reminder_id, "flagged_at": now_iso},
+                },
+                upsert=True,
+            )
+            notified += 1
+        except Exception as e:
+            # Capturé par org, n'interrompt pas la boucle ; l'état n'est écrit
+            # qu'après envoi réussi -> retente au prochain ping cron.
+            print(f"[mileage rate reminder] echec envoi org {org_id}: {type(e).__name__}")
+            continue
+    return {"status": "ok", "year": year, "action": "notified", "count": notified}
+
+
 # ─── Sales Tax Report ───
 def _aggregate_sales_tax(scope, start, end):
     """Calcule sommaire + détails CRA + Revenu Québec pour la période [start, end] inclusive.

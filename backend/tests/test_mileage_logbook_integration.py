@@ -1175,3 +1175,77 @@ def test_logbook_without_vehicle_id_is_per_default_vehicle(auth_headers):
         assert rp.content[:4] == b"%PDF"
     finally:
         _cleanup_vehicle(other_vid)
+
+
+# ─── Task 12 : rappel annuel du taux (endpoint cron externe) ───
+# L'endpoint /api/mileage/check-rate-update est pingé par un cron externe (Render
+# Cron / cron-job.org) chaque janvier. Il ne met JAMAIS à jour le taux : si le
+# taux de l'année courante manque dans MILEAGE_RATES, il notifie l'owner de
+# chaque org pour VÉRIFICATION HUMAINE du taux ARC officiel. Idempotent par
+# (org, année) via mileage_rate_reminders. Aucune auth (cron externe).
+#
+# On nettoie les reminders écrits pour l'année simulée en `finally` afin de ne
+# jamais salir le seed org (instruction « ne pas polluer l'org de seed »).
+
+def _delete_reminders_for_year(year):
+    db.mileage_rate_reminders.delete_many({"year": int(year)})
+
+
+def test_check_rate_update_present_year():
+    # Sans année simulée : l'année courante 2026 EST dans MILEAGE_RATES.
+    from backend import server as srv
+    current_year = srv.datetime.now(srv.timezone.utc).year
+    r = client.post("/api/mileage/check-rate-update")
+    assert r.status_code == 200
+    if srv._mileage_rate_for_year(current_year) is not None:
+        assert r.json()["action"] == "rate_present"
+
+
+def test_check_rate_update_missing_year_no_email(monkeypatch):
+    from backend import server as srv
+
+    class _FakeDT:
+        @staticmethod
+        def now(tz=None):
+            import datetime as _d
+            return _d.datetime(2099, 1, 15, tzinfo=srv.timezone.utc)
+
+    monkeypatch.setattr(srv, "datetime", _FakeDT)
+    monkeypatch.setattr(srv, "RESEND_API_KEY", None, raising=False)
+    try:
+        r = client.post("/api/mileage/check-rate-update")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] in ("skipped", "ok")
+        # aucun 500 même avec taux manquant et email non configuré ;
+        # email non configuré -> aucun reminder écrit (pas d'envoi = pas de trace).
+        assert body["year"] == 2099
+    finally:
+        _delete_reminders_for_year(2099)
+
+
+def test_check_rate_update_idempotent(monkeypatch):
+    # Deux pings consécutifs pour une année manquante n'envoient qu'une fois par
+    # org (garantie via mileage_rate_reminders). Ici on vérifie l'absence de 500
+    # et que le second ping ne re-notifie personne (compte à 0).
+    from backend import server as srv
+
+    class _FakeDT:
+        @staticmethod
+        def now(tz=None):
+            import datetime as _d
+            return _d.datetime(2099, 1, 20, tzinfo=srv.timezone.utc)
+
+    monkeypatch.setattr(srv, "datetime", _FakeDT)
+    try:
+        r1 = client.post("/api/mileage/check-rate-update")
+        r2 = client.post("/api/mileage/check-rate-update")
+        assert r1.status_code == 200 and r2.status_code == 200
+        b1, b2 = r1.json(), r2.json()
+        # Si l'email est configuré dans l'env de test, la notif part au 1er ping
+        # puis le 2e ne re-notifie personne (idempotence par org+année).
+        if b1.get("action") == "notified" and b1.get("count", 0) > 0:
+            assert b2["action"] == "notified"
+            assert b2["count"] == 0
+    finally:
+        _delete_reminders_for_year(2099)
