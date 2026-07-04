@@ -260,3 +260,172 @@ class TestAutopostMigration:
         finally:
             server_module.db.journal_entries.delete_many(
                 {"organization_id": stale_org})
+
+
+class TestSourceEntryPrimitives:
+    """Tâche 3 — _find_live_source_entry / _post_source_entry / _unpost_source_entry.
+
+    La couche idempotente partagée (§6.1 du spec) : un doc source = une écriture
+    auto vivante ; régénération = contre-passer + reposter. La contre-passation
+    auto emprunte EXACTEMENT le même chemin que la manuelle (_reverse_entry_internal).
+    """
+
+    def _rev_lines(self, org_id):
+        """Dr 1000 100 / Cr 4000 100 — écriture auto de test équilibrée."""
+        return [
+            {"account_id": _account_id(org_id, "1000"), "debit": 100, "credit": 0},
+            {"account_id": _account_id(org_id, "4000"), "debit": 0, "credit": 100},
+        ]
+
+    def test_find_live_ignores_reversed(self):
+        # Pose une écriture auto, contre-passe-la via _unpost_source_entry :
+        # _find_live_source_entry retourne None. Après un nouveau _post_source_entry,
+        # il retourne l'unique post vivant.
+        org_id, user_id = _make_org()
+        try:
+            posted = server_module._post_source_entry(
+                org_id, user_id, "invoice", "inv-flr",
+                entry_date="2026-07-01", description="Facture flr",
+                lines=self._rev_lines(org_id))
+            assert posted is not None
+            live = server_module._find_live_source_entry(org_id, "invoice", "inv-flr")
+            assert live is not None
+            assert live["id"] == posted["id"]
+
+            # Contre-passe : plus aucune vivante.
+            server_module._unpost_source_entry(org_id, user_id, "invoice", "inv-flr")
+            assert server_module._find_live_source_entry(
+                org_id, "invoice", "inv-flr") is None
+
+            # Re-poste : nouvelle unique vivante, différente de l'ancienne.
+            reposted = server_module._post_source_entry(
+                org_id, user_id, "invoice", "inv-flr",
+                entry_date="2026-07-02", description="Facture flr v2",
+                lines=self._rev_lines(org_id))
+            assert reposted is not None
+            live2 = server_module._find_live_source_entry(
+                org_id, "invoice", "inv-flr")
+            assert live2 is not None
+            assert live2["id"] == reposted["id"]
+            assert live2["id"] != posted["id"]
+            # Une seule vivante à la fois (index partiel + filtre).
+            n_live = server_module.db.journal_entries.count_documents({
+                "organization_id": org_id, "source_type": "invoice",
+                "source_id": "inv-flr", "entry_type": "auto",
+                "reversed_by_entry_id": None})
+            assert n_live == 1
+        finally:
+            _cleanup_org(org_id)
+
+    def test_post_source_entry_idempotent(self):
+        # Deux appels _post_source_entry avec les mêmes (source_type, source_id) →
+        # 1 seule écriture en base ; le 2e appel retourne None (no-op).
+        org_id, user_id = _make_org()
+        try:
+            first = server_module._post_source_entry(
+                org_id, user_id, "invoice", "inv-idem",
+                entry_date="2026-07-01", description="Facture idem",
+                lines=self._rev_lines(org_id))
+            assert first is not None
+            second = server_module._post_source_entry(
+                org_id, user_id, "invoice", "inv-idem",
+                entry_date="2026-07-01", description="Facture idem",
+                lines=self._rev_lines(org_id))
+            assert second is None  # no-op : une vivante existe déjà
+            count = server_module.db.journal_entries.count_documents({
+                "organization_id": org_id, "source_type": "invoice",
+                "source_id": "inv-idem"})
+            assert count == 1
+        finally:
+            _cleanup_org(org_id)
+
+    def test_unpost_creates_mirror_net_zero(self):
+        # Pose Dr 1000 100 / Cr 4000 100, contre-passe ; vérifie qu'un miroir
+        # entry_type="reversal", reverses_entry_id == live["id"], source_type/
+        # source_id conservés est créé ; que `live` gagne reversed_by_entry_id ;
+        # et que _account_balance de 1000 et 4000 revient à 0.
+        org_id, user_id = _make_org()
+        try:
+            live = server_module._post_source_entry(
+                org_id, user_id, "invoice", "inv-nz",
+                entry_date="2026-07-01", description="Facture nz",
+                lines=self._rev_lines(org_id))
+            assert live is not None
+            acc_1000 = _account_id(org_id, "1000")
+            acc_4000 = _account_id(org_id, "4000")
+            # Après le post : 1000 (débit normal) = +100, 4000 (crédit normal) = +100.
+            assert server_module._account_balance(org_id, acc_1000, "debit") == 100
+            assert server_module._account_balance(org_id, acc_4000, "credit") == 100
+
+            mirror = server_module._unpost_source_entry(
+                org_id, user_id, "invoice", "inv-nz")
+            assert mirror is not None
+            assert mirror["entry_type"] == "reversal"
+            assert mirror["reverses_entry_id"] == live["id"]
+            # Le miroir conserve la traçabilité source.
+            assert mirror["source_type"] == "invoice"
+            assert mirror["source_id"] == "inv-nz"
+
+            # L'origine reste posted mais gagne reversed_by_entry_id.
+            origin = server_module.db.journal_entries.find_one(
+                {"id": live["id"], "organization_id": org_id}, {"_id": 0})
+            assert origin["status"] == "posted"
+            assert origin["reversed_by_entry_id"] == mirror["id"]
+
+            # Net zéro sur les deux comptes (les deux écritures comptent).
+            assert server_module._account_balance(org_id, acc_1000, "debit") == 0
+            assert server_module._account_balance(org_id, acc_4000, "credit") == 0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_unpost_noop_when_nothing(self):
+        # _unpost_source_entry sur un source inexistant retourne None sans lever.
+        org_id, user_id = _make_org()
+        try:
+            result = server_module._unpost_source_entry(
+                org_id, user_id, "invoice", "inconnu-xyz")
+            assert result is None
+        finally:
+            _cleanup_org(org_id)
+
+    def test_unpost_no_double_mirror(self):
+        # Contre-passer deux fois de suite → un seul miroir (2e appel no-op car
+        # la vivante n'existe plus, déjà reversed_by_entry_id posé).
+        org_id, user_id = _make_org()
+        try:
+            server_module._post_source_entry(
+                org_id, user_id, "invoice", "inv-dbl",
+                entry_date="2026-07-01", description="Facture dbl",
+                lines=self._rev_lines(org_id))
+            first_mirror = server_module._unpost_source_entry(
+                org_id, user_id, "invoice", "inv-dbl")
+            assert first_mirror is not None
+            second_mirror = server_module._unpost_source_entry(
+                org_id, user_id, "invoice", "inv-dbl")
+            assert second_mirror is None  # no-op : plus de vivante à défaire
+            n_reversal = server_module.db.journal_entries.count_documents({
+                "organization_id": org_id, "source_type": "invoice",
+                "source_id": "inv-dbl", "entry_type": "reversal"})
+            assert n_reversal == 1  # un seul miroir
+        finally:
+            _cleanup_org(org_id)
+
+    def test_unpost_isolated_by_org(self):
+        # Isolation multi-tenant : une org B ne peut pas contre-passer l'écriture
+        # auto d'une org A (même source_id). _find_live_source_entry filtre l'org.
+        org_a, user_a = _make_org()
+        org_b, user_b = _make_org()
+        try:
+            server_module._post_source_entry(
+                org_a, user_a, "invoice", "inv-shared",
+                entry_date="2026-07-01", description="Facture A",
+                lines=self._rev_lines(org_a))
+            # Org B tente de défaire le même source_id : rien à faire chez elle.
+            assert server_module._unpost_source_entry(
+                org_b, user_b, "invoice", "inv-shared") is None
+            # L'écriture de A est intacte (toujours vivante).
+            assert server_module._find_live_source_entry(
+                org_a, "invoice", "inv-shared") is not None
+        finally:
+            _cleanup_org(org_a)
+            _cleanup_org(org_b)

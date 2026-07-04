@@ -1713,6 +1713,103 @@ def _create_journal_entry(organization_id: str, user_id: str, entry_date: str,
     return {k: v for k, v in doc.items() if k != "_id"}
 
 
+def _reverse_entry_internal(organization_id: str, user_id: str, entry: dict,
+                            rev_date: str = None, description: str = None,
+                            source_type: Optional[str] = None,
+                            source_id: Optional[str] = None) -> dict:
+    """Contre-passation par miroir POSTED — chemin UNIQUE partagé par la
+    contre-passation manuelle (`reverse_entry`, endpoint public) et
+    l'auto-posting (`_unpost_source_entry`). L'auto-posting emprunte EXACTEMENT
+    le même mécanisme que le manuel — pas de logique parallèle (spec §2 déc. #3).
+
+    Crée une NOUVELLE écriture `entry_type="reversal"` `posted` dont chaque ligne
+    a Dr↔Cr inversés, puis pose `reversed_by_entry_id` sur l'origine (qui RESTE
+    `posted` — invariant Phase 1 §5.3). Les deux écritures comptent dans
+    `_account_balance` → net zéro garanti par construction. Le miroir peut porter
+    `source_type`/`source_id` (traçabilité de la source pour les écritures auto).
+
+    L'appelant est responsable des gardes métier (origine introuvable, non
+    postée, déjà contre-passée) : ce helper suppose une origine `posted` non
+    encore contre-passée.
+    """
+    mirror_lines = [
+        {"account_id": ln["account_id"], "debit": ln["credit"], "credit": ln["debit"],
+         "line_description": ln.get("line_description")}
+        for ln in entry["lines"]
+    ]
+    rev_date = _require_entry_date(
+        rev_date or datetime.now(timezone.utc).date().isoformat())
+    rev_desc = description or f"Contre-passation de {entry['entry_number']}"
+    # Le miroir est une NOUVELLE écriture 'posted'. L'origine reste 'posted'.
+    reversal = _create_journal_entry(
+        organization_id, user_id,
+        entry_date=rev_date, description=rev_desc, lines=mirror_lines,
+        status="posted", entry_type="reversal", reverses_entry_id=entry["id"],
+        source_type=source_type, source_id=source_id)
+    # On pose UNIQUEMENT le lien d'audit sur l'origine. On NE change PAS son status
+    # (surtout pas vers un 'reversed' qui l'exclurait du solde → double effet, bug).
+    db.journal_entries.update_one(
+        {"id": entry["id"], "organization_id": organization_id},
+        {"$set": {"reversed_by_entry_id": reversal["id"]}})
+    return reversal
+
+
+# ─── Primitives auto-posting partagées (spec §6.1) ───
+# Un doc source = une écriture auto VIVANTE, liée par (source_type, source_id).
+# Régénération = contre-passer l'ancienne (miroir POSTED) + reposter la nouvelle.
+# Tous les helpers filtrent organization_id explicitement (jamais par source_id
+# seul) → aucune fuite cross-org (spec §10).
+
+def _find_live_source_entry(organization_id: str, source_type: str,
+                            source_id: str) -> Optional[dict]:
+    """L'écriture auto VIVANTE d'un doc source, ou None (spec §6.1).
+
+    Vivante = `entry_type="auto"` ET non contre-passée (`reversed_by_entry_id`
+    à None). L'index unique partiel `uniq_live_auto_source` garantit qu'il n'en
+    existe jamais deux simultanément (§4.1). Filtre TOUJOURS l'org."""
+    return db.journal_entries.find_one({
+        "organization_id": organization_id,
+        "source_type": source_type,
+        "source_id": source_id,
+        "entry_type": "auto",
+        "reversed_by_entry_id": None,
+    }, {"_id": 0})
+
+
+def _post_source_entry(organization_id: str, user_id: str, source_type: str,
+                       source_id: str, entry_date: str, description: str,
+                       lines: list, reference: str = None) -> Optional[dict]:
+    """Poste UNE écriture auto pour un doc source, si aucune vivante n'existe
+    (idempotent, décision #2). No-op → None si une vivante existe déjà.
+
+    Réutilise `_create_journal_entry` (Phase 1) en threadant source_type/source_id
+    et en forçant `entry_type="auto"`, `status="posted"`."""
+    if _find_live_source_entry(organization_id, source_type, source_id):
+        return None  # déjà posté — no-op (garantit l'idempotence)
+    return _create_journal_entry(
+        organization_id, user_id, entry_date=entry_date, description=description,
+        lines=lines, status="posted", entry_type="auto", reference=reference,
+        source_type=source_type, source_id=source_id)
+
+
+def _unpost_source_entry(organization_id: str, user_id: str, source_type: str,
+                         source_id: str, rev_date: str = None) -> Optional[dict]:
+    """Contre-passe l'écriture auto vivante d'un doc source (miroir POSTED).
+
+    Réutilise EXACTEMENT le chemin de `reverse_entry` via `_reverse_entry_internal`
+    (pas de mécanisme parallèle). No-op → None si rien à défaire (source inexistant
+    ou déjà contre-passé : la vivante n'existe plus, donc pas de double miroir,
+    spec §10). Le miroir conserve `source_type`/`source_id` pour la traçabilité.
+    Par défaut le miroir prend la date de l'origine (cohérence de période)."""
+    live = _find_live_source_entry(organization_id, source_type, source_id)
+    if not live:
+        return None
+    return _reverse_entry_internal(
+        organization_id, user_id, live,
+        rev_date=rev_date or live["entry_date"],
+        source_type=source_type, source_id=source_id)
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.
@@ -1863,9 +1960,11 @@ def migrate_general_ledger_autopost_v1(target=None):
        - `expense_default_credit_account` défaut "1000" (Encaisse, point ouvert #1).
     2. Index d'unicité PARTIEL `uniq_live_auto_source` : garantit qu'il n'existe
        jamais deux écritures AUTO **vivantes** (`entry_type="auto"`,
-       `reverses_entry_id=None`) pour le même `(organization_id, source_type,
-       source_id)`. Les miroirs de contre-passation (`entry_type="reversal"`)
-       sont hors du filtre partiel → autorisés à partager la clé source.
+       `reverses_entry_id=None` ET `reversed_by_entry_id=None`) pour le même
+       `(organization_id, source_type, source_id)`. Les miroirs de contre-passation
+       (`entry_type="reversal"`) ET les anciens posts contre-passés
+       (`reversed_by_entry_id` posé lors d'une régénération) sont hors du filtre
+       partiel → autorisés à partager la clé source (spec §4.1bis).
 
        ⚠️ Le filtre exige EN PLUS `source_type`/`source_id` de type `string` : un
        filtre `reverses_entry_id:None` matche aussi les docs où le champ est
@@ -1894,10 +1993,20 @@ def migrate_general_ledger_autopost_v1(target=None):
         {"$set": {"expense_default_credit_account": "1000"}},
     )
     # 2. Index unique partiel sur le post auto vivant AVEC source réelle.
+    #    « Vivant » = `entry_type="auto"`, non contre-passé (`reversed_by_entry_id`
+    #    à None) ET n'étant pas lui-même un miroir (`reverses_entry_id` à None).
+    #    Les DEUX gardes sont nécessaires : sans `reversed_by_entry_id:None`, une
+    #    facture régénérée (spec §2 déc. #3 : contre-passer l'ancien post + reposter
+    #    le nouveau) échouerait — l'ancien post reste `entry_type="auto"` avec
+    #    `reverses_entry_id=None`, donc il matcherait encore le filtre et
+    #    collisionnerait avec le nouveau post sur `(org, source_type, source_id)`.
+    #    En excluant les posts contre-passés, l'index suit exactement la notion de
+    #    « vivant » de `_find_live_source_entry` (spec §4.1bis).
     index_name = "uniq_live_auto_source"
     partial_filter = {
         "entry_type": "auto",
         "reverses_entry_id": None,
+        "reversed_by_entry_id": None,
         "source_type": {"$type": "string"},
         "source_id": {"$type": "string"},
     }
@@ -2957,27 +3066,13 @@ def reverse_entry(
     if entry.get("reversed_by_entry_id"):
         # Déjà contre-passée : empêche la double contre-passation (§5.3).
         raise HTTPException(400, "Écriture déjà contre-passée")
-    # Miroir exact : débits ↔ crédits inversés, ligne par ligne.
-    mirror_lines = [
-        {"account_id": ln["account_id"], "debit": ln["credit"], "credit": ln["debit"],
-         "line_description": ln.get("line_description")}
-        for ln in entry["lines"]
-    ]
-    rev_date = _require_entry_date(
-        body.get("entry_date") or datetime.now(timezone.utc).date().isoformat())
-    rev_desc = body.get("description") or f"Contre-passation de {entry['entry_number']}"
-    # Le miroir est une NOUVELLE écriture 'posted'. L'origine reste 'posted'.
-    # Les deux comptent dans _account_balance → net zéro automatique (§5.2/§5.3).
-    reversal = _create_journal_entry(
-        current_user.organization_id, current_user.id,
-        entry_date=rev_date, description=rev_desc, lines=mirror_lines,
-        status="posted", entry_type="reversal", reverses_entry_id=entry_id)
-    # On pose UNIQUEMENT le lien d'audit sur l'origine. On NE change PAS son status
-    # (surtout pas vers un 'reversed' qui l'exclurait du solde → double effet, bug).
-    db.journal_entries.update_one(
-        {"id": entry_id, "organization_id": current_user.organization_id},
-        {"$set": {"reversed_by_entry_id": reversal["id"]}})
-    return reversal
+    # Chemin UNIQUE de contre-passation, partagé avec l'auto-posting
+    # (_unpost_source_entry) : miroir Dr↔Cr posté + reversed_by_entry_id sur
+    # l'origine, net zéro garanti (§5.2/§5.3). Contre-passation manuelle → pas de
+    # source (source_type/source_id restent None).
+    return _reverse_entry_internal(
+        current_user.organization_id, current_user.id, entry,
+        rev_date=body.get("entry_date"), description=body.get("description"))
 
 
 @app.delete("/api/ledger/entries/{entry_id}", status_code=204)
