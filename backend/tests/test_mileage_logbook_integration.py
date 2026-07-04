@@ -716,3 +716,35 @@ def test_update_unknown_favorite_returns_404(auth_headers):
 def test_delete_unknown_favorite_returns_404(auth_headers):
     r = client.delete("/api/mileage/favorites/does-not-exist", headers=auth_headers)
     assert r.status_code == 404, r.text
+
+
+# --- Task 8 : GET /api/mileage/rates (+ drapeau annee manquante) --------------
+
+def test_get_rates(auth_headers):
+    r = client.get("/api/mileage/rates", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["threshold_km"] == 5000
+    # Taux ARC exacts par annee (1er = 5000 premiers km, 2e = au-dela).
+    assert body["rates"]["2024"] == {"full": 0.70, "reduced": 0.64}
+    assert body["rates"]["2025"] == {"full": 0.72, "reduced": 0.66}
+    assert body["rates"]["2026"] == {"full": 0.73, "reduced": 0.67}
+    assert "current_year" in body
+    assert "current_year_missing" in body
+    # Le drapeau reflete exactement l'absence/presence du taux de l'annee courante.
+    assert body["current_year_missing"] == (
+        _mileage_rate_for_year(body["current_year"]) is None
+    )
+
+
+def test_get_rates_flags_a_missing_year_year(auth_headers):
+    # Contrat de garde : une annee sans taux publie ne doit PAS apparaitre dans la
+    # table (sinon un fallback silencieux produirait une mauvaise allocation).
+    r = client.get("/api/mileage/rates", headers=auth_headers)
+    body = r.json()
+    assert "2099" not in body["rates"], (
+        "Une annee sans taux ARC ne doit jamais etre exposee comme un taux valide"
+    )
+    # Coherence stricte du drapeau avec le helper source de verite.
+    for year_str in body["rates"]:
+        assert _mileage_rate_for_year(int(year_str)) is not None

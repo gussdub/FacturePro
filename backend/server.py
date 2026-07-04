@@ -6853,6 +6853,25 @@ def _ensure_default_vehicle(org_id: str, user_id: str) -> None:
         })
 
 
+@app.get("/api/mileage/rates")
+def get_mileage_rates(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    """Expose la table des taux ARC par année (référence pour l'UI + garde côté
+    client) et signale si l'année courante n'a pas de taux publié.
+
+    `current_year_missing=True` ⇒ toute allocation pour cette année sera BLOQUÉE
+    (pas de fallback silencieux sur une autre année, cf. `_mileage_rate_for_year`),
+    ce qui déclenche le rappel annuel de mise à jour du taux."""
+    current_year = datetime.now(timezone.utc).year
+    return {
+        # Clés sérialisées en str (JSON n'a pas de clés entières) ; ne contient QUE
+        # les années réellement publiées — une année absente reste absente.
+        "rates": {str(y): r for y, r in MILEAGE_RATES.items()},
+        "threshold_km": MILEAGE_RATE_THRESHOLD_KM,
+        "current_year": current_year,
+        "current_year_missing": _mileage_rate_for_year(current_year) is None,
+    }
+
+
 @app.get("/api/mileage/vehicles")
 def list_mileage_vehicles(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
     _ensure_default_vehicle(current_user.organization_id, current_user.id)
