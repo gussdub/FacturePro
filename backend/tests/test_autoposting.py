@@ -631,3 +631,215 @@ class TestResolveLedgerAccount:
         finally:
             _cleanup_org(org_a)
             _cleanup_org(org_b)
+
+
+def _lines_by_number(org_id, lines):
+    """Regroupe les lignes d'écriture {account_id, debit, credit} par n° de compte.
+    Retourne {account_number: {"debit": x, "credit": y}} (résout account_id → n°)."""
+    out = {}
+    for ln in lines:
+        acc = server_module.db.chart_of_accounts.find_one(
+            {"organization_id": org_id, "id": ln["account_id"]},
+            {"account_number": 1})
+        assert acc, f"account_id {ln['account_id']} introuvable pour {org_id}"
+        num = acc["account_number"]
+        out.setdefault(num, {"debit": 0.0, "credit": 0.0})
+        out[num]["debit"] += round(float(ln.get("debit", 0) or 0), 2)
+        out[num]["credit"] += round(float(ln.get("credit", 0) or 0), 2)
+    return out
+
+
+def _assert_balanced(lines):
+    """[COMPTA] Partie double : Σ Dr == Σ Cr (tolérance ≤ 0,005 $)."""
+    total_debit = round(sum(float(l.get("debit", 0) or 0) for l in lines), 2)
+    total_credit = round(sum(float(l.get("credit", 0) or 0) for l in lines), 2)
+    assert abs(total_debit - total_credit) <= 0.005, (
+        f"écriture déséquilibrée : Dr {total_debit:.2f} ≠ Cr {total_credit:.2f}")
+
+
+class TestInvoiceRevenueMapping:
+    """Tâche 5 — _build_invoice_revenue_lines + _autopost_invoice_revenue (§5.1).
+
+    Écriture de revenu accrual : Dr 1100 (A/R) / Cr 4000 (revenu par différence)
+    / Cr taxes (2100/2110/2120). Les taxes de facture sont en devise de FACTURE
+    (spec déc. #7) → reconverties en CAD via exchange_rate_to_cad AVANT post. Le
+    revenu est calculé PAR DIFFÉRENCE (total_cad − Σ taxes_cad) → équilibre garanti
+    même sur facture étrangère. Idempotent : (invoice, id) → une seule vivante.
+    """
+
+    def _invoice(self, org_id, **overrides):
+        """Facture jetable minimale (les champs que lit le mapping)."""
+        inv = {
+            "id": f"inv-{uuid.uuid4().hex[:8]}",
+            "organization_id": org_id,
+            "invoice_number": "INV-0042",
+            "issue_date": "2026-07-01T00:00:00+00:00",
+            "currency": "CAD",
+            "exchange_rate_to_cad": 1.0,
+            "gst_amount": 0.0,
+            "pst_amount": 0.0,
+            "hst_amount": 0.0,
+            "total_cad": 0.0,
+        }
+        inv.update(overrides)
+        return inv
+
+    def test_qc_cad_balanced_revenue_by_difference(self):
+        # QC CAD : total 115, TPS 5, TVQ 9.975 → Dr 1100=115 / Cr 4000=100.025
+        # (par différence) / Cr 2100=5 / Cr 2110=9.975. Équilibrée. Pas de 2120.
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(
+                org_id, total_cad=115.0, gst_amount=5.0, pst_amount=9.975,
+                hst_amount=0.0)
+            lines = server_module._build_invoice_revenue_lines(org_id, user_id, inv)
+            _assert_balanced(lines)
+            by = _lines_by_number(org_id, lines)
+            assert by["1100"]["debit"] == 115.0
+            assert by["1100"]["credit"] == 0.0
+            # Les montants de taxe sont arrondis au cent avant post (une ligne de
+            # GL ne porte jamais de fraction de cent). TVQ 9.975 → 9.97.
+            gst_cad = round(5.0, 2)
+            qst_cad = round(9.975, 2)   # 9.97 (arrondi Python au pair)
+            assert by["2100"]["credit"] == gst_cad
+            assert by["2110"]["credit"] == qst_cad
+            # Le revenu 4000 est le total MOINS les taxes arrondies (par différence)
+            # → l'écriture reste équilibrée au cent près.
+            assert by["4000"]["credit"] == round(115.0 - gst_cad - qst_cad, 2)
+            assert "2120" not in by  # QC : pas de TVH
+            # Cohérence partie double explicite : Dr 1100 == Cr(4000+2100+2110).
+            assert abs(by["1100"]["debit"] - (
+                by["4000"]["credit"] + by["2100"]["credit"]
+                + by["2110"]["credit"])) <= 0.005
+        finally:
+            _cleanup_org(org_id)
+
+    def test_on_hst_creates_2120_on_the_fly(self):
+        # ON : hst_amount>0 → crédite 2120 (créé à la volée si absent), pas de
+        # 2100/2110. Écriture équilibrée.
+        org_id, user_id = _make_org()
+        try:
+            assert server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "2120"}) is None
+            inv = self._invoice(
+                org_id, total_cad=113.0, gst_amount=0.0, pst_amount=0.0,
+                hst_amount=13.0)
+            lines = server_module._build_invoice_revenue_lines(org_id, user_id, inv)
+            _assert_balanced(lines)
+            by = _lines_by_number(org_id, lines)
+            assert by["1100"]["debit"] == 113.0
+            assert abs(by["4000"]["credit"] - 100.0) <= 0.005
+            assert by["2120"]["credit"] == 13.0
+            assert "2100" not in by
+            assert "2110" not in by
+            # 2120 a bien été créé dans le plan (compte système).
+            acc = server_module.db.chart_of_accounts.find_one(
+                {"organization_id": org_id, "account_number": "2120"}, {"_id": 0})
+            assert acc is not None
+            assert acc["is_system"] is True
+            assert acc["account_type"] == "liability"
+        finally:
+            _cleanup_org(org_id)
+
+    def test_usd_taxes_reconverted_to_cad_balanced(self):
+        # [COMPTA] USD : taxes en USD, exchange_rate_to_cad=1.35. Les taxes sont
+        # divisées par le taux (_cad), ar_cad = total_cad inchangé, revenu par
+        # différence → Σ Dr == Σ Cr AU CENT PRÈS, et Dr 1100 == total_cad.
+        org_id, user_id = _make_org()
+        try:
+            # Facture USD : sous-total 100 USD, TPS 5 USD, TVQ 9.975 USD.
+            # total facture 114.975 USD ; total_cad = 114.975 * 1.35 ≈ 155.22.
+            inv = self._invoice(
+                org_id, currency="USD", exchange_rate_to_cad=1.35,
+                gst_amount=5.0, pst_amount=9.975, hst_amount=0.0,
+                total_cad=155.22)
+            lines = server_module._build_invoice_revenue_lines(org_id, user_id, inv)
+            _assert_balanced(lines)  # au cent près (tolérance 0,005)
+            by = _lines_by_number(org_id, lines)
+            # Dr 1100 == total_cad (source de vérité, inchangé).
+            assert by["1100"]["debit"] == 155.22
+            # Les taxes SONT reconverties (divisées par le taux), pas les valeurs USD.
+            assert abs(by["2100"]["credit"] - round(5.0 / 1.35, 2)) <= 0.005
+            assert abs(by["2110"]["credit"] - round(9.975 / 1.35, 2)) <= 0.005
+            # Revenu = total_cad − Σ taxes_cad (par différence).
+            expected_rev = round(
+                155.22 - round(5.0 / 1.35, 2) - round(9.975 / 1.35, 2), 2)
+            assert abs(by["4000"]["credit"] - expected_rev) <= 0.005
+        finally:
+            _cleanup_org(org_id)
+
+    def test_no_tax_two_lines(self):
+        # Sans taxes : 2 lignes seulement (Dr 1100 / Cr 4000 = total_cad).
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(org_id, total_cad=200.0)
+            lines = server_module._build_invoice_revenue_lines(org_id, user_id, inv)
+            _assert_balanced(lines)
+            assert len(lines) == 2
+            by = _lines_by_number(org_id, lines)
+            assert by["1100"]["debit"] == 200.0
+            assert by["4000"]["credit"] == 200.0
+        finally:
+            _cleanup_org(org_id)
+
+    def test_autopost_metadata(self):
+        # Métadonnées de l'écriture postée (§5.1) : source_type/id, entry_date,
+        # description, reference, entry_type="auto".
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(
+                org_id, invoice_number="INV-0099",
+                issue_date="2026-07-15T12:34:56+00:00",
+                total_cad=115.0, gst_amount=5.0, pst_amount=9.975)
+            entry = server_module._autopost_invoice_revenue(org_id, user_id, inv)
+            assert entry is not None
+            assert entry["source_type"] == "invoice"
+            assert entry["source_id"] == inv["id"]
+            assert entry["entry_type"] == "auto"
+            assert entry["status"] == "posted"
+            assert entry["entry_date"] == "2026-07-15"  # issue_date[:10]
+            assert entry["description"] == "Facture INV-0099"
+            assert entry["reference"] == "INV-0099"
+            # [COMPTA] L'écriture réellement postée est équilibrée.
+            _assert_balanced(entry["lines"])
+            assert round(entry["total_debit"], 2) == round(entry["total_credit"], 2)
+        finally:
+            _cleanup_org(org_id)
+
+    def test_autopost_idempotent(self):
+        # Deux appels _autopost_invoice_revenue → 1 seule écriture vivante.
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(org_id, total_cad=115.0, gst_amount=5.0,
+                                pst_amount=9.975)
+            first = server_module._autopost_invoice_revenue(org_id, user_id, inv)
+            assert first is not None
+            second = server_module._autopost_invoice_revenue(org_id, user_id, inv)
+            assert second is None  # no-op : déjà posté
+            n = server_module.db.journal_entries.count_documents({
+                "organization_id": org_id, "source_type": "invoice",
+                "source_id": inv["id"], "entry_type": "auto",
+                "reversed_by_entry_id": None})
+            assert n == 1
+        finally:
+            _cleanup_org(org_id)
+
+    def test_autopost_posts_to_ledger_balanced(self):
+        # [COMPTA] Après post, la balance de vérification de l'org reste équilibrée
+        # (Σ débits postés == Σ crédits postés). Preuve d'intégration DB.
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(org_id, total_cad=115.0, gst_amount=5.0,
+                                pst_amount=9.975)
+            server_module._autopost_invoice_revenue(org_id, user_id, inv)
+            agg = list(server_module.db.journal_entries.aggregate([
+                {"$match": {"organization_id": org_id, "status": "posted"}},
+                {"$unwind": "$lines"},
+                {"$group": {"_id": None,
+                            "d": {"$sum": "$lines.debit"},
+                            "c": {"$sum": "$lines.credit"}}},
+            ]))
+            assert agg, "aucune écriture postée"
+            assert abs(round(agg[0]["d"], 2) - round(agg[0]["c"], 2)) <= 0.005
+        finally:
+            _cleanup_org(org_id)

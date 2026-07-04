@@ -1954,6 +1954,98 @@ def _default_sub_type_for(account_type: str, account_number: str) -> Optional[st
     return defaults.get(account_type)
 
 
+# ─── Mappings événement → écriture auto (spec §5) ───
+# Chaque mapping construit des lignes {account_id, debit, credit} au format attendu
+# par _create_journal_entry / _snapshot_lines (Phase 1), puis délègue à
+# _post_source_entry (idempotent). Les helpers debit()/credit() résolvent le compte
+# par NUMÉRO canonique via _resolve_ledger_account (seed lazy déclenché) et sont
+# partagés par les mappings facture/paiement/dépense (T5–T6).
+#
+# [COMPTA — obligations bloquantes ici, reportées depuis la revue T4] :
+#  1. Partie double : chaque écriture produite vérifie Σ Dr == Σ Cr (tolérance
+#     ≤ 0,005 $, _validate_entry_balance dans _create_journal_entry le re-assert).
+#     La ligne de contrepartie (revenu 4000, charge 5xxx) est calculée PAR
+#     DIFFÉRENCE (total − Σ taxes) pour absorber l'arrondi de conversion.
+#  2. Reconversion CAD des taxes de facture (spec déc. #7) : gst/pst/hst sont en
+#     devise de FACTURE → divisés par exchange_rate_to_cad AVANT post. total_cad
+#     est déjà en CAD (source de vérité du débit A/R) → jamais reconverti.
+
+def _autopost_debit(org_id, user_id, account_number, amount, create_if_missing=False,
+                    kind=None, name=None):
+    """Ligne de DÉBIT : résout le compte par numéro (seed lazy) et retourne une
+    ligne {account_id, debit, credit} au format _create_journal_entry.
+    Lève si le compte est introuvable (l'appelant a garanti son existence)."""
+    acc = _resolve_ledger_account(org_id, user_id, account_number,
+                                  create_if_missing=create_if_missing,
+                                  kind=kind, name=name)
+    if acc is None:
+        raise ValueError(f"Compte {account_number} introuvable pour le débit auto")
+    return {"account_id": acc["id"], "debit": round(float(amount), 2), "credit": 0.0}
+
+
+def _autopost_credit(org_id, user_id, account_number, amount, create_if_missing=False,
+                     kind=None, name=None):
+    """Ligne de CRÉDIT (miroir de _autopost_debit)."""
+    acc = _resolve_ledger_account(org_id, user_id, account_number,
+                                  create_if_missing=create_if_missing,
+                                  kind=kind, name=name)
+    if acc is None:
+        raise ValueError(f"Compte {account_number} introuvable pour le crédit auto")
+    return {"account_id": acc["id"], "debit": 0.0, "credit": round(float(amount), 2)}
+
+
+def _build_invoice_revenue_lines(org_id: str, user_id: str, inv: dict) -> list:
+    """Lignes de l'écriture de revenu accrual d'une facture (spec §5.1).
+
+    Dr 1100 (A/R = total_cad) / Cr 4000 (revenu PAR DIFFÉRENCE) / Cr taxes.
+    Les taxes (gst/pst/hst) sont en devise de FACTURE (déc. #7) → reconverties en
+    CAD via exchange_rate_to_cad. Le revenu est calculé par différence
+    (total_cad − Σ taxes_cad) pour absorber l'arrondi de conversion → l'écriture
+    est TOUJOURS équilibrée, y compris sur facture étrangère. 2120 (TVH à payer)
+    est créé à la volée (profil QC → non seedé) quand hst_cad > 0."""
+    rate = inv.get("exchange_rate_to_cad") or 1.0
+    is_foreign = inv.get("currency") != "CAD" and rate > 0
+
+    def _cad(x):
+        x = x or 0
+        return round((x / rate), 2) if is_foreign else round(x, 2)
+
+    gst_cad = _cad(inv.get("gst_amount"))
+    qst_cad = _cad(inv.get("pst_amount"))   # pst_amount = TVQ au QC
+    hst_cad = _cad(inv.get("hst_amount"))
+    ar_cad = round(inv["total_cad"], 2)     # déjà en CAD, source de vérité du total
+    revenue_cad = round(ar_cad - gst_cad - qst_cad - hst_cad, 2)
+
+    lines = [
+        _autopost_debit(org_id, user_id, "1100", ar_cad),
+        _autopost_credit(org_id, user_id, "4000", revenue_cad),
+    ]
+    if gst_cad > 0:
+        lines.append(_autopost_credit(org_id, user_id, "2100", gst_cad))
+    if qst_cad > 0:
+        lines.append(_autopost_credit(org_id, user_id, "2110", qst_cad))
+    if hst_cad > 0:
+        lines.append(_autopost_credit(
+            org_id, user_id, "2120", hst_cad,
+            create_if_missing=True, kind="liability", name="TVH à payer"))
+    return lines
+
+
+def _autopost_invoice_revenue(org_id: str, user_id: str, inv: dict) -> Optional[dict]:
+    """Poste l'écriture de revenu accrual d'une facture (§5.1), idempotent.
+
+    Construit les lignes (§5.1) puis délègue à _post_source_entry
+    (source_type="invoice", source_id=inv["id"]) : no-op → None si une écriture
+    vivante existe déjà. entry_date = issue_date[:10]."""
+    lines = _build_invoice_revenue_lines(org_id, user_id, inv)
+    return _post_source_entry(
+        org_id, user_id, "invoice", inv["id"],
+        entry_date=inv["issue_date"][:10],
+        description=f"Facture {inv['invoice_number']}",
+        lines=lines,
+        reference=inv["invoice_number"])
+
+
 def migrate_organizations_v1():
     """Idempotente. Safe a executer a chaque boot backend.
     - Cree une organisation pour chaque user sans organization_id.
