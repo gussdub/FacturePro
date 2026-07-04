@@ -2036,11 +2036,24 @@ def _autopost_invoice_revenue(org_id: str, user_id: str, inv: dict) -> Optional[
 
     Construit les lignes (§5.1) puis délègue à _post_source_entry
     (source_type="invoice", source_id=inv["id"]) : no-op → None si une écriture
-    vivante existe déjà. entry_date = issue_date[:10]."""
+    vivante existe déjà.
+
+    entry_date = issue_date NORMALISÉE via _require_entry_date (même garde que le
+    journal manuel / l'ouverture / la contre-passation). Contrairement au slice
+    brut `issue_date[:10]`, ceci EXIGE une date ISO calendaire valide : un
+    issue_date vide ('' → entry_date '') ou malformé qui, jusqu'ici, aurait
+    persisté une entry_date invalide sur une écriture POSTÉE (corrompant
+    silencieusement toute requête de solde bornée par date $gte/$lte dans
+    _account_balance / balance de vérification / bilan datés) est désormais rejeté
+    en amont par un HTTPException(400) — capté au câblage par _safe_autopost et
+    signalé en autopost_error, sans jamais poster une écriture à date invalide.
+    _require_entry_date renvoie la forme canonique 'YYYY-MM-DD' (équivalent à
+    l'ancien [:10] pour un ISO valide, donc rétrocompatible)."""
     lines = _build_invoice_revenue_lines(org_id, user_id, inv)
+    entry_date = _require_entry_date(inv.get("issue_date"))
     return _post_source_entry(
         org_id, user_id, "invoice", inv["id"],
-        entry_date=inv["issue_date"][:10],
+        entry_date=entry_date,
         description=f"Facture {inv['invoice_number']}",
         lines=lines,
         reference=inv["invoice_number"])

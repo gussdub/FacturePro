@@ -806,6 +806,49 @@ class TestInvoiceRevenueMapping:
         finally:
             _cleanup_org(org_id)
 
+    def test_autopost_entry_date_normalized_via_require(self):
+        # [COMPTA] entry_date passe par _require_entry_date (comme le journal
+        # manuel / l'ouverture) : un issue_date ISO datetime est NORMALISÉ à la
+        # forme canonique 'YYYY-MM-DD' sur l'écriture POSTÉE (pas de composante
+        # horaire), pour que les requêtes de solde bornées par date ($gte/$lte sur
+        # entry_date) comparent des chaînes homogènes.
+        org_id, user_id = _make_org()
+        try:
+            inv = self._invoice(
+                org_id, issue_date="2026-07-15T23:59:59+00:00", total_cad=200.0)
+            entry = server_module._autopost_invoice_revenue(org_id, user_id, inv)
+            assert entry["entry_date"] == "2026-07-15"
+            # Ce qui est réellement persisté en DB porte la date normalisée.
+            stored = server_module.db.journal_entries.find_one(
+                {"id": entry["id"]}, {"_id": 0})
+            assert stored["entry_date"] == "2026-07-15"
+            assert "T" not in stored["entry_date"]  # jamais de composante horaire
+        finally:
+            _cleanup_org(org_id)
+
+    def test_autopost_rejects_invalid_issue_date_no_corrupt_entry(self):
+        # [COMPTA] Un issue_date vide/malformé/absent ne doit JAMAIS persister une
+        # entry_date invalide ('' ou datetime brut) sur une écriture POSTÉE (ce qui
+        # corromprait silencieusement toute balance/bilan borné par date). Le garde
+        # _require_entry_date lève HTTPException(400) EN AMONT de tout post → au
+        # câblage (T7) c'est capté par _safe_autopost et signalé en autopost_error,
+        # l'op métier n'échouant pas. Ici on prouve : (a) ça lève, (b) aucune
+        # écriture n'a été postée (le mapping n'a rien laissé en base).
+        for bad in ("", "pas-une-date", None):
+            org_id, user_id = _make_org()
+            try:
+                inv = self._invoice(org_id, issue_date=bad, total_cad=200.0)
+                with pytest.raises(server_module.HTTPException) as exc:
+                    server_module._autopost_invoice_revenue(org_id, user_id, inv)
+                assert exc.value.status_code == 400
+                # Aucune écriture auto n'a été posée pour cette facture.
+                n = server_module.db.journal_entries.count_documents({
+                    "organization_id": org_id, "source_type": "invoice",
+                    "source_id": inv["id"]})
+                assert n == 0, f"écriture postée malgré issue_date={bad!r}"
+            finally:
+                _cleanup_org(org_id)
+
     def test_autopost_idempotent(self):
         # Deux appels _autopost_invoice_revenue → 1 seule écriture vivante.
         org_id, user_id = _make_org()
