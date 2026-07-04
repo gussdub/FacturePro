@@ -2,6 +2,7 @@
 
 Task 1 : table des taux ARC + `_mileage_rate_for_year`.
 Task 2 : distance dérivée + allocation avec split au seuil 5000 km.
+Task 3 : cumul annuel `_mileage_sum_ytd`.
 """
 import os
 import sys
@@ -21,6 +22,7 @@ from backend.server import (  # noqa: E402
     _mileage_rate_for_year,
     _mileage_distance_km,
     _mileage_allocation,
+    _mileage_sum_ytd,
 )
 
 
@@ -100,3 +102,78 @@ def test_allocation_just_under_threshold_all_full():
     assert amount == round(200 * 0.73, 2)
     assert bd["km_full"] == 200.0
     assert bd["km_reduced"] == 0.0
+
+
+# --- Task 3 : cumul annuel `_mileage_sum_ytd` ---
+
+
+def _trip(trip_date, distance_km, tid, employee_key="user:U1", vehicle_id="V1"):
+    return {
+        "id": tid,
+        "trip_date": trip_date,
+        "distance_km": distance_km,
+        "employee_key": employee_key,
+        "vehicle_id": vehicle_id,
+    }
+
+
+def test_ytd_sums_earlier_trips_same_person_vehicle():
+    trips = [
+        _trip("2026-01-05", 100.0, "a"),
+        _trip("2026-02-10", 50.0, "b"),
+        _trip("2026-03-01", 30.0, "c"),  # le trajet courant
+    ]
+    total = _mileage_sum_ytd(trips, current_id="c", current_date="2026-03-01",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 150.0
+
+
+def test_ytd_ignores_other_person():
+    trips = [
+        _trip("2026-01-05", 100.0, "a", employee_key="EMP2"),
+        _trip("2026-02-01", 40.0, "b"),
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-02-01",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 0.0
+
+
+def test_ytd_ignores_other_vehicle():
+    trips = [
+        _trip("2026-01-05", 100.0, "a", vehicle_id="V2"),
+        _trip("2026-02-01", 40.0, "b"),
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-02-01",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 0.0
+
+
+def test_ytd_ignores_other_year():
+    trips = [
+        _trip("2025-12-31", 500.0, "a"),
+        _trip("2026-01-02", 40.0, "b"),
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-01-02",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 0.0
+
+
+def test_ytd_same_date_orders_by_id():
+    trips = [
+        _trip("2026-05-01", 10.0, "a"),
+        _trip("2026-05-01", 20.0, "b"),  # courant ; 'a' < 'b' donc compte
+    ]
+    total = _mileage_sum_ytd(trips, current_id="b", current_date="2026-05-01",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 10.0
+
+
+def test_ytd_excludes_current_and_later_trips():
+    trips = [
+        _trip("2026-01-01", 10.0, "a"),
+        _trip("2026-06-01", 99.0, "c"),  # courant
+        _trip("2026-09-01", 77.0, "z"),  # posterieur
+    ]
+    total = _mileage_sum_ytd(trips, current_id="c", current_date="2026-06-01",
+                             employee_key="user:U1", vehicle_id="V1")
+    assert total == 10.0

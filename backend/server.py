@@ -231,6 +231,55 @@ def _mileage_allocation(distance_km, ytd_before, rates, threshold=MILEAGE_RATE_T
     }
 
 
+def _mileage_employee_key(employee_id, user_id) -> str:
+    """Cle stable identifiant la personne pour le cumul 5000 km.
+    employee_id si present, sinon 'user:{user_id}'."""
+    return employee_id if employee_id else f"user:{user_id}"
+
+
+def _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id):
+    """Somme des distance_km des trajets ANTERIEURS de la meme personne+vehicule
+    dans la meme annee civile que current_date. Ordre (trip_date, id).
+    Chaque trip du parametre `trips` porte deja 'employee_key' et 'vehicle_id'.
+    """
+    year = current_date[:4]
+    total = 0.0
+    for t in trips:
+        if t["employee_key"] != employee_key or t["vehicle_id"] != vehicle_id:
+            continue
+        if t["trip_date"][:4] != year:
+            continue
+        # anterieur = date < current_date, ou meme date avec id <
+        if (t["trip_date"], t["id"]) < (current_date, current_id):
+            total += float(t["distance_km"])
+    return round(total, 2)
+
+
+def _mileage_ytd_before(scope, employee_key, vehicle_id, current_date, current_id):
+    """Charge les trajets de l'annee civile de current_date pour la meme
+    personne+vehicule (scope org via `scope`), puis somme les anterieurs.
+    `scope` = dict de filtre org (issu de _org_scope). employee_key est
+    la cle deja resolue via _mileage_employee_key."""
+    year = current_date[:4]
+    query = {
+        **scope,
+        "vehicle_id": vehicle_id,
+        "trip_date": {"$gte": f"{year}-01-01", "$lte": f"{year}-12-31"},
+    }
+    docs = list(db.mileage_trips.find(query))
+    trips = [
+        {
+            "id": d["id"],
+            "trip_date": d["trip_date"],
+            "distance_km": d.get("distance_km", 0.0),
+            "employee_key": _mileage_employee_key(d.get("employee_id"), d.get("created_by_user_id")),
+            "vehicle_id": d["vehicle_id"],
+        }
+        for d in docs
+    ]
+    return _mileage_sum_ytd(trips, current_id, current_date, employee_key, vehicle_id)
+
+
 def _find_category(code):
     """Retourne le dict catalogue correspondant à code, ou None si inconnu/vide/None."""
     if not code:
