@@ -1857,6 +1857,12 @@ def _autopost_mark_filter(source_doc_id: str, org_scope: dict,
     return {"id": source_doc_id, "organization_id": org_id}
 
 
+# Message d'échec auto-posting GÉNÉRIQUE (jamais `str(e)`, anti-leak feature #8 /
+# spec §6.3). Partagé entre `_safe_autopost` (posé sur le doc source) et le
+# backfill (surface dans `failed[].error`, spec §7) pour rester synchrones.
+AUTOPOST_ERROR_MESSAGE = "échec auto-posting"
+
+
 def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
                    org_scope: dict, legacy_user_id: Optional[str] = None) -> None:
     """Garde-fou robustesse (décision #6, spec §6.3).
@@ -1905,7 +1911,7 @@ def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
         db[source_doc_collection].update_one(
             mark_filter,
             {"$set": {"autopost_error":
-                      f"{datetime.now(timezone.utc).isoformat()} — échec auto-posting"}})
+                      f"{datetime.now(timezone.utc).isoformat()} — {AUTOPOST_ERROR_MESSAGE}"}})
 
 
 def _record_autopost_orphan(organization_id: str, source_type: str,
@@ -4395,6 +4401,24 @@ def _in_period(raw_date, start_date, end_date) -> bool:
     return start_date <= d <= end_date
 
 
+def _backfill_failure(source_type: str, source_id: str) -> dict:
+    """Item de la liste `failed` renvoyée par l'apply du backfill (spec §7,
+    forme `{source_type, source_id, error}`).
+
+    Le message `error` est le message GÉNÉRIQUE (`AUTOPOST_ERROR_MESSAGE`), jamais
+    `str(e)` : l'échec est capturé/avalé par `_safe_autopost` (pattern anti-leak
+    feature #8), donc le TYPE d'exception n'existe qu'au log serveur. On expose ici
+    exactement le même libellé que celui posé dans `autopost_error` sur le doc
+    source — de sorte que `failed[].error` et le champ `autopost_error` du doc
+    concordent, sans jamais divulguer de détail d'exception potentiellement
+    sensible à l'appelant HTTP."""
+    return {
+        "source_type": source_type,
+        "source_id": source_id,
+        "error": AUTOPOST_ERROR_MESSAGE,
+    }
+
+
 @app.post("/api/ledger/autopost/backfill")
 def autopost_backfill(
     response: Response,
@@ -4412,7 +4436,9 @@ def autopost_backfill(
     dépenses (charges), le même que le déroulé naturel des hooks métier. Chaque
     post passe par `_safe_autopost` : une source qui échoue est isolée (posée en
     `autopost_error`, listée dans `failed`) sans faire échouer les autres ni
-    l'endpoint (toujours 200, décision #6).
+    l'endpoint (toujours 200, décision #6). `failed` est une liste d'OBJETS
+    `{source_type, source_id, error}` (spec §7) — `error` reste le libellé
+    GÉNÉRIQUE (`AUTOPOST_ERROR_MESSAGE`), jamais `str(e)` (anti-leak feature #8).
 
     [COMPTA] IDEMPOTENCE : `_post_source_entry` no-op si une écriture VIVANTE
     existe déjà (`_find_live_source_entry`) → relancer le backfill ne crée JAMAIS
@@ -4446,6 +4472,15 @@ def autopost_backfill(
 
     # Docs candidats, bornés org + période. Les factures draft n'ont pas de revenu
     # à comptabiliser (accrual §5.5) → exclues comme dans /status.
+    #
+    # [COMPTA] Divergence ASSUMÉE (pas un bug) vis-à-vis du hook live
+    # `add_invoice_payment`, qui, lui, poste un encaissement dès que le paiement
+    # existe (gaté sur `autopost_enabled` seul, pas sur le statut). Le backfill,
+    # en excluant TOUTE facture draft (`status != draft`), n'inclut donc JAMAIS
+    # les paiements enregistrés sur une draft. C'est le comportement le plus SÛR :
+    # une draft n'a ni revenu ni A/R comptabilisé, donc un Dr 1000 / Cr 1100 y
+    # créerait un compte-client fantôme négatif. En pratique, l'UI masque le bouton
+    # paiement sur les drafts (feature #6), donc ce cas n'apparaît normalement pas.
     invoices = [
         inv for inv in db.invoices.find(
             {**scope, "status": {"$ne": "draft"}}, {"_id": 0})
@@ -4505,7 +4540,7 @@ def autopost_backfill(
             if _find_live_source_entry(org_id, "invoice", inv["id"]):
                 created["invoice"] += 1
             else:
-                failed.append(inv["id"])
+                failed.append(_backfill_failure("invoice", inv["id"]))
         # Paiements de la facture (encaissements §5.2), dans la période.
         for pay in (inv.get("payments") or []):
             if not _in_period(pay.get("date"), start_date, end_date):
@@ -4522,7 +4557,7 @@ def autopost_backfill(
             if _find_live_source_entry(org_id, "invoice_payment", pay["id"]):
                 created["invoice_payment"] += 1
             else:
-                failed.append(pay["id"])
+                failed.append(_backfill_failure("invoice_payment", pay["id"]))
 
     for exp in expenses:
         if _find_live_source_entry(org_id, "expense", exp["id"]):
@@ -4533,7 +4568,7 @@ def autopost_backfill(
         if _find_live_source_entry(org_id, "expense", exp["id"]):
             created["expense"] += 1
         else:
-            failed.append(exp["id"])
+            failed.append(_backfill_failure("expense", exp["id"]))
 
     return {"created": created, "failed": failed, "period": period}
 

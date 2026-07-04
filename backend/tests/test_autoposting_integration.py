@@ -2001,7 +2001,17 @@ class TestAutopostBackfill:
                 assert r.status_code == 200, r.text
                 body = r.json()
                 assert body["created"]["invoice"] == 0
-                assert inv["id"] in body["failed"]
+                # [SPEC §7] failed = liste d'OBJETS {source_type, source_id, error}
+                # (pas des IDs bruts). error = libellé générique, jamais str(e).
+                assert isinstance(body["failed"], list) and body["failed"]
+                fail = next(
+                    (f for f in body["failed"]
+                     if f["source_id"] == inv["id"]), None)
+                assert fail is not None, body["failed"]
+                assert fail["source_type"] == "invoice"
+                assert fail["error"] == "échec auto-posting"
+                # Anti-leak : le message d'exception ne fuit PAS dans la réponse.
+                assert "4000 introuvable" not in fail["error"]
             finally:
                 mp.undo()
             # autopost_error posé sur la facture (diagnostic via /status).
@@ -2009,6 +2019,53 @@ class TestAutopostBackfill:
                 {"id": inv["id"], "organization_id": org_id}, {"_id": 0})
             assert "autopost_error" in doc
             assert _live_revenue_entries(org_id, inv["id"]) == []
+        finally:
+            _cleanup(uid, org_id)
+
+    def test_draft_invoice_payment_not_backfilled(self, client):
+        # [COMPTA] Divergence ASSUMÉE (problème #2) : le backfill exclut TOUTE
+        # facture draft (status != draft), donc un paiement enregistré sur une
+        # draft n'est JAMAIS backfillé — contrairement au hook live
+        # add_invoice_payment qui, lui, poste dès que autopost_enabled. C'est le
+        # comportement le plus SÛR : une draft n'a ni revenu ni A/R, donc un
+        # Dr 1000 / Cr 1100 y créerait un compte-client fantôme négatif.
+        uid, org_id, h = _setup_org(client, "t12draftpay")
+        try:
+            # Facture draft + paiement, autopost OFF (reproduit le scénario UI-forcé).
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": False}})
+            inv = _create_draft_invoice(client, h)
+            r = _add_payment(client, h, inv["id"], 50.0, date="2026-06-20")
+            assert r.status_code == 200, r.text
+            pay_id = r.json()["payments"][0]["id"]
+            # Le POST payment a recalculé le statut (partial). On la RE-force draft
+            # pour matérialiser exactement le cas divergent : draft AVEC paiement.
+            server_module.db.invoices.update_one(
+                {"id": inv["id"], "organization_id": org_id},
+                {"$set": {"status": "draft"}})
+            server_module.db.company_settings.update_one(
+                {"organization_id": org_id},
+                {"$set": {"autopost_enabled": True}})
+
+            # dry-run : ni la facture draft ni son paiement ne comptent.
+            rd = client.post(
+                "/api/ledger/autopost/backfill?dry_run=true", headers=h)
+            assert rd.status_code == 200, rd.text
+            wc = rd.json()["would_create"]
+            assert wc["invoice"] == 0, "facture draft exclue"
+            assert wc["invoice_payment"] == 0, "paiement d'une draft exclu"
+
+            # apply : rien posté pour cette draft ni son paiement.
+            ra = client.post(
+                "/api/ledger/autopost/backfill?dry_run=false", headers=h)
+            assert ra.status_code == 200, ra.text
+            created = ra.json()["created"]
+            assert created["invoice"] == 0
+            assert created["invoice_payment"] == 0
+            # Aucune écriture (ni revenu ni encaissement) créée → pas d'A/R fantôme.
+            assert _live_revenue_entries(org_id, inv["id"]) == []
+            assert _live_payment_entries(org_id, pay_id) == []
         finally:
             _cleanup(uid, org_id)
 

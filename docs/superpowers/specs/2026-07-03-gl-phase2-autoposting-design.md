@@ -295,8 +295,11 @@ POST /api/ledger/autopost/backfill?dry_run=true|false&start=&end=   accounting:w
   → `200 {would_create: {invoice: N, invoice_payment: M, expense: K}, skipped_existing: X, period: {start, end}}`
 - **Application (`dry_run=false`)** : poste réellement, dans l'ordre **facture (revenu) → paiements → dépenses**, chaque post protégé par `_safe_autopost`. Réponse : décompte réel + liste des `autopost_error` éventuels.
   → `200 {created: {...}, failed: [{source_type, source_id, error}], period}`
+  Chaque item de `failed` est un **objet** `{source_type, source_id, error}` (jamais un ID brut). Le champ `error` est le **libellé générique** (`AUTOPOST_ERROR_MESSAGE`), identique à celui posé dans `autopost_error` sur le doc source — **jamais `str(e)`** (le type d'exception ne va qu'au log serveur, pattern anti-leak feature #8). Diagnostic corrélé : `failed[].error` et le champ `autopost_error` du doc concordent.
 
 **Idempotent et rejouable** : relancer le backfill ne double rien (chaque post vérifie `_find_live_source_entry`). Active implicitement rien : `autopost_enabled` reste indépendant (le backfill est une action explicite one-shot ; l'activation du flag gère le **flux continu** futur).
+
+> **Divergence assumée — paiements sur facture `draft` (non corrigée, la plus sûre).** Le backfill exclut **toute** facture `draft` (`status != draft`), donc **n'inclut jamais** les paiements enregistrés sur une draft — alors que le hook live `add_invoice_payment` les posterait (gaté sur `autopost_enabled` seul, pas sur le statut). C'est délibéré : une draft n'a ni revenu ni compte-client comptabilisés, donc un `Dr 1000 / Cr 1100` d'encaissement y créerait un **A/R fantôme négatif**. En pratique le bouton paiement est masqué sur les drafts dans l'UI (feature #6), donc ce cas n'apparaît normalement pas. Couvert par `test_draft_invoice_payment_not_backfilled`.
 
 ## 8. API — nouveaux endpoints + hooks sur endpoints existants
 
