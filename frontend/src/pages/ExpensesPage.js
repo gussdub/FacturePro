@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency, CURRENCY_LABELS } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
-import { ScanLine, Paperclip, Edit, AlertTriangle } from 'lucide-react';
+import { ScanLine, Paperclip, Edit, AlertTriangle, Car } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
+import { useAuth } from '../context/AuthContext';
 
 function computeTaxesPaid(amountGross, province) {
   const a = parseFloat(amountGross) || 0;
@@ -22,6 +23,9 @@ function computeTaxesPaid(amountGross, province) {
 }
 
 const ExpensesPage = () => {
+  const { hasPermission } = useAuth();
+  const [showLogbook, setShowLogbook] = useState(false);
+  const [logbookTab, setLogbookTab] = useState('trips'); // 'trips' | 'favorites' | 'logbook'
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -708,6 +712,20 @@ const ExpensesPage = () => {
             style={{ display: "none" }}
             onChange={handleReceiptBatchScan}
           />
+          {hasPermission("expenses:read") && (
+            <button
+              type="button"
+              data-testid="open-logbook-btn"
+              onClick={() => setShowLogbook(true)}
+              style={{
+                background: "#fff", color: "#00A08C", border: "1.5px solid #00A08C",
+                padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 14,
+                fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6,
+              }}
+              title="Carnet de route (kilométrage)">
+              <Car size={16} /> Carnet de route
+            </button>
+          )}
           <button onClick={() => { resetForm(); setShowForm(true); }} data-testid="add-expense-btn" style={btnPrimary}>
             + Nouvelle Depense
           </button>
@@ -1335,6 +1353,50 @@ const ExpensesPage = () => {
         />
       )}
 
+      {showLogbook && (
+        <div
+          data-testid="logbook-modal"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1400, background: '#fff',
+            overflow: 'auto', padding: '24px',
+          }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '22px', fontWeight: 800, color: '#1f2937', margin: 0 }}>
+              <Car size={22} /> Carnet de route
+            </h2>
+            <button
+              type="button"
+              data-testid="logbook-close-btn"
+              onClick={() => setShowLogbook(false)}
+              style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
+              Fermer
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid #e5e7eb', marginBottom: '16px' }}>
+            {[['trips', 'Trajets'], ['favorites', 'Favoris'], ['logbook', 'Carnet']].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                data-testid={`logbook-tab-${key}`}
+                onClick={() => setLogbookTab(key)}
+                style={{
+                  padding: '8px 16px', background: 'transparent', border: 'none', cursor: 'pointer',
+                  fontSize: 14,
+                  color: logbookTab === key ? '#00A08C' : '#6b7280',
+                  fontWeight: logbookTab === key ? 700 : 500,
+                  borderBottom: logbookTab === key ? '2px solid #00A08C' : '2px solid transparent',
+                  marginBottom: '-1px',
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {logbookTab === 'trips' && <MileageTripsTab />}
+          {logbookTab === 'favorites' && <MileageFavoritesTab />}
+          {logbookTab === 'logbook' && <MileageLogbookTab />}
+        </div>
+      )}
+
       <style>{`
         @keyframes spin {
           to { transform: rotate(360deg); }
@@ -1343,6 +1405,17 @@ const ExpensesPage = () => {
     </div>
   );
 };
+
+// ─── Carnet de route — onglets (squelette, remplis aux Tasks 15-17) ───
+function MileageTripsTab() {
+  return <div data-testid="mileage-trips-tab" style={{ color: '#6b7280' }}>Trajets (à venir)</div>;
+}
+function MileageFavoritesTab() {
+  return <div data-testid="mileage-favorites-tab" style={{ color: '#6b7280' }}>Favoris (à venir)</div>;
+}
+function MileageLogbookTab() {
+  return <div data-testid="mileage-logbook-tab" style={{ color: '#6b7280' }}>Carnet (à venir)</div>;
+}
 
 // ─── Batch Review Table (feature: batch scan) ───
 const BatchReviewTable = ({
