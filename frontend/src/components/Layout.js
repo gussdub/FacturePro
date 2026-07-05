@@ -4,10 +4,11 @@ import { useAuth } from '../context/AuthContext';
 import { BACKEND_URL } from '../config';
 import NotificationsDropdown from './NotificationsDropdown';
 import FactureProLogo from './FactureProLogo';
+import useIsMobile from '../hooks/useIsMobile';
 import {
   LayoutDashboard, Users, Package, FileText, FilePen,
   UserCheck, Receipt, Download, Settings, Gem,
-  LogOut, Search, Bell, BarChart2, GitMerge, BookOpen
+  LogOut, Search, Bell, BarChart2, GitMerge, BookOpen, Menu
 } from 'lucide-react';
 
 const getImageUrl = (url) => {
@@ -22,6 +23,10 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   const orgName = organization?.name || user?.company_name || 'Entreprise';
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settings, setSettings] = useState(null);
+  const isMobile = useIsMobile(768);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Ferme la barre latérale off-canvas après une navigation (mobile).
+  useEffect(() => { setSidebarOpen(false); }, [currentRoute]);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -56,14 +61,23 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   );
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc' }}>
-      {/* Sidebar */}
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc', position: 'relative' }}>
+      {/* Voile derrière la barre latérale off-canvas (mobile) */}
+      {isMobile && sidebarOpen && (
+        <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 45 }} />
+      )}
+      {/* Sidebar — off-canvas (glisse depuis la gauche) sur mobile, fixe sur desktop */}
       <aside style={{
         width: '280px',
         background: 'linear-gradient(180deg, #1e293b 0%, #334155 100%)',
         boxShadow: '4px 0 6px -1px rgba(0, 0, 0, 0.1)',
         display: 'flex', flexDirection: 'column',
-        flexShrink: 0
+        flexShrink: 0,
+        ...(isMobile ? {
+          position: 'fixed', top: 0, left: 0, bottom: 0, height: '100vh', zIndex: 50,
+          transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
+          transition: 'transform 0.25s ease',
+        } : {}),
       }}>
         {/* Logo Section */}
         <div style={{ padding: '24px' }}>
@@ -143,19 +157,26 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Header */}
         <header style={{
-          background: 'white', padding: '16px 32px',
+          background: 'white', padding: isMobile ? '12px 16px' : '16px 32px',
           borderBottom: '1px solid #e2e8f0',
           boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ flex: 1 }}>
-              <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1e293b', margin: 0 }}>
+            {isMobile && (
+              <button onClick={() => setSidebarOpen(true)} aria-label="Ouvrir le menu" data-testid="mobile-menu-btn" style={{
+                background: 'none', border: 'none', padding: 8, marginRight: 6, cursor: 'pointer',
+                color: '#334155', display: 'flex', alignItems: 'center' }}>
+                <Menu size={24} />
+              </button>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h1 style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '700', color: '#1e293b', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {navigation.find(n => n.current)?.name || 'FacturePro'}
               </h1>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              {/* Search */}
-              <div style={{ position: 'relative' }}>
+              {/* Search — masquée sur mobile pour dégager la barre */}
+              {!isMobile && <div style={{ position: 'relative' }}>
                 <input type="text" placeholder="Rechercher..." style={{
                   paddingLeft: '36px', paddingRight: '12px', paddingTop: '8px', paddingBottom: '8px',
                   border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', width: '220px',
@@ -165,7 +186,7 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
                 onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; e.target.style.background = '#f8fafc'; }}
                 />
                 <Search size={16} strokeWidth={1.8} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-              </div>
+              </div>}
 
               {/* Notifications */}
               <div style={{ position: 'relative' }}>
@@ -200,14 +221,14 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
                     </span>
                   )}
                 </div>
-                <span style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>{orgName}</span>
+                {!isMobile && <span style={{ fontSize: '14px', fontWeight: '600', color: '#1e293b' }}>{orgName}</span>}
               </div>
             </div>
           </div>
         </header>
 
         {/* Page Content */}
-        <main style={{ padding: '24px 32px', flex: 1 }}>
+        <main style={{ padding: isMobile ? '16px' : '24px 32px', flex: 1 }}>
           {needsSubscription && currentRoute !== '/subscription' && (
             <div data-testid="subscription-expired-banner" style={{
               background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px',

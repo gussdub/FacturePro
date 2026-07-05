@@ -5,6 +5,7 @@ import CurrencySelector from '../components/CurrencySelector';
 import { ScanLine, Paperclip, Edit, AlertTriangle, Car } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 import { useAuth } from '../context/AuthContext';
+import useIsMobile from '../hooks/useIsMobile';
 
 function computeTaxesPaid(amountGross, province) {
   const a = parseFloat(amountGross) || 0;
@@ -25,6 +26,7 @@ function computeTaxesPaid(amountGross, province) {
 const ExpensesPage = () => {
   const { hasPermission } = useAuth();
   const [showLogbook, setShowLogbook] = useState(false);
+  const isMobile = useIsMobile();
   const [logbookTab, setLogbookTab] = useState('trips'); // 'trips' | 'favorites' | 'logbook'
   const [expenses, setExpenses] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -1381,7 +1383,7 @@ const ExpensesPage = () => {
             // Panneau sur la ZONE DE CONTENU seulement (décalé de la largeur de la barre
             // latérale, 280px — cf. Layout.js) : la navigation reste visible, le carnet est
             // intégré à l'app au lieu de recouvrir tout l'écran.
-            position: 'fixed', top: 0, right: 0, bottom: 0, left: '280px', zIndex: 30,
+            position: 'fixed', top: 0, right: 0, bottom: 0, left: isMobile ? 0 : '280px', zIndex: 30,
             background: '#fff', overflow: 'auto', padding: '24px',
           }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
