@@ -7240,32 +7240,95 @@ def get_mileage_rates(current_user: CurrentUser = Depends(require_permission("ex
     }
 
 
+def _mileage_vehicle_from_payload(payload: dict) -> dict:
+    """Valide + normalise un véhicule : nom (obligatoire), marque/modèle + plaque (optionnels),
+    tronqués. Ne renvoie que les champs métier (réutilisable POST/PUT)."""
+    name = (payload.get("name") or "").strip()[:80]
+    if not name:
+        raise HTTPException(status_code=400, detail="Le nom du véhicule est obligatoire")
+    return {
+        "name": name,
+        "make_model": ((payload.get("make_model") or "").strip()[:80]) or None,
+        "plate": ((payload.get("plate") or "").strip()[:20]) or None,
+    }
+
+
 @app.get("/api/mileage/vehicles")
 def list_mileage_vehicles(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
     _ensure_default_vehicle(current_user.organization_id, current_user.id)
-    vehicles = list(db.mileage_vehicles.find(_org_scope(current_user), {"_id": 0}))
+    # Actifs seulement (les véhicules supprimés qui ont des trajets sont soft-deletés, is_active=False,
+    # pour préserver l'historique ; ils ne polluent pas la liste ni les sélecteurs).
+    vehicles = list(db.mileage_vehicles.find(
+        {**_org_scope(current_user), "is_active": {"$ne": False}}, {"_id": 0}))
+    vehicles.sort(key=lambda v: (not v.get("is_default"), (v.get("name") or "").lower()))
     return vehicles
 
 
 @app.post("/api/mileage/vehicles")
 def create_mileage_vehicle(payload: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
-    name = (payload.get("name") or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Le nom du véhicule est obligatoire")
+    fields = _mileage_vehicle_from_payload(payload)
     doc = {
         "id": str(uuid.uuid4()),
         "organization_id": current_user.organization_id,
         "created_by_user_id": current_user.id,
-        "name": name,
-        "make_model": (payload.get("make_model") or None),
-        "plate": (payload.get("plate") or None),
         "is_default": False,
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        **fields,
     }
     db.mileage_vehicles.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+@app.put("/api/mileage/vehicles/{vehicle_id}")
+def update_mileage_vehicle(vehicle_id: str, payload: dict,
+                           current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    scope = _org_scope(current_user)
+    if not db.mileage_vehicles.find_one({**scope, "id": vehicle_id}):
+        raise HTTPException(404, "Véhicule introuvable")
+    fields = _mileage_vehicle_from_payload(payload)
+    db.mileage_vehicles.update_one({**scope, "id": vehicle_id}, {"$set": fields})
+    return db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0})
+
+
+@app.post("/api/mileage/vehicles/{vehicle_id}/set-default")
+def set_default_mileage_vehicle(vehicle_id: str,
+                                current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    scope = _org_scope(current_user)
+    if not db.mileage_vehicles.find_one({**scope, "id": vehicle_id}):
+        raise HTTPException(404, "Véhicule introuvable")
+    db.mileage_vehicles.update_many({**scope, "is_default": True}, {"$set": {"is_default": False}})
+    db.mileage_vehicles.update_one({**scope, "id": vehicle_id},
+                                   {"$set": {"is_default": True, "is_active": True}})
+    return db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0})
+
+
+@app.delete("/api/mileage/vehicles/{vehicle_id}")
+def delete_mileage_vehicle(vehicle_id: str,
+                           current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    scope = _org_scope(current_user)
+    v = db.mileage_vehicles.find_one({**scope, "id": vehicle_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Véhicule introuvable")
+    # Il faut toujours au moins un véhicule (sinon _ensure_default_vehicle en re-seed un).
+    others_active = db.mileage_vehicles.count_documents(
+        {**scope, "is_active": {"$ne": False}, "id": {"$ne": vehicle_id}})
+    if others_active == 0:
+        raise HTTPException(409, "Impossible de supprimer le seul véhicule — ajoutez-en un autre d'abord.")
+    # Soft-delete si des trajets le référencent (préserve l'historique/le carnet ARC), sinon hard-delete.
+    if db.mileage_trips.count_documents({**scope, "vehicle_id": vehicle_id}) > 0:
+        db.mileage_vehicles.update_one({**scope, "id": vehicle_id},
+                                       {"$set": {"is_active": False, "is_default": False}})
+    else:
+        db.mileage_vehicles.delete_one({**scope, "id": vehicle_id})
+    # Promouvoir un autre véhicule par défaut si on vient de retirer le défaut.
+    if v.get("is_default"):
+        nxt = db.mileage_vehicles.find_one(
+            {**scope, "is_active": {"$ne": False}, "id": {"$ne": vehicle_id}}, {"_id": 0})
+        if nxt:
+            db.mileage_vehicles.update_one({**scope, "id": nxt["id"]}, {"$set": {"is_default": True}})
+    return {"status": "deleted", "id": vehicle_id}
 
 
 # ─── Carnet de route / kilométrage — trajets (feature #13) ───

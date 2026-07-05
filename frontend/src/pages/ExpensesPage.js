@@ -1397,7 +1397,7 @@ const ExpensesPage = () => {
             </button>
           </div>
           <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid #e5e7eb', marginBottom: '16px' }}>
-            {[['trips', 'Trajets'], ['favorites', 'Favoris'], ['logbook', 'Carnet']].map(([key, label]) => (
+            {[['trips', 'Trajets'], ['favorites', 'Favoris'], ['vehicles', 'Véhicules'], ['logbook', 'Carnet']].map(([key, label]) => (
               <button
                 key={key}
                 type="button"
@@ -1438,6 +1438,7 @@ const ExpensesPage = () => {
           )}
           {logbookTab === 'trips' && <MileageTripsTab />}
           {logbookTab === 'favorites' && <MileageFavoritesTab />}
+          {logbookTab === 'vehicles' && <MileageVehiclesTab />}
           {logbookTab === 'logbook' && <MileageLogbookTab />}
         </div>
       )}
@@ -1466,8 +1467,9 @@ function MileageTripsTab() {
   const [form, setForm] = useState({
     trip_date: now.toISOString().slice(0, 10),
     origin: '', destination: '', purpose: '',
-    one_way_km: '', round_trip: false, favorite_id: '',
+    one_way_km: '', round_trip: false, favorite_id: '', vehicle_id: '',
   });
+  const [vehicles, setVehicles] = useState([]);
 
   // token disponible via useAuth ; axios.defaults porte déjà le header Authorization
   // (AuthContext), mais on le passe explicitement pour rester robuste.
@@ -1475,13 +1477,14 @@ function MileageTripsTab() {
 
   const load = async () => {
     try {
-      const [t, f, r, pl] = await Promise.all([
+      const [t, f, r, pl, vh] = await Promise.all([
         axios.get(`${BACKEND_URL}/api/mileage/trips?year=${year}&month=${month}`, authCfg),
         axios.get(`${BACKEND_URL}/api/mileage/favorites`, authCfg),
         axios.get(`${BACKEND_URL}/api/mileage/rates`, authCfg),
         axios.get(`${BACKEND_URL}/api/mileage/places`, authCfg),
+        axios.get(`${BACKEND_URL}/api/mileage/vehicles`, authCfg),
       ]);
-      setTrips(t.data); setFavorites(f.data); setRates(r.data); setPlaces(pl.data || []);
+      setTrips(t.data); setFavorites(f.data); setRates(r.data); setPlaces(pl.data || []); setVehicles(vh.data || []);
     } catch (e) {
       setError(e.response?.data?.detail || 'Erreur de chargement du carnet de route');
     }
@@ -1663,6 +1666,12 @@ function MileageTripsTab() {
           <option value="">Depuis un favori…</option>
           {favorites.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
         </select>
+        {vehicles.length > 1 && (
+          <select data-testid="mileage-vehicle-select" value={form.vehicle_id} onChange={(e) => setForm({ ...form, vehicle_id: e.target.value })} style={{ ...input, gridColumn: '1 / -1' }}>
+            <option value="">Véhicule : par défaut</option>
+            {vehicles.map((v) => <option key={v.id} value={v.id}>🚗 {v.name}{v.is_default ? ' (défaut)' : ''}</option>)}
+          </select>
+        )}
         <input type="date" data-testid="mileage-trip-date" value={form.trip_date} onChange={(e) => setForm({ ...form, trip_date: e.target.value })} style={input} />
         <div>
           <input placeholder="Départ" data-testid="mileage-trip-origin" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} style={input} />
@@ -1745,6 +1754,107 @@ function MileageTripsTab() {
     </div>
   );
 }
+function MileageVehiclesTab() {
+  const { token } = useAuth();
+  const authCfg = { headers: { Authorization: `Bearer ${token}` } };
+  const [vehicles, setVehicles] = useState([]);
+  const [form, setForm] = useState({ name: '', make_model: '', plate: '' });
+  const [editId, setEditId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const input = { padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14, boxSizing: 'border-box', width: '100%' };
+  const btnPrimary = { background: 'linear-gradient(135deg, #00A08C, #008F7A)', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 };
+  const btnSecondary = { background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 500, fontSize: 13 };
+  const th = { textAlign: 'left', padding: '8px', borderBottom: '2px solid #e5e7eb', fontSize: 12, color: '#6b7280', textTransform: 'uppercase' };
+  const td = { padding: '8px', borderBottom: '1px solid #f1f5f9', fontSize: 14 };
+  const disabledStyle = (d) => (d ? { opacity: 0.5, cursor: 'not-allowed' } : {});
+
+  const load = async () => {
+    try {
+      const r = await axios.get(`${BACKEND_URL}/api/mileage/vehicles`, authCfg);
+      setVehicles(r.data || []);
+    } catch (e) { setError('Erreur de chargement des véhicules'); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const resetForm = () => { setForm({ name: '', make_model: '', plate: '' }); setEditId(null); };
+
+  const submit = async () => {
+    if (!form.name.trim()) { setError('Le nom du véhicule est obligatoire'); return; }
+    setBusy(true); setError('');
+    try {
+      const payload = { name: form.name.trim(), make_model: form.make_model.trim(), plate: form.plate.trim() };
+      if (editId) await axios.put(`${BACKEND_URL}/api/mileage/vehicles/${editId}`, payload, authCfg);
+      else await axios.post(`${BACKEND_URL}/api/mileage/vehicles`, payload, authCfg);
+      resetForm(); await load();
+    } catch (e) { setError(e.response?.data?.detail || "Erreur d'enregistrement"); }
+    finally { setBusy(false); }
+  };
+
+  const startEdit = (v) => { setEditId(v.id); setForm({ name: v.name || '', make_model: v.make_model || '', plate: v.plate || '' }); };
+
+  const setDefault = async (id) => {
+    setBusy(true); setError('');
+    try { await axios.post(`${BACKEND_URL}/api/mileage/vehicles/${id}/set-default`, {}, authCfg); await load(); }
+    catch (e) { setError(e.response?.data?.detail || 'Erreur'); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm('Supprimer ce véhicule ?')) return;
+    setBusy(true); setError('');
+    try { await axios.delete(`${BACKEND_URL}/api/mileage/vehicles/${id}`, authCfg); await load(); }
+    catch (e) { setError(e.response?.data?.detail || 'Erreur de suppression'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div data-testid="mileage-vehicles-tab">
+      {error && <div style={{ background: '#fee2e2', color: '#991b1b', padding: 10, borderRadius: 6, marginBottom: 12 }}>{error}</div>}
+      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 20, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'end' }}>
+        <label style={{ fontSize: 13 }}>Nom *
+          <input placeholder="Ex. Honda perso" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={input} /></label>
+        <label style={{ fontSize: 13 }}>Marque / modèle
+          <input placeholder="Ex. Honda Civic 2022" value={form.make_model} onChange={(e) => setForm({ ...form, make_model: e.target.value })} style={input} /></label>
+        <label style={{ fontSize: 13 }}>Plaque
+          <input placeholder="Ex. ABC 123" value={form.plate} onChange={(e) => setForm({ ...form, plate: e.target.value })} style={input} /></label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button data-testid="vehicle-save" onClick={submit} disabled={busy || !form.name.trim()} style={{ ...btnPrimary, ...disabledStyle(busy || !form.name.trim()) }}>
+            {editId ? 'Enregistrer' : 'Ajouter'}
+          </button>
+          {editId && <button onClick={resetForm} style={btnSecondary}>Annuler</button>}
+        </div>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }} data-testid="mileage-vehicles-table">
+        <thead><tr>
+          <th style={th}>Véhicule</th><th style={th}>Marque / modèle</th><th style={th}>Plaque</th><th style={th}>Défaut</th><th style={th}></th>
+        </tr></thead>
+        <tbody>
+          {vehicles.length === 0 && <tr><td style={td} colSpan={5}>Aucun véhicule.</td></tr>}
+          {vehicles.map((v) => (
+            <tr key={v.id}>
+              <td style={td}>{v.name}</td>
+              <td style={td}>{v.make_model || '—'}</td>
+              <td style={td}>{v.plate || '—'}</td>
+              <td style={td}>{v.is_default
+                ? <span style={{ color: '#00675A', fontWeight: 700 }}>✓ Défaut</span>
+                : <button onClick={() => setDefault(v.id)} disabled={busy} style={{ ...btnSecondary, ...disabledStyle(busy) }}>Définir défaut</button>}</td>
+              <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                <button onClick={() => startEdit(v)} style={{ ...btnSecondary, marginRight: 8 }}>Éditer</button>
+                <button onClick={() => remove(v.id)} disabled={busy} style={{ ...btnSecondary, color: '#b91c1c', ...disabledStyle(busy) }}>Suppr.</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p style={{ fontSize: 12, color: '#6b7280', marginTop: 12 }}>
+        Le véhicule « Défaut » sert pour un nouveau trajet si tu n'en choisis pas un autre. Supprimer un véhicule déjà utilisé par des trajets le rend inactif — l'historique du carnet est conservé.
+      </p>
+    </div>
+  );
+}
+
 function MileageFavoritesTab() {
   const { token, hasPermission } = useAuth();
   const canWrite = hasPermission("expenses:write");
