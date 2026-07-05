@@ -1580,7 +1580,7 @@ _ORG_SCOPED_COLLECTIONS = [
     "quote_tokens",
     # feature #13 — carnet de route / kilométrage
     "mileage_trips", "mileage_favorites", "mileage_vehicles",
-    "mileage_rate_reminders",
+    "mileage_rate_reminders", "mileage_places",
 ]
 
 
@@ -2702,6 +2702,7 @@ def migrate_mileage_logbook_v1():
     db.mileage_trips.create_index([("organization_id", 1), ("employee_id", 1)])
     db.mileage_trips.create_index([("organization_id", 1), ("expense_id", 1)])
     db.mileage_favorites.create_index([("organization_id", 1), ("label", 1)])
+    db.mileage_places.create_index([("organization_id", 1), ("name", 1)])
     db.mileage_vehicles.create_index([("organization_id", 1), ("is_default", 1)])
     db.mileage_rate_reminders.create_index("id", unique=True)
 
@@ -7594,6 +7595,69 @@ def delete_mileage_favorite(favorite_id: str,
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Favori introuvable")
     return {"status": "deleted", "id": favorite_id}
+
+
+# ─── Lieux enregistrés du carnet (feature #13) — adresses réutilisables (domicile, bureau,
+# clients fréquents) pour remplir Départ/Arrivée en un clic, sans re-saisie à chaque trajet. ───
+MILEAGE_PLACE_LIMIT = 50
+
+
+def _mileage_place_from_payload(payload: dict) -> dict:
+    """Valide + normalise un lieu : nom (obligatoire) + adresse (obligatoire), tronqués.
+    Ne renvoie que les champs métier → réutilisable au POST comme au PUT."""
+    name = (payload.get("name") or "").strip()[:80]
+    address = (payload.get("address") or "").strip()[:250]
+    if not name:
+        raise HTTPException(status_code=400, detail="Le nom du lieu est obligatoire")
+    if not address:
+        raise HTTPException(status_code=400, detail="L'adresse du lieu est obligatoire")
+    return {"name": name, "address": address}
+
+
+@app.get("/api/mileage/places")
+def list_mileage_places(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
+    places = list(db.mileage_places.find(_org_scope(current_user), {"_id": 0}))
+    places.sort(key=lambda p: p.get("name", "").lower())
+    return places
+
+
+@app.post("/api/mileage/places")
+def create_mileage_place(payload: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    if db.mileage_places.count_documents(_org_scope(current_user)) >= MILEAGE_PLACE_LIMIT:
+        raise HTTPException(status_code=409, detail=f"Limite de {MILEAGE_PLACE_LIMIT} lieux atteinte")
+    fields = _mileage_place_from_payload(payload)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "created_by_user_id": current_user.id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        **fields,
+    }
+    db.mileage_places.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@app.put("/api/mileage/places/{place_id}")
+def update_mileage_place(place_id: str, payload: dict,
+                         current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    scope = _org_scope(current_user)
+    if not db.mileage_places.find_one({**scope, "id": place_id}):
+        raise HTTPException(status_code=404, detail="Lieu introuvable")
+    fields = _mileage_place_from_payload(payload)
+    db.mileage_places.update_one({**scope, "id": place_id}, {"$set": fields})
+    return db.mileage_places.find_one({**scope, "id": place_id}, {"_id": 0})
+
+
+@app.delete("/api/mileage/places/{place_id}")
+def delete_mileage_place(place_id: str,
+                         current_user: CurrentUser = Depends(require_permission("expenses:write"))):
+    # Suppression pure : un lieu ne sert qu'à pré-remplir un champ (l'adresse est COPIÉE
+    # dans origin/destination du trajet), aucun trajet ne le référence → aucune cascade.
+    res = db.mileage_places.delete_one({**_org_scope(current_user), "id": place_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Lieu introuvable")
+    return {"status": "deleted", "id": place_id}
 
 
 # ─── Task 11 : Carnet de route — JSON + PDF conforme ARC ───────────────────

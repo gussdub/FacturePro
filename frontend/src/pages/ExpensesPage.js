@@ -1442,6 +1442,7 @@ function MileageTripsTab() {
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [trips, setTrips] = useState([]);
   const [favorites, setFavorites] = useState([]);
+  const [places, setPlaces] = useState([]);
   const [rates, setRates] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -1457,12 +1458,13 @@ function MileageTripsTab() {
 
   const load = async () => {
     try {
-      const [t, f, r] = await Promise.all([
+      const [t, f, r, pl] = await Promise.all([
         axios.get(`${BACKEND_URL}/api/mileage/trips?year=${year}&month=${month}`, authCfg),
         axios.get(`${BACKEND_URL}/api/mileage/favorites`, authCfg),
         axios.get(`${BACKEND_URL}/api/mileage/rates`, authCfg),
+        axios.get(`${BACKEND_URL}/api/mileage/places`, authCfg),
       ]);
-      setTrips(t.data); setFavorites(f.data); setRates(r.data);
+      setTrips(t.data); setFavorites(f.data); setRates(r.data); setPlaces(pl.data || []);
     } catch (e) {
       setError(e.response?.data?.detail || 'Erreur de chargement du carnet de route');
     }
@@ -1478,6 +1480,57 @@ function MileageTripsTab() {
       round_trip: fav.round_trip_default,
     }));
   };
+
+  // Lieux enregistrés (domicile, bureau, clients fréquents) : remplissage 1-clic de
+  // Départ/Arrivée. L'adresse est COPIÉE dans le champ ; le trajet ne référence pas le lieu.
+  const savePlaceFrom = async (field) => {
+    const address = (field === 'origin' ? form.origin : form.destination).trim();
+    if (!address) { setError("Saisis d'abord une adresse dans le champ avant de l'enregistrer."); return; }
+    const name = window.prompt('Nom du lieu (ex. Domicile, Bureau, Client X) :', '');
+    if (name === null) return;                       // annulé
+    if (!name.trim()) { setError('Le nom du lieu est requis.'); return; }
+    try {
+      await axios.post(`${BACKEND_URL}/api/mileage/places`, { name: name.trim(), address }, authCfg);
+      const pl = await axios.get(`${BACKEND_URL}/api/mileage/places`, authCfg);
+      setPlaces(pl.data || []); setError('');
+    } catch (e) {
+      setError(e.response?.data?.detail || "Erreur d'enregistrement du lieu");
+    }
+  };
+
+  const deletePlace = async (id, e) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Supprimer ce lieu enregistré ?')) return;
+    try {
+      await axios.delete(`${BACKEND_URL}/api/mileage/places/${id}`, authCfg);
+      setPlaces((ps) => ps.filter((p) => p.id !== id));
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Erreur de suppression du lieu');
+    }
+  };
+
+  const placeChips = (field) => (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4, alignItems: 'center' }}>
+      {places.map((p) => (
+        <span key={p.id} title={p.address}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#E7F4F1',
+                       color: '#00675A', borderRadius: 999, padding: '2px 4px 2px 8px', fontSize: 12 }}>
+          <button type="button" data-testid={`mileage-place-fill-${field}`}
+                  onClick={() => setForm((s) => ({ ...s, [field]: p.address }))}
+                  style={{ background: 'none', border: 'none', color: '#00675A', cursor: 'pointer', padding: 0, fontSize: 12 }}>
+            📍 {p.name}
+          </button>
+          <button type="button" onClick={(e) => deletePlace(p.id, e)} title="Supprimer ce lieu"
+                  style={{ background: 'none', border: 'none', color: '#9aa5a1', cursor: 'pointer', padding: '0 2px', fontSize: 13, lineHeight: 1 }}>×</button>
+        </span>
+      ))}
+      <button type="button" onClick={() => savePlaceFrom(field)}
+              style={{ background: 'none', border: '1px dashed #cbd5d1', color: '#46554f', borderRadius: 999,
+                       padding: '2px 8px', fontSize: 12, cursor: 'pointer' }}>
+        + enregistrer
+      </button>
+    </div>
+  );
 
   const liveDistance = () => {
     const km = parseFloat(form.one_way_km) || 0;
@@ -1594,8 +1647,14 @@ function MileageTripsTab() {
           {favorites.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
         </select>
         <input type="date" data-testid="mileage-trip-date" value={form.trip_date} onChange={(e) => setForm({ ...form, trip_date: e.target.value })} style={input} />
-        <input placeholder="Départ" data-testid="mileage-trip-origin" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} style={input} />
-        <input placeholder="Arrivée" data-testid="mileage-trip-destination" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} style={input} />
+        <div>
+          <input placeholder="Départ" data-testid="mileage-trip-origin" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} style={input} />
+          {placeChips('origin')}
+        </div>
+        <div>
+          <input placeholder="Arrivée" data-testid="mileage-trip-destination" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} style={input} />
+          {placeChips('destination')}
+        </div>
         <input placeholder="Motif *" data-testid="mileage-trip-purpose" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} style={input} />
         <input type="number" placeholder="Km (aller simple)" data-testid="mileage-trip-km" value={form.one_way_km} onChange={(e) => setForm({ ...form, one_way_km: e.target.value })} style={input} />
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#374151' }}>
