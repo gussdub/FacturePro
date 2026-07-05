@@ -835,7 +835,10 @@ const ExpensesPage = () => {
                         <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Depense generale</span>
                       )}
                     </p>
-                    <p style={{ color: '#9ca3af', margin: '2px 0', fontSize: '13px' }}>Date: {new Date(exp.expense_date).toLocaleDateString('fr-CA')}</p>
+                    {/* Afficher la partie date STOCKÉE (AAAA-MM-JJ) telle quelle. `new Date("2026-06-08")`
+                        l'interpréterait comme minuit UTC → affichée en heure locale (Est), elle reculait
+                        d'un jour (2026-06-07). On évite tout décalage de fuseau. */}
+                    <p style={{ color: '#9ca3af', margin: '2px 0', fontSize: '13px' }}>Date: {exp.expense_date ? String(exp.expense_date).slice(0, 10) : '—'}</p>
                     {exp.category && <p style={{ color: '#9ca3af', margin: '2px 0', fontSize: '12px' }}>Categorie: {exp.category}</p>}
                     {exp.personal_use_amount_cad > 0 && (
                       <p style={{ color: '#00675A', margin: '2px 0', fontSize: '12px' }}>

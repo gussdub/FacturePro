@@ -337,11 +337,11 @@ const InvoicesPage = () => {
                     </div>
                     <p style={{ margin: '2px 0', color: '#6b7280', fontSize: '14px' }}>Client: <strong>{getClientName(inv.client_id)}</strong></p>
                     <p style={{ margin: '2px 0', color: '#9ca3af', fontSize: '13px' }}>
-                      Échéance: {inv.due_date ? new Date(inv.due_date).toLocaleDateString('fr-CA') : '—'}
+                      Échéance: {inv.due_date ? String(inv.due_date).slice(0, 10) : '—'}
                     </p>
                     {inv.next_send_date && inv.recurrence_active && (
                       <p style={{ margin: '2px 0', color: '#6b21a8', fontSize: '12px', fontWeight: '600' }}>
-                        Prochain envoi: {new Date(inv.next_send_date).toLocaleDateString('fr-CA')}
+                        Prochain envoi: {String(inv.next_send_date).slice(0, 10)}
                       </p>
                     )}
                     {inv.items && inv.items.length > 0 && (
