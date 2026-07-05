@@ -1378,8 +1378,11 @@ const ExpensesPage = () => {
         <div
           data-testid="logbook-modal"
           style={{
-            position: 'fixed', inset: 0, zIndex: 1400, background: '#fff',
-            overflow: 'auto', padding: '24px',
+            // Panneau sur la ZONE DE CONTENU seulement (décalé de la largeur de la barre
+            // latérale, 280px — cf. Layout.js) : la navigation reste visible, le carnet est
+            // intégré à l'app au lieu de recouvrir tout l'écran.
+            position: 'fixed', top: 0, right: 0, bottom: 0, left: '280px', zIndex: 30,
+            background: '#fff', overflow: 'auto', padding: '24px',
           }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
             <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '22px', fontWeight: 800, color: '#1f2937', margin: 0 }}>
@@ -1388,7 +1391,7 @@ const ExpensesPage = () => {
             <button
               type="button"
               data-testid="logbook-close-btn"
-              onClick={() => setShowLogbook(false)}
+              onClick={() => { setShowLogbook(false); fetchData(); }}
               style={{ background: 'transparent', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>
               Fermer
             </button>
@@ -1724,7 +1727,7 @@ function MileageTripsTab() {
               <td style={td}>{row.allocation ? `${row.allocation.amount_cad.toFixed(2)} $` : '—'}</td>
               <td style={td}>
                 {row.trip.expense_id
-                  ? <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 600 }}>Facturé</span>
+                  ? <span title="Une dépense (Frais de véhicule) a été créée pour ce trajet — visible dans la liste des Dépenses" style={{ color: '#16a34a', fontSize: 12, fontWeight: 600 }}>✓ Dépense générée</span>
                   : <button style={{ background: 'transparent', border: 'none', color: '#00A08C', cursor: 'pointer', fontSize: 12, fontWeight: 600, padding: 0, ...disabledStyle(busy) }} disabled={busy} onClick={() => generateForTrip(row.trip.id)}>
                       Générer la dépense
                     </button>}
