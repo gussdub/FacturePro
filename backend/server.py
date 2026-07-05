@@ -893,6 +893,40 @@ def _release_bank_transaction(tx_id, scope):
     )
 
 
+def _repost_expense_gl(org_id, user_id, expense_id, updated_expense):
+    """Régénère l'écriture de charge d'une dépense (contre-passe l'ancienne + poste la nouvelle
+    au montant à jour), si l'auto-comptabilité est active. Anti-trou : restaure l'ancienne
+    écriture si le repost échoue. Best-effort via _safe_autopost (l'op métier reste OK).
+    Extrait de update_expense pour être réutilisé au rapprochement bancaire (adoption/restauration
+    du montant CAD réel d'une dépense en devise étrangère)."""
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    if not settings.get("autopost_enabled") or updated_expense is None:
+        return
+    _ensure_chart_seeded(org_id, user_id)
+
+    def _regenerate():
+        prev_live = _find_live_source_entry(org_id, "expense", expense_id)
+        _unpost_source_entry(org_id, user_id, "expense", expense_id)
+        try:
+            _autopost_expense(org_id, user_id, updated_expense)
+        except Exception:
+            if prev_live is not None:
+                try:
+                    _post_source_entry(
+                        org_id, user_id, "expense", expense_id,
+                        entry_date=prev_live["entry_date"],
+                        description=prev_live.get("description", ""),
+                        lines=prev_live["lines"],
+                        reference=prev_live.get("reference"))
+                except Exception:
+                    logger.warning(
+                        "expense %s: échec restauration écriture après repost KO", expense_id)
+            raise
+
+    _safe_autopost(_regenerate, "expenses", expense_id,
+                   {"organization_id": org_id}, legacy_user_id=user_id)
+
+
 def _apply_match(tx, kind, target_id, scope):
     """Effectue le match entre une bank_transaction et une cible (invoice ou expense).
     Retourne la bank_transaction mise à jour ou lève HTTPException.
@@ -939,9 +973,37 @@ def _apply_match(tx, kind, target_id, scope):
         expense = db.expenses.find_one({"id": target_id, **scope}, {"_id": 0})
         if not expense:
             raise HTTPException(404, "Expense not found")
-        db.expenses.update_one(
-            {"id": target_id, **scope},
-            {"$set": {"bank_transaction_id": tx["id"]}})
+        # Garde-fou (lien 1:1) : une dépense déjà rapprochée à une AUTRE transaction ne peut
+        # être re-matchée (sinon transaction orpheline + montant CAD/écriture GL basculés en
+        # silence). Symétrique au garde tx.status == unmatched.
+        if expense.get("bank_transaction_id") and expense.get("bank_transaction_id") != tx["id"]:
+            raise HTTPException(409, "Cette dépense est déjà rapprochée à une autre transaction")
+        update = {"bank_transaction_id": tx["id"]}
+        # [FX] Dépense en DEVISE ÉTRANGÈRE : adopter le VRAI montant CAD débité par la banque
+        # (le relevé) plutôt que l'estimation par taux de marché — la banque applique sa propre
+        # marge de change. On conserve l'estimation d'origine (amount_cad_estimated) pour pouvoir
+        # la restaurer au unmatch, on recalcule le taux réel et les champs dérivés (déductible,
+        # portion perso télécom). Les dépenses en CAD ne sont jamais modifiées (montant = banque).
+        if expense.get("currency") not in (None, "", "CAD") and tx_amount > 0:
+            est = round(float(expense.get("amount_cad", 0) or 0), 2)
+            if abs(est - tx_amount) >= 0.01:
+                fx = round(float(expense.get("amount", 0) or 0), 2)
+                update["amount_cad"] = tx_amount
+                update["exchange_rate_to_cad"] = round(fx / tx_amount, 6) if tx_amount > 0 else expense.get("exchange_rate_to_cad")
+                update["cad_amount_source"] = "bank"
+                if expense.get("amount_cad_estimated") is None:
+                    update["amount_cad_estimated"] = est
+                pct = expense.get("deductible_percentage", 100)
+                new_ded = round(tx_amount * pct / 100, 2)
+                update["deductible_amount"] = new_ded
+                if expense.get("personal_use_amount_cad") is not None:
+                    update["personal_use_amount_cad"] = round(tx_amount - new_ded, 2)
+        db.expenses.update_one({"id": target_id, **scope}, {"$set": update})
+        if "amount_cad" in update:
+            _repost_expense_gl(
+                expense.get("organization_id"),
+                expense.get("created_by_user_id") or expense.get("user_id"),
+                target_id, db.expenses.find_one({"id": target_id, **scope}, {"_id": 0}))
         match_kind = "expense"
         match_id = target_id
         invoice_id = None
@@ -6014,9 +6076,30 @@ def unmatch_bank_transaction(tx_id: str,
             db.invoices.update_one({"id": invoice["id"], **_org_scope(current_user)},
                                    {"$set": {"status": new_status}})
     elif tx.get("match_kind") == "expense":
+        exp = db.expenses.find_one(
+            {"id": tx.get("match_id"), **_org_scope(current_user)}, {"_id": 0})
+        restore = {"bank_transaction_id": None}
+        # [FX] Restaurer l'estimation d'origine si le montant CAD avait été adopté du relevé.
+        if exp and exp.get("cad_amount_source") == "bank" and exp.get("amount_cad_estimated") is not None:
+            est = round(float(exp["amount_cad_estimated"]), 2)
+            fx = round(float(exp.get("amount", 0) or 0), 2)
+            restore["amount_cad"] = est
+            restore["exchange_rate_to_cad"] = round(fx / est, 6) if est > 0 else exp.get("exchange_rate_to_cad")
+            restore["cad_amount_source"] = "estimate"
+            restore["amount_cad_estimated"] = None
+            pct = exp.get("deductible_percentage", 100)
+            new_ded = round(est * pct / 100, 2)
+            restore["deductible_amount"] = new_ded
+            if exp.get("personal_use_amount_cad") is not None:
+                restore["personal_use_amount_cad"] = round(est - new_ded, 2)
         db.expenses.update_one(
-            {"id": tx.get("match_id"), **_org_scope(current_user)},
-            {"$set": {"bank_transaction_id": None}})
+            {"id": tx.get("match_id"), **_org_scope(current_user)}, {"$set": restore})
+        if "amount_cad" in restore:
+            _repost_expense_gl(
+                exp.get("organization_id"),
+                exp.get("created_by_user_id") or exp.get("user_id"),
+                tx.get("match_id"),
+                db.expenses.find_one({"id": tx.get("match_id"), **_org_scope(current_user)}, {"_id": 0}))
     _release_bank_transaction(tx_id, _org_scope(current_user))
     return clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))
 
@@ -6833,7 +6916,8 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
     # un deductible_amount incohérent (→ divergence P&L↔grand livre). Ils sont recalculés
     # ci-dessous par _build_expense_category_snapshot / le prorata montant.
     for k in ("deductible_amount", "deductible_percentage", "personal_use_amount_cad",
-              "business_use_pct", "category_arc_line"):
+              "business_use_pct", "category_arc_line",
+              "cad_amount_source", "amount_cad_estimated"):
         expense_data.pop(k, None)
     # Cast des champs taxes payées si présents (le frontend peut envoyer des strings)
     for k in ("gst_paid_cad", "qst_paid_cad", "hst_paid_cad"):
@@ -6871,6 +6955,13 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
         # Feature #14 — télécom : recalcule la portion perso au prorata du nouveau montant
         if current.get("personal_use_amount_cad") is not None:
             expense_data["personal_use_amount_cad"] = round(new_amount_cad - new_ded, 2)
+    # [FX] Une édition manuelle du montant/devise/taux/catégorie reprend la main sur le CAD :
+    # si la dépense avait ADOPTÉ un montant bancaire, on purge l'état d'adoption
+    # (cad_amount_source/amount_cad_estimated). Sinon un unmatch ultérieur restaurerait une
+    # estimation PÉRIMÉE (bug trouvé en revue). L'utilisateur pourra re-adopter en re-rapprochant.
+    if "amount_cad" in expense_data and current.get("cad_amount_source") == "bank":
+        expense_data["cad_amount_source"] = "estimate"
+        expense_data["amount_cad_estimated"] = None
     # Feature #8 — swap receipt_file_id avec cascade soft-delete
     if "receipt_file_id" in expense_data:
         old_fid = current.get("receipt_file_id")

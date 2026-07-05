@@ -873,7 +873,12 @@ const ExpensesPage = () => {
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '22px', fontWeight: '800', color: '#008F7A', marginBottom: '4px' }}>{formatCurrency(exp.amount, exp.currency)}</div>
                     {exp.currency && exp.currency !== 'CAD' && exp.amount_cad && (
-                      <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>= {formatCurrency(exp.amount_cad, 'CAD')}</div>
+                      <div style={{ fontSize: '12px', color: exp.cad_amount_source === 'bank' ? '#047857' : '#a1a1aa', marginBottom: '6px' }}>
+                        = {formatCurrency(exp.amount_cad, 'CAD')}
+                        {exp.cad_amount_source === 'bank'
+                          ? <span title="Montant réel débité par la banque (rapprochement)"> ✓ réel</span>
+                          : <span> (estimé)</span>}
+                      </div>
                     )}
                     <span style={{ background: st.bg, color: st.color, padding: '3px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>{st.label}</span>
                     <div style={{ display: 'flex', gap: '6px', marginTop: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -1683,6 +1688,19 @@ function MileageTripsTab() {
             Enregistrer et générer la dépense
           </button>
         </div>
+        {!canSave() && !busy && (
+          <p data-testid="mileage-save-hint" style={{ gridColumn: '1 / -1', fontSize: 12, color: '#b45309', margin: '6px 0 0' }}>
+            ⚠ Pour enregistrer, il manque : {[
+              !form.purpose.trim() ? "le motif (obligatoire — exigé par l'ARC)" : null,
+              !(parseFloat(form.one_way_km) > 0) ? 'les km (aller simple)' : null,
+            ].filter(Boolean).join(' et ')}.
+          </p>
+        )}
+        {canSave() && !busy && tripYearRateMissing() && (
+          <p style={{ gridColumn: '1 / -1', fontSize: 12, color: '#b45309', margin: '6px 0 0' }}>
+            ⚠ Le taux ARC {String(form.trip_date).slice(0, 4)} n'est pas encore configuré : « Enregistrer seulement » fonctionne, mais pas la génération de la dépense.
+          </p>
+        )}
       </div>
 
       <table style={{ width: '100%', borderCollapse: 'collapse' }} data-testid="mileage-trips-table">
