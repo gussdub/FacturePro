@@ -26,7 +26,7 @@ class TestExpenseCategoriesEndpoint:
         body = resp.json()
         assert "categories" in body
         assert "groups" in body
-        assert len(body["categories"]) == 18
+        assert len(body["categories"]) == 20
         assert set(body["groups"].keys()) == {
             "office", "marketing", "premises", "travel", "personnel", "other"
         }

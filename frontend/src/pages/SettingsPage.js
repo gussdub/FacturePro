@@ -419,6 +419,44 @@ const SettingsPage = () => {
           )}
         </div>
 
+        {/* Dépenses télécom à usage mixte (feature #14) — visible pour toutes les entités */}
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '700' }}>Dépenses télécom (usage mixte)</h3>
+          <p style={{ marginTop: 0, marginBottom: 16, fontSize: 13, color: '#6b7280' }}>
+            Si tes factures de cellulaire ou d&#8217;internet sont partiellement personnelles, active
+            l&#8217;usage mixte et indique le % affaires. La dépense enregistre la facture compl&#232;te ;
+            l&#8217;app ne déduit que la portion affaires (le reste va à un compte actionnaire au grand livre).
+          </p>
+          {[{ key: 'cell', label: 'Cellulaire' }, { key: 'internet', label: 'Internet' }].map(({ key, label }) => {
+            const mixKey = `telecom_${key}_mixed_use`;
+            const pctKey = `telecom_${key}_business_pct`;
+            const on = !!settings[mixKey];
+            return (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 190 }}>
+                  <input type="checkbox" checked={on}
+                         onChange={(e) => setSettings(prev => ({ ...prev, [mixKey]: e.target.checked }))} />
+                  <span style={{ fontWeight: 500 }}>{label} &#8212; usage mixte</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: on ? 1 : 0.4 }}>
+                  % affaires
+                  <input type="number" min="0" max="100" step="1" disabled={!on}
+                         value={settings[pctKey] ?? 100}
+                         onChange={(e) => {
+                           const v = e.target.value;
+                           setSettings(prev => ({ ...prev, [pctKey]: v === '' ? 0 : parseInt(v, 10) || 0 }));
+                         }}
+                         style={{ width: 90, padding: 8, border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14 }} />
+                </label>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+            Interrupteur OFF = 100&#160;% déductible (facture au nom de l&#8217;entreprise). ON = portion
+            affaires seulement. Le traitement comptable de la portion personnelle est à valider avec ta comptable.
+          </div>
+        </div>
+
         {/* Tax Numbers */}
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
           <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '700' }}>Num&#233;ros officiels</h3>

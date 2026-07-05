@@ -837,6 +837,12 @@ const ExpensesPage = () => {
                     </p>
                     <p style={{ color: '#9ca3af', margin: '2px 0', fontSize: '13px' }}>Date: {new Date(exp.expense_date).toLocaleDateString('fr-CA')}</p>
                     {exp.category && <p style={{ color: '#9ca3af', margin: '2px 0', fontSize: '12px' }}>Categorie: {exp.category}</p>}
+                    {exp.personal_use_amount_cad > 0 && (
+                      <p style={{ color: '#00675A', margin: '2px 0', fontSize: '12px' }}>
+                        Portion affaires : {(exp.amount_cad - exp.personal_use_amount_cad).toFixed(2)} $
+                        {exp.business_use_pct != null ? ` (${exp.business_use_pct} %)` : ''} · perso : {exp.personal_use_amount_cad.toFixed(2)} $
+                      </p>
+                    )}
                     {exp.receipt_url && (
                       <a
                         href={`${BACKEND_URL}${exp.receipt_url}`}

@@ -160,6 +160,8 @@ EXPENSE_CATEGORIES = [
     {"code": "professional_fees",  "label_fr": "Honoraires professionnels","label_en": "Professional fees",      "arc_line": "8860", "deductible_percentage": 100, "group": "office"},
     {"code": "bank_charges",       "label_fr": "Frais bancaires",         "label_en": "Bank charges",            "arc_line": "8620", "deductible_percentage": 100, "group": "office"},
     {"code": "subscriptions",      "label_fr": "Abonnements et licences", "label_en": "Subscriptions & licences", "arc_line": "8740", "deductible_percentage": 100, "group": "office"},
+    {"code": "telecom_cell",       "label_fr": "Télécom — cellulaire",    "label_en": "Telecom — mobile",        "arc_line": "9220", "deductible_percentage": 100, "group": "office"},
+    {"code": "telecom_internet",   "label_fr": "Télécom — internet",      "label_en": "Telecom — internet",      "arc_line": "9220", "deductible_percentage": 100, "group": "office"},
     # Marketing
     {"code": "advertising",        "label_fr": "Publicité et promotion",  "label_en": "Advertising & promotion", "arc_line": "8520", "deductible_percentage": 100, "group": "marketing"},
     {"code": "meals_entertainment","label_fr": "Repas et représentation", "label_en": "Meals & entertainment",   "arc_line": "8523", "deductible_percentage": 50,  "group": "marketing"},
@@ -330,8 +332,29 @@ def _find_category(code):
     return next((c for c in EXPENSE_CATEGORIES if c["code"] == code), None)
 
 
-def _build_expense_category_snapshot(expense_data, amount_cad):
-    """Retourne les 6 champs catégorie à snapshoter dans une dépense.
+# Catégories télécom à usage mixte (feature #14). Le % affaires vient des RÉGLAGES
+# entreprise (pas d'une constante de catégorie comme le 50 % des repas) : la portion
+# personnelle n'est pas une charge de la société.
+TELECOM_CATEGORIES = {"telecom_cell", "telecom_internet"}
+
+
+def _telecom_business_pct(settings, category_code):
+    """% affaires (0–100) d'une dépense télécom selon les réglages entreprise.
+    Retourne None si la catégorie n'est pas télécom OU si l'usage mixte est OFF pour
+    ce type (→ 100 % affaires, aucune portion personnelle à sortir)."""
+    if category_code == "telecom_cell":
+        if not settings.get("telecom_cell_mixed_use"):
+            return None
+        return settings.get("telecom_cell_business_pct", 100)
+    if category_code == "telecom_internet":
+        if not settings.get("telecom_internet_mixed_use"):
+            return None
+        return settings.get("telecom_internet_business_pct", 100)
+    return None
+
+
+def _build_expense_category_snapshot(expense_data, amount_cad, telecom_business_pct=None):
+    """Retourne les champs catégorie à snapshoter dans une dépense.
 
     Args:
         expense_data: dict envoyé par le frontend (peut contenir category_code,
@@ -363,7 +386,7 @@ def _build_expense_category_snapshot(expense_data, amount_cad):
         label = expense_data.get("category", "")
         arc_line, percentage = "", 100
     deductible = round(amount_cad * percentage / 100, 2)
-    return {
+    snapshot = {
         "category": label,
         "category_code": code,
         "category_custom_label": custom_label if code == "other" else "",
@@ -371,6 +394,17 @@ def _build_expense_category_snapshot(expense_data, amount_cad):
         "deductible_percentage": percentage,
         "deductible_amount": deductible,
     }
+    # Feature #14 — télécom à usage mixte : la portion affaires (réglages entreprise) est
+    # le VRAI coût de la société ; le % effectif devient le % déductible et on fige la
+    # portion personnelle (consommée par le P&L et l'écriture du grand livre).
+    if code in TELECOM_CATEGORIES:
+        pct = 100 if telecom_business_pct is None else max(0, min(100, int(round(float(telecom_business_pct)))))
+        biz = round(amount_cad * pct / 100, 2)
+        snapshot["business_use_pct"] = pct
+        snapshot["deductible_percentage"] = pct
+        snapshot["deductible_amount"] = biz
+        snapshot["personal_use_amount_cad"] = round(amount_cad - biz, 2)
+    return snapshot
 
 
 # ─── Sales tax report helpers (feature #4 du spec tax-report) ───
@@ -529,7 +563,15 @@ def _aggregate_pnl(scope, start, end, basis):
         code = e.get("category_code") or "other"
         if code not in by_code:
             by_code[code] = {"gross": 0.0, "deductible": 0.0}
-        by_code[code]["gross"] += float(e.get("amount_cad", 0) or 0)
+        # [COMPTA] Feature #14 — pour une dépense télécom à usage mixte, la portion
+        # personnelle n'est PAS une charge de la société : le « brut » comptabilisé est
+        # la portion affaires (montant total moins la portion perso). Les autres dépenses
+        # (repas 50 %, etc.) gardent leur montant total en brut, seul le déductible varie.
+        gross_val = float(e.get("amount_cad", 0) or 0)
+        personal = e.get("personal_use_amount_cad")
+        if personal is not None:
+            gross_val -= float(personal or 0)
+        by_code[code]["gross"] += gross_val
         by_code[code]["deductible"] += float(e.get("deductible_amount", 0) or 0)
 
     groups_order = ["office", "marketing", "premises", "travel", "personnel", "other"]
@@ -1708,6 +1750,7 @@ DEFAULT_BASE_ACCOUNTS = [
     {"account_number": "1100", "name": "Comptes clients",          "sub_type": "current_asset"},
     {"account_number": "1200", "name": "TPS à recouvrer",          "sub_type": "tax_recoverable"},
     {"account_number": "1210", "name": "TVQ à recouvrer",          "sub_type": "tax_recoverable"},
+    {"account_number": "1300", "name": "Dû par un actionnaire",    "sub_type": "current_asset"},
     {"account_number": "2000", "name": "Comptes fournisseurs",     "sub_type": "current_liability"},
     {"account_number": "2100", "name": "TPS à payer",              "sub_type": "tax_payable"},
     {"account_number": "2110", "name": "TVQ à payer",              "sub_type": "tax_payable"},
@@ -1726,6 +1769,8 @@ EXPENSE_ACCOUNT_NUMBERS = {
     "professional_fees":   "5020",
     "bank_charges":        "5030",
     "subscriptions":       "5040",
+    "telecom_cell":        "5050",
+    "telecom_internet":    "5051",
     "advertising":         "5100",
     "meals_entertainment": "5110",
     "rent":                "5200",
@@ -1780,6 +1825,42 @@ def _build_default_accounts(organization_id: str, user_id: str) -> list:
                               expense_category_code=code))
 
     return accounts
+
+
+def migrate_chart_add_accounts_v1():
+    """Idempotente, additive. Ajoute aux plans comptables EXISTANTS les comptes
+    introduits après le seed initial (feature #14) : 1300 « Dû par un actionnaire » et
+    les comptes de charge télécom (5050/5051). Les orgs sans plan seront seedées lazy avec
+    la liste à jour (DEFAULT_BASE_ACCOUNTS / EXPENSE_ACCOUNT_NUMBERS). Ne touche aucun solde."""
+    now = datetime.now(timezone.utc).isoformat()
+    wanted = [
+        ("1300", "Dû par un actionnaire", "current_asset", None),
+        ("5050", "Télécom — cellulaire", "operating_expense", "telecom_cell"),
+        ("5051", "Télécom — internet", "operating_expense", "telecom_internet"),
+    ]
+    for org_id in db.chart_of_accounts.distinct("organization_id"):
+        sample = db.chart_of_accounts.find_one({"organization_id": org_id})
+        user_id = (sample or {}).get("created_by_user_id", "")
+        for number, name, sub_type, cat_code in wanted:
+            if db.chart_of_accounts.find_one(
+                    {"organization_id": org_id, "account_number": number}):
+                continue
+            atype = _account_type_for_number(number)
+            db.chart_of_accounts.insert_one({
+                "id": str(uuid.uuid4()),
+                "organization_id": org_id,
+                "created_by_user_id": user_id,
+                "account_number": number,
+                "name": name,
+                "account_type": atype,
+                "sub_type": sub_type,
+                "normal_balance": _normal_balance_for_type(atype),
+                "is_active": True,
+                "is_system": True,
+                "expense_category_code": cat_code,
+                "description": "",
+                "created_at": now,
+            })
 
 
 def _validate_entry_balance(lines: list) -> None:
@@ -2476,6 +2557,62 @@ def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> lis
     # plafonnées à amount_cad (net = 0), aucune charge n'est à comptabiliser :
     # inclure une ligne débit=0/crédit=0 serait rejeté par _validate_entry_balance
     # (« soit un débit soit un crédit, pas les deux » — 0 des deux côtés).
+    # [COMPTA] Feature #14 — dépense télécom à usage mixte : la portion PERSONNELLE n'est
+    # pas une charge de la société → elle va à un compte actionnaire (« Dû par un
+    # actionnaire », 1300 par défaut, configurable via telecom_personal_offset_account).
+    # Le crédit de taxe (CTI) ne s'applique qu'à la portion affaires. La portion perso est
+    # posée en RÉSIDU pour garantir Σ débits == crédit au cent près (équilibre exact).
+    # Clamp défensif : personal ∈ [0, amount]. Le snapshot le garantit déjà, mais on ne fait
+    # JAMAIS confiance à une valeur stockée pour l'équilibre partie double (édition DB directe,
+    # code futur) — sinon personal > amount produirait Σdébit > crédit (écriture rejetée).
+    personal_cad = min(max(round(float(expense.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amount_cad)
+    if personal_cad > 0:
+        biz_frac = (amount_cad - personal_cad) / amount_cad if amount_cad > 0 else 0.0
+        gst_b = round(gst_cad * biz_frac, 2)
+        qst_b = round(qst_cad * biz_frac, 2)
+        hst_b = round(hst_cad * biz_frac, 2)
+        # Garantit charge_b >= 0 : si (perso + taxes affaires) dépasse le montant (données
+        # aberrantes — taxes ≈ 100 % de la facture), on rogne les taxes affaires pour préserver
+        # l'équilibre exact (Σdébit == crédit), plutôt que d'abandonner une charge négative.
+        over = round(personal_cad + gst_b + qst_b + hst_b - amount_cad, 2)
+        if over > 0:
+            take = min(gst_b, over); gst_b = round(gst_b - take, 2); over = round(over - take, 2)
+        if over > 0:
+            take = min(qst_b, over); qst_b = round(qst_b - take, 2); over = round(over - take, 2)
+        if over > 0:
+            take = min(hst_b, over); hst_b = round(hst_b - take, 2); over = round(over - take, 2)
+        charge_b = round(amount_cad - personal_cad - gst_b - qst_b - hst_b, 2)
+        lines = []
+        if charge_b > 0:
+            lines.append({"account_id": expense_acc["id"], "debit": charge_b, "credit": 0.0})
+        if gst_b > 0:
+            lines.append(_autopost_debit(org_id, user_id, "1200", gst_b))
+        if qst_b > 0:
+            lines.append(_autopost_debit(org_id, user_id, "1210", qst_b))
+        if hst_b > 0:
+            lines.append(_autopost_debit(
+                org_id, user_id, "1220", hst_b,
+                create_if_missing=True, kind="asset", name="TVH à recouvrer"))
+        # Compte offset de la portion perso : doit être un compte de BILAN (actif ou passif —
+        # ex. 1300 Dû par un actionnaire, ou 2200 prêt d'actionnaire), JAMAIS un compte de
+        # résultat (5xxx) ni de taxe récupérable (1200/1210/1220) — sinon la portion perso
+        # redeviendrait une charge déductible / un faux CTI. Type dérivé du numéro ; garde-fou
+        # sur le compte résolu ; fallback 1300 si invalide.
+        offset_num = str(settings.get("telecom_personal_offset_account") or "1300").strip() or "1300"
+        offset_kind = _account_type_for_number(offset_num) or "asset"
+        offset_acc = _resolve_ledger_account(
+            org_id, user_id, offset_num, create_if_missing=True,
+            kind=offset_kind, name="Dû par un actionnaire")
+        if (offset_acc is None or offset_acc.get("account_type") not in ("asset", "liability")
+                or offset_acc.get("sub_type") == "tax_recoverable"):
+            offset_acc = _resolve_ledger_account(
+                org_id, user_id, "1300", create_if_missing=True,
+                kind="asset", name="Dû par un actionnaire")
+        lines.append({"account_id": offset_acc["id"], "debit": personal_cad, "credit": 0.0})
+        lines.append(_autopost_credit(org_id, user_id, credit_number, amount_cad))
+        return lines
+
+    # Cas normal (non télécom, ou télécom 100 % affaires) : inchangé.
     lines = []
     if net_cad > 0:
         lines.append({"account_id": expense_acc["id"], "debit": net_cad,
@@ -6649,7 +6786,9 @@ def create_expense(expense_data: dict, current_user: CurrentUser = Depends(requi
     currency = expense_data.get("currency", "CAD")
     exchange_rate = expense_data.get("exchange_rate_to_cad", 1.0)
     amount_cad = round(amount / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else amount
-    cat_snapshot = _build_expense_category_snapshot(expense_data, amount_cad)
+    _settings0 = db.company_settings.find_one({"organization_id": current_user.organization_id}, {"_id": 0}) or {}
+    _tpct = _telecom_business_pct(_settings0, (expense_data.get("category_code") or "").strip())
+    cat_snapshot = _build_expense_category_snapshot(expense_data, amount_cad, telecom_business_pct=_tpct)
     doc = {
         "id": str(uuid.uuid4()),
         "organization_id": current_user.organization_id,
@@ -6688,6 +6827,14 @@ def create_expense(expense_data: dict, current_user: CurrentUser = Depends(requi
 def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     for k in ("id", "user_id", "organization_id", "_id"):
         expense_data.pop(k, None)
+    # [SÉCURITÉ COMPTA] Champs DÉRIVÉS côté serveur (snapshot catégorie + télécom). On les
+    # retire du body pour ne JAMAIS les écrire verbatim : sinon un client pourrait persister
+    # un personal_use_amount_cad > amount_cad (→ écriture GL déséquilibrée, trou comptable) ou
+    # un deductible_amount incohérent (→ divergence P&L↔grand livre). Ils sont recalculés
+    # ci-dessous par _build_expense_category_snapshot / le prorata montant.
+    for k in ("deductible_amount", "deductible_percentage", "personal_use_amount_cad",
+              "business_use_pct", "category_arc_line"):
+        expense_data.pop(k, None)
     # Cast des champs taxes payées si présents (le frontend peut envoyer des strings)
     for k in ("gst_paid_cad", "qst_paid_cad", "hst_paid_cad"):
         if k in expense_data:
@@ -6705,15 +6852,25 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
     new_amount_cad = round(new_amount / new_rate, 2) if new_rate > 0 and new_currency != "CAD" else new_amount
     # Décider: re-snapshot complet, recalc deductible only, ou rien
     if "category_code" in expense_data:
-        # Re-snapshot complet des 6 champs catégorie + recalc deductible_amount
-        cat_snapshot = _build_expense_category_snapshot(expense_data, new_amount_cad)
+        # Re-snapshot complet des champs catégorie + recalc deductible_amount (+ télécom)
+        _settings0 = db.company_settings.find_one({"organization_id": current_user.organization_id}, {"_id": 0}) or {}
+        _tpct = _telecom_business_pct(_settings0, (expense_data.get("category_code") or "").strip())
+        cat_snapshot = _build_expense_category_snapshot(expense_data, new_amount_cad, telecom_business_pct=_tpct)
         expense_data.update(cat_snapshot)
         expense_data["amount_cad"] = new_amount_cad
+        # Si la nouvelle catégorie n'est PAS télécom, purge une portion perso résiduelle
+        # d'une ancienne catégorie télécom (sinon le P&L/GL la garderait à tort).
+        if "personal_use_amount_cad" not in cat_snapshot and current.get("personal_use_amount_cad") is not None:
+            expense_data["personal_use_amount_cad"] = None
     elif "amount" in expense_data or "currency" in expense_data or "exchange_rate_to_cad" in expense_data:
         # L'amount_cad a possiblement changé : recalcule deductible_amount avec le pct stocké
         stored_pct = current.get("deductible_percentage", 100)
         expense_data["amount_cad"] = new_amount_cad
-        expense_data["deductible_amount"] = round(new_amount_cad * stored_pct / 100, 2)
+        new_ded = round(new_amount_cad * stored_pct / 100, 2)
+        expense_data["deductible_amount"] = new_ded
+        # Feature #14 — télécom : recalcule la portion perso au prorata du nouveau montant
+        if current.get("personal_use_amount_cad") is not None:
+            expense_data["personal_use_amount_cad"] = round(new_amount_cad - new_ded, 2)
     # Feature #8 — swap receipt_file_id avec cascade soft-delete
     if "receipt_file_id" in expense_data:
         old_fid = current.get("receipt_file_id")
@@ -8036,6 +8193,31 @@ def update_settings(
             if not (0 <= v <= 100):
                 raise HTTPException(422, f"{field} doit être entre 0 et 100")
             settings_data[field] = v
+    # Feature #14 — télécom à usage mixte : interrupteurs, % (0–100 entier) et compte offset
+    for field in ("telecom_cell_mixed_use", "telecom_internet_mixed_use"):
+        if field in settings_data:
+            settings_data[field] = bool(settings_data[field])
+    for field in ("telecom_cell_business_pct", "telecom_internet_business_pct"):
+        if field in settings_data:
+            try:
+                v = float(settings_data[field])
+            except (ValueError, TypeError):
+                raise HTTPException(422, f"{field} doit être un nombre")
+            if not math.isfinite(v) or not (0 <= v <= 100):
+                raise HTTPException(422, f"{field} doit être entre 0 et 100")
+            settings_data[field] = int(round(v))
+    if "telecom_personal_offset_account" in settings_data:
+        acct = str(settings_data.get("telecom_personal_offset_account") or "").strip()
+        ok = False
+        if acct:
+            acc_doc = db.chart_of_accounts.find_one(
+                {**_org_scope(current_user), "account_number": acct}, {"_id": 0})
+            # Doit être un compte de BILAN (actif/passif) existant, jamais un compte de
+            # résultat ou de taxe récupérable → sinon la portion perso deviendrait déductible.
+            if (acc_doc and acc_doc.get("account_type") in ("asset", "liability")
+                    and acc_doc.get("sub_type") != "tax_recoverable"):
+                ok = True
+        settings_data["telecom_personal_offset_account"] = acct if ok else "1300"
     # Feature #12 — exercice financier (validation stricte)
     if "fiscal_year_end_month" in settings_data:
         m = settings_data["fiscal_year_end_month"]
@@ -9129,9 +9311,19 @@ def _aggregate_sales_tax(scope, start, end):
         qst_collected += qst_cad
         hst_collected += hst_cad
 
-    gst_paid = sum(float(e.get("gst_paid_cad", 0) or 0) for e in expenses)
-    qst_paid = sum(float(e.get("qst_paid_cad", 0) or 0) for e in expenses)
-    hst_paid = sum(float(e.get("hst_paid_cad", 0) or 0) for e in expenses)
+    # [COMPTA] Feature #14 — pour une dépense télécom à usage mixte, le CTI/RTI n'est
+    # récupérable que sur la portion AFFAIRES (aligné sur le grand livre, qui ne crédite
+    # 1200/1210/1220 que de cette fraction). La portion personnelle n'ouvre pas droit au
+    # crédit de taxe : la déclarer serait une sur-réclamation à l'ARC / Revenu Québec.
+    def _itc_frac(e):
+        amt = float(e.get("amount_cad", 0) or 0)
+        personal = e.get("personal_use_amount_cad")
+        if personal is None or amt <= 0:
+            return 1.0
+        return max(0.0, (amt - float(personal or 0)) / amt)
+    gst_paid = sum(float(e.get("gst_paid_cad", 0) or 0) * _itc_frac(e) for e in expenses)
+    qst_paid = sum(float(e.get("qst_paid_cad", 0) or 0) * _itc_frac(e) for e in expenses)
+    hst_paid = sum(float(e.get("hst_paid_cad", 0) or 0) * _itc_frac(e) for e in expenses)
 
     def r(v):
         return round(v, 2)
@@ -9803,6 +9995,10 @@ def seed_data():
 
         # Migration feature #13 — carnet de route / kilométrage (idempotente)
         migrate_mileage_logbook_v1()
+
+        # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un
+        # actionnaire ajoutés aux plans comptables existants (idempotente, additive)
+        migrate_chart_add_accounts_v1()
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(

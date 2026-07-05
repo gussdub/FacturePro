@@ -57,7 +57,7 @@ class TestAccountTypeForNumber:
 class TestBuildDefaultAccounts:
     def test_total_29_accounts(self):
         accounts = _build_default_accounts("org-x", "user-x")
-        assert len(accounts) == 29  # 12 base + 17 dépenses
+        assert len(accounts) == 32  # 13 base (dont 1300) + 19 dépenses (dont télécom cell/internet)
 
     def test_all_scoped_and_system(self):
         accounts = _build_default_accounts("org-x", "user-x")

@@ -11,9 +11,9 @@ from server import EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, _find_category
 
 
 class TestExpenseCategoriesConstant:
-    def test_has_18_entries(self):
-        # 17 canoniques + "other"
-        assert len(EXPENSE_CATEGORIES) == 18
+    def test_has_20_entries(self):
+        # 19 canoniques (dont télécom cell + internet, feature #14) + "other"
+        assert len(EXPENSE_CATEGORIES) == 20
 
     def test_each_entry_has_required_keys(self):
         required = {"code", "label_fr", "label_en", "arc_line", "deductible_percentage", "group"}
