@@ -17,6 +17,8 @@ export default function BankImportWizard({ onCancel, onDone }) {
   const [bankLabel, setBankLabel] = useState("");
   const [file, setFile] = useState(null);
   const [mappings, setMappings] = useState([]);
+  const [presets, setPresets] = useState([]);
+  const [presetHint, setPresetHint] = useState(null);
   const [mapping, setMapping] = useState(DEFAULT_MAPPING);
   const [saveMapping, setSaveMapping] = useState(true);
   const [preview, setPreview] = useState(null);
@@ -27,7 +29,20 @@ export default function BankImportWizard({ onCancel, onDone }) {
     axios.get(`${BACKEND_URL}/api/bank/mappings`)
       .then(r => setMappings(r.data || []))
       .catch(() => {});
+    axios.get(`${BACKEND_URL}/api/bank/presets`)
+      .then(r => setPresets(r.data || []))
+      .catch(() => {});
   }, []);
+
+  // Sélection d'un préréglage intégré (ex. Desjardins AccèsD) : pré-remplit les colonnes.
+  // L'aperçu (dry-run) reste la validation avant l'import.
+  const applyPreset = (key) => {
+    const p = presets.find(x => x.key === key);
+    if (!p) { setPresetHint(null); return; }
+    setMapping({ ...DEFAULT_MAPPING, ...p.mapping });
+    if (!bankLabel.trim()) setBankLabel(p.label);
+    setPresetHint(p.hint || null);
+  };
 
   useEffect(() => {
     const trimmed = bankLabel.trim().toLowerCase();
@@ -118,6 +133,18 @@ export default function BankImportWizard({ onCancel, onDone }) {
     return dateOK && descOK && amountOK;
   };
 
+  // Ambiguïté JJ/MM vs MM/JJ : si TOUTES les dates de l'aperçu ont un jour ≤ 12, on ne peut
+  // pas distinguer les deux formats -> on avertit (choisir le mauvais préréglage FR/EN
+  // décalerait le mois sans erreur visible). Dès qu'une date a un jour ≥ 13, le format est levé.
+  const showDateAmbiguityWarning = (() => {
+    if (!preview || !preview.parsed_rows) return false;
+    if (mapping.date_format !== "DD/MM/YYYY" && mapping.date_format !== "MM/DD/YYYY") return false;
+    const days = preview.parsed_rows
+      .filter(r => r.date)
+      .map(r => parseInt(String(r.date).slice(8, 10), 10));
+    return days.length > 0 && days.every(d => d <= 12);
+  })();
+
   return (
     <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
@@ -130,6 +157,19 @@ export default function BankImportWizard({ onCancel, onDone }) {
 
       {step === 1 && (
         <div>
+          {presets.length > 0 && (
+            <label style={{ display: "block", marginBottom: 12 }}>
+              Préréglage (optionnel)
+              <select defaultValue="" onChange={(e) => applyPreset(e.target.value)}
+                      style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 6, marginTop: 4 }}>
+                <option value="">— Configuration manuelle —</option>
+                {presets.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+              {presetHint && (
+                <p style={{ fontSize: 12, color: "#6b7280", marginTop: 6, lineHeight: 1.4 }}>💡 {presetHint}</p>
+              )}
+            </label>
+          )}
           <label style={{ display: "block", marginBottom: 12 }}>
             Banque (ex: « Desjardins perso »)
             <input list="bank-list" value={bankLabel}
@@ -238,6 +278,11 @@ export default function BankImportWizard({ onCancel, onDone }) {
                    onChange={(e) => setSaveMapping(e.target.checked)} />
             {" "}Sauvegarder ce mapping comme « {bankLabel} »
           </label>
+          <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+            Astuce : cliquez « Vérifier » et confirmez que les <strong>dates</strong> et les
+            <strong> montants</strong> de l'aperçu sont corrects (dépôts positifs, retraits négatifs)
+            avant d'importer.
+          </p>
           <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
             <button onClick={runPreview} disabled={busy || !previewValid()}
                     style={{ background: "#e5e7eb", padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer" }}>
@@ -255,6 +300,13 @@ export default function BankImportWizard({ onCancel, onDone }) {
           </div>
           {preview && (
             <div>
+              {showDateAmbiguityWarning && (
+                <div style={{ background: "#fef3c7", color: "#92400e", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 13 }}>
+                  ⚠️ Toutes les dates de l'aperçu ont un jour ≤ 12 : impossible de distinguer
+                  JJ/MM de MM/JJ. Assure-toi d'avoir choisi le bon préréglage (français =
+                  JJ/MM/AAAA, anglais = MM/JJ/AAAA) — sinon le mois sera inversé sans erreur visible.
+                </div>
+              )}
               <h4>Aperçu ({preview.total_rows} lignes au total) :</h4>
               <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
                 <thead>

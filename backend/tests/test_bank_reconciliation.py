@@ -150,8 +150,12 @@ class TestParseCsvRows:
                           debit_column=2, credit_column=3)
         csv_text = "date,desc,debit,credit\n2026-03-14,X,100,5\n"
         rows = _parse_csv_rows(csv_text.encode(), m)
-        # credit - debit = 5 - 100 = -95
-        assert rows[0]["amount_cad"] == -95.0
+        # Débit ET crédit remplis sur une même ligne : ce n'est PAS une transaction bancaire
+        # réelle (soit un retrait, soit un dépôt) — c'est typiquement un montant à virgule
+        # décimale scindé par le délimiteur (ex. "127,84" -> "127" + "84"). On marque parse_error
+        # (visible dans l'aperçu) plutôt que de nettoyer c - d silencieusement, ce qui produirait
+        # un montant faux. Contrat durci suite à la revue adversariale du préréglage Desjardins.
+        assert rows[0]["parse_error"] is True
 
     def test_sign_convention_positive_is_debit(self):
         m = self._mapping(sign_convention="positive_is_debit")

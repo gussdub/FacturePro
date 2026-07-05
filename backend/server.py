@@ -730,25 +730,49 @@ def _compute_file_hash(data):
 ROW_LIMIT = 5000
 
 
+def _decode_bank_csv(csv_bytes):
+    """Décode les octets d'un CSV bancaire en tolérant les encodages courants des relevés
+    canadiens. Desjardins AccèsD exporte en UTF-8 (parfois avec BOM) ; d'autres banques ou
+    un passage par Excel produisent du Windows-1252/latin-1. On essaie dans l'ordre :
+    utf-8-sig (retire le BOM éventuel), utf-8, cp1252, puis latin-1 qui décode n'importe
+    quel octet en dernier recours. Évite le remplacement silencieux (U+FFFD) des accents
+    français d'un fichier latin-1 que faisait l'ancien `decode('utf-8', errors='replace')`.
+    """
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return csv_bytes.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return csv_bytes.decode("utf-8", errors="replace")
+
+
 def _parse_csv_rows(csv_bytes, mapping):
     """Parse les lignes CSV selon le mapping. Retourne liste de dicts.
     Lève ValueError("row limit") si > ROW_LIMIT lignes de données.
     Chaque dict : {row_index, date, description, amount_cad, parse_error, raw_line(opt)}.
     """
-    text = csv_bytes.decode("utf-8", errors="replace")
+    text = _decode_bank_csv(csv_bytes)
     reader = csv_module.reader(io.StringIO(text), delimiter=mapping["delimiter"])
     out = []
     data_index = 0
     skip_header = mapping.get("has_header", True)
+    expected_cols = None  # référence du nb de colonnes (l'en-tête, ou la 1re ligne de données)
     for raw_row in reader:
         # skip lignes vides
         if not raw_row or all((c or "").strip() == "" for c in raw_row):
             continue
         if skip_header:
             skip_header = False
+            expected_cols = len(raw_row)
             continue
         if data_index >= ROW_LIMIT:
             raise ValueError(f"CSV exceeds row limit ({ROW_LIMIT})")
+        if expected_cols is None:
+            expected_cols = len(raw_row)  # pas d'en-tête : la 1re ligne fixe la référence
+        # Une ligne dont le nombre de colonnes diffère de la référence est mal alignée —
+        # typiquement un montant à virgule décimale ("127,84") scindé par un délimiteur virgule.
+        # On la marque en erreur plutôt que de lire des cellules décalées silencieusement.
+        col_mismatch = (len(raw_row) != expected_cols)
         # Sanitize only text fields (description); amount/date cells must keep their raw value
         date_col = mapping["date_column"]
         desc_col = mapping["description_column"]
@@ -768,15 +792,24 @@ def _parse_csv_rows(csv_bytes, mapping):
         else:  # debit_credit
             dcol = mapping.get("debit_column")
             ccol = mapping.get("credit_column")
-            d = _normalize_amount(raw_row[dcol]) if (dcol is not None and dcol < len(raw_row)) else None
-            c = _normalize_amount(raw_row[ccol]) if (ccol is not None and ccol < len(raw_row)) else None
-            d = abs(d) if d is not None else 0
-            c = abs(c) if c is not None else 0
-            if d == 0 and c == 0:
-                amount = 0.0
+            draw = raw_row[dcol].strip() if (dcol is not None and dcol < len(raw_row)) else ""
+            craw = raw_row[ccol].strip() if (ccol is not None and ccol < len(raw_row)) else ""
+            d = _normalize_amount(draw) if draw else 0.0
+            c = _normalize_amount(craw) if craw else 0.0
+            # On NE devine PAS un montant douteux — on marque parse_error (visible en rouge dans
+            # l'aperçu) dans ces cas : cellule non vide illisible ($, parenthèses, texte) ; signe
+            # négatif dans une colonne de magnitude (le abs() masquerait une inversion) ; débit ET
+            # crédit tous deux remplis sur une même ligne (montant scindé par le délimiteur, ou
+            # ligne mal formée — une transaction bancaire est soit un retrait, soit un dépôt).
+            if (draw and d is None) or (craw and c is None):
+                amount = None
+            elif d < 0 or c < 0:
+                amount = None
+            elif d > 0 and c > 0:
+                amount = None
             else:
                 amount = c - d
-        parse_error = (date_parsed is None) or (amount is None)
+        parse_error = (date_parsed is None) or (amount is None) or col_mismatch
         row_dict = {
             "row_index": data_index,
             "date": date_parsed,
@@ -5536,6 +5569,57 @@ def process_recurring_invoices(current_user: CurrentUser = Depends(require_permi
 
 # ─── Bank reconciliation endpoints (feature #7) ───
 BANK_MAPPING_LIMIT = 20
+
+# Préréglages de mapping intégrés. Un préréglage PRÉ-REMPLIT l'assistant d'import ; l'aperçu
+# (dry-run) reste la validation — l'utilisateur voit toujours les lignes parsées avant d'importer.
+# Format standard Desjardins AccèsD Affaires : Date, Description, Retraits (débit), Dépôts
+# (crédit), Solde — virgule, UTF-8. Le format de date dépend de la langue de l'interface AccèsD
+# (français : JJ/MM/AAAA ; anglais : MM/JJ/AAAA), d'où deux variantes.
+BANK_CSV_PRESETS = [
+    {
+        "key": "desjardins_accesd_affaires_fr",
+        "label": "Desjardins AccèsD Affaires (français)",
+        "hint": "Relevé AccèsD Affaires — colonnes Date, Description, Retraits, Dépôts, Solde. "
+                "Vérifiez l'aperçu : les dates doivent être au format JJ/MM/AAAA.",
+        "mapping": {
+            "delimiter": ",",
+            "has_header": True,
+            "date_column": 0,
+            "date_format": "DD/MM/YYYY",
+            "description_column": 1,
+            "amount_mode": "debit_credit",
+            "amount_column": None,
+            "debit_column": 2,
+            "credit_column": 3,
+            "sign_convention": "positive_is_credit",
+        },
+    },
+    {
+        "key": "desjardins_accesd_affaires_en",
+        "label": "Desjardins AccèsD Affaires (English)",
+        "hint": "AccèsD Business statement — Date, Description, Withdrawals, Deposits, Balance. "
+                "Check the preview: dates should read as MM/DD/YYYY.",
+        "mapping": {
+            "delimiter": ",",
+            "has_header": True,
+            "date_column": 0,
+            "date_format": "MM/DD/YYYY",
+            "description_column": 1,
+            "amount_mode": "debit_credit",
+            "amount_column": None,
+            "debit_column": 2,
+            "credit_column": 3,
+            "sign_convention": "positive_is_credit",
+        },
+    },
+]
+
+
+@app.get("/api/bank/presets")
+def list_bank_presets(current_user: CurrentUser = Depends(require_permission("bank:read"))):
+    """Préréglages de mapping intégrés (lecture seule, non modifiables). L'assistant d'import
+    les propose ; en sélectionner un pré-remplit les colonnes. L'aperçu reste la validation."""
+    return BANK_CSV_PRESETS
 
 
 @app.get("/api/bank/mappings")
