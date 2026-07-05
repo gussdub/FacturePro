@@ -9706,6 +9706,52 @@ def get_pnl_report(
     return out
 
 
+@app.get("/api/reports/pnl/expenses")
+def get_pnl_category_expenses(
+    start: str = Query(...),
+    end: str = Query(...),
+    category_code: str = Query(None),
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
+):
+    """Détail (drill-down) des dépenses d'une catégorie pour la période du P&L. Utilise EXACTEMENT
+    la même sélection que _aggregate_pnl côté dépenses (filtre par category_code + _in_period sur
+    expense_date, aucun filtre de statut) → la somme des lignes = le total de la catégorie affiché."""
+    scope = _org_scope(current_user)
+    lo, hi = _parse_iso_date(start), _parse_iso_date(end)
+    wanted = (category_code or "").strip() or None
+    rows = []
+    for e in db.expenses.find(scope, {"_id": 0}):
+        code = e.get("category_code") or "other"
+        if wanted and code != wanted:
+            continue
+        if not _in_period(e.get("expense_date"), lo, hi):
+            continue
+        amount_cad = float(e.get("amount_cad", 0) or 0)
+        personal = e.get("personal_use_amount_cad")
+        # « Brut » P&L = montant moins la portion perso télécom (cf. _aggregate_pnl).
+        gross = round(amount_cad - float(personal or 0), 2) if personal is not None else round(amount_cad, 2)
+        rows.append({
+            "id": e.get("id"),
+            "expense_date": (e.get("expense_date") or "")[:10],
+            "description": e.get("description") or e.get("vendor") or "",
+            "amount_cad": round(amount_cad, 2),
+            "gross": gross,
+            "deductible": round(float(e.get("deductible_amount", 0) or 0), 2),
+            "currency": e.get("currency", "CAD"),
+            "amount": e.get("amount"),
+            "status": e.get("status"),
+            "mileage_generated": bool(e.get("mileage_generated")),
+            "cad_amount_source": e.get("cad_amount_source"),
+        })
+    rows.sort(key=lambda r: (r["expense_date"], r["id"] or ""), reverse=True)
+    return {
+        "category_code": wanted,
+        "expenses": rows,
+        "total_gross": round(sum(r["gross"] for r in rows), 2),
+        "total_deductible": round(sum(r["deductible"] for r in rows), 2),
+    }
+
+
 def generate_pnl_report_pdf(scope, data):
     """Génère un PDF du rapport P&L. `data` est la sortie de get_pnl_report.
     `scope` : filtre Mongo qui identifie l'organisation."""

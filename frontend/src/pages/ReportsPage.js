@@ -197,6 +197,8 @@ function PnlReportSection() {
   const [compare, setCompare] = useState('none');
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [openCat, setOpenCat] = useState(null);
+  const [drill, setDrill] = useState({ loading: false, expenses: [] });
 
   const getDates = () => {
     if (periodMode === 'quarter') {
@@ -226,6 +228,21 @@ function PnlReportSection() {
       alert(e.response?.data?.detail || "Erreur lors de la génération du rapport");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Drill-down : détail des dépenses d'une catégorie pour la période du rapport généré.
+  const toggleCat = async (code) => {
+    if (openCat === code) { setOpenCat(null); return; }
+    setOpenCat(code);
+    setDrill({ loading: true, expenses: [] });
+    try {
+      const resp = await axios.get(`${BACKEND_URL}/api/reports/pnl/expenses`, {
+        params: { start: report.period.start, end: report.period.end, category_code: code },
+      });
+      setDrill({ loading: false, expenses: resp.data.expenses || [] });
+    } catch (e) {
+      setDrill({ loading: false, expenses: [] });
     }
   };
 
@@ -384,10 +401,13 @@ function PnlReportSection() {
               </summary>
               <table style={{ width: '100%', marginTop: 4, borderCollapse: 'collapse' }}>
                 <tbody>
-                  {g.categories.map(cat => (
-                    <tr key={cat.code} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                  {g.categories.map(cat => [
+                    <tr key={cat.code} onClick={() => toggleCat(cat.code)}
+                        title="Cliquer pour voir les dépenses de cette catégorie"
+                        style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer' }}>
                       <td style={{ padding: '4px 16px', fontSize: 13 }}>
-                        · {cat.label}
+                        <span style={{ color: '#00A08C', marginRight: 4 }}>{openCat === cat.code ? '▾' : '▸'}</span>
+                        {cat.label}
                         {cat.arc_line && <span style={{ color: '#9ca3af', fontSize: 11, marginLeft: 4 }}>({cat.arc_line})</span>}
                         {cat.code === 'meals_entertainment' && cat.current.gross > cat.current.deductible && (
                           <span style={{ marginLeft: 6, fontSize: 11, color: '#92400e' }}>⚠ 50%</span>
@@ -397,8 +417,42 @@ function PnlReportSection() {
                       <td style={{ padding: '4px 8px', textAlign: 'right', fontSize: 13 }}>{fmt2(cat.current.deductible)}</td>
                       {hasCompare && <td style={{ padding: '4px 8px', textAlign: 'right', fontSize: 13, color: '#6b7280' }}>{fmt2(cat.previous.gross)}</td>}
                       {hasCompare && <td style={{ padding: '4px 8px', textAlign: 'right', fontSize: 13, color: '#6b7280' }}>{fmt2(cat.previous.deductible)}</td>}
-                    </tr>
-                  ))}
+                    </tr>,
+                    openCat === cat.code && (
+                      <tr key={cat.code + '-drill'}>
+                        <td colSpan={hasCompare ? 5 : 3} style={{ padding: '0 8px 10px 34px', background: '#fbfdfc' }}>
+                          {drill.loading ? (
+                            <span style={{ fontSize: 12, color: '#6b7280' }}>Chargement…</span>
+                          ) : drill.expenses.length === 0 ? (
+                            <span style={{ fontSize: 12, color: '#6b7280' }}>Aucune dépense pour cette catégorie sur la période.</span>
+                          ) : (
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                              <thead><tr style={{ color: '#9ca3af' }}>
+                                <th style={{ textAlign: 'left', padding: '2px 6px' }}>Date</th>
+                                <th style={{ textAlign: 'left', padding: '2px 6px' }}>Description</th>
+                                <th style={{ textAlign: 'right', padding: '2px 6px' }}>Brut</th>
+                                <th style={{ textAlign: 'right', padding: '2px 6px' }}>Déduct.</th>
+                              </tr></thead>
+                              <tbody>
+                                {drill.expenses.map(x => (
+                                  <tr key={x.id} style={{ borderTop: '1px solid #eef2f1' }}>
+                                    <td style={{ padding: '2px 6px', whiteSpace: 'nowrap' }}>{x.expense_date}</td>
+                                    <td style={{ padding: '2px 6px' }}>
+                                      {x.description || '—'}
+                                      {x.currency && x.currency !== 'CAD' && <span style={{ color: '#9ca3af' }}> · {x.amount} {x.currency}</span>}
+                                      {x.mileage_generated && <span title="Généré depuis le carnet de route"> 🚗</span>}
+                                    </td>
+                                    <td style={{ padding: '2px 6px', textAlign: 'right' }}>{fmt2(x.gross)}</td>
+                                    <td style={{ padding: '2px 6px', textAlign: 'right' }}>{fmt2(x.deductible)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </td>
+                      </tr>
+                    ),
+                  ])}
                 </tbody>
               </table>
             </details>
