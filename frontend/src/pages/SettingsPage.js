@@ -15,7 +15,7 @@ const SettingsPage = () => {
     default_due_days: 30, default_currency: 'CAD', entity_type: 'sole_proprietor', province: 'QC'
   });
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState('idle'); // idle | saving | saved | error
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -62,15 +62,27 @@ const SettingsPage = () => {
     finally { setLoading(false); }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSaving(true); setError(''); setSuccess('');
-    try {
-      await axios.put(`${BACKEND_URL}/api/settings/company`, settings);
-      setSuccess('Parametres sauvegardes avec succes');
-    } catch (err) { setError('Erreur lors de la sauvegarde'); }
-    finally { setSaving(false); }
-  };
+  // Enregistrement AUTOMATIQUE (débounce 800 ms) — plus de bouton « Sauvegarder ». Toute
+  // modification d'un paramètre est sauvegardée après une courte pause (évite une requête par
+  // frappe). On saute la 1re valeur post-chargement (données serveur, pas une modif utilisateur)
+  // pour ne pas re-sauvegarder au montage, et on ne sauve pas en lecture seule.
+  const didHydrate = useRef(false);
+  useEffect(() => {
+    if (loading || !canEditSettings) return;
+    if (!didHydrate.current) { didHydrate.current = true; return; }
+    setSaveState('saving');
+    const t = setTimeout(async () => {
+      try {
+        await axios.put(`${BACKEND_URL}/api/settings/company`, settings);
+        setError('');
+        setSaveState('saved');
+      } catch (err) {
+        setError('Erreur lors de la sauvegarde automatique');
+        setSaveState('error');
+      }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [settings, loading, canEditSettings]);
 
   const uploadLogo = useCallback(async (file) => {
     if (!file) return;
@@ -199,7 +211,7 @@ const SettingsPage = () => {
       )}
 
       {activeTab === 'company' && canViewSettings && (
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={(e) => e.preventDefault()}>
         {/* Logo Upload Section */}
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
           <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>Logo de l'entreprise</h3>
@@ -525,12 +537,11 @@ const SettingsPage = () => {
         </div>
 
         {canEditSettings ? (
-          <div style={{ textAlign: 'center' }}>
-            <button type="submit" disabled={saving} data-testid="save-settings-btn" style={{
-              background: saving ? '#9ca3af' : 'linear-gradient(135deg, #10b981, #047857)',
-              color: 'white', border: 'none', padding: '16px 32px', borderRadius: '12px',
-              cursor: saving ? 'not-allowed' : 'pointer', fontSize: '16px', fontWeight: '700'
-            }}>{saving ? 'Sauvegarde...' : 'Sauvegarder tous les parametres'}</button>
+          <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, padding: 12 }} data-testid="autosave-status">
+            {saveState === 'saving' && <span>💾 Enregistrement…</span>}
+            {saveState === 'saved' && <span style={{ color: '#047857', fontWeight: 600 }}>✓ Modifications enregistrées automatiquement</span>}
+            {saveState === 'error' && <span style={{ color: '#b91c1c', fontWeight: 600 }}>⚠️ Échec de l&#8217;enregistrement — vérifie ta connexion</span>}
+            {saveState === 'idle' && <span>Les modifications sont enregistrées automatiquement.</span>}
           </div>
         ) : (
           <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, padding: 12,
