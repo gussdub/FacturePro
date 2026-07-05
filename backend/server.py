@@ -2651,6 +2651,11 @@ def migrate_general_ledger_v1():
     db.journal_entries.create_index([("organization_id", 1), ("status", 1)])
     db.journal_entries.create_index(
         [("organization_id", 1), ("source_type", 1), ("source_id", 1)])
+    # [perf audit] Requête par compte à l'intérieur des lignes (multikey) : accélère
+    # _account_balance (bilan, balance de vérification, grand livre par compte) qui
+    # filtrait auparavant en mémoire faute d'index sur lines.account_id.
+    db.journal_entries.create_index(
+        [("organization_id", 1), ("lines.account_id", 1), ("status", 1)])
     db.ledger_counters.create_index("id", unique=True)
 
 
@@ -7002,7 +7007,7 @@ def _mileage_flag_rate_missing(org_id, year):
         pass
 
 
-def _mileage_enrich_trip(trip: dict, scope) -> dict:
+def _mileage_enrich_trip(trip: dict, scope, _preloaded_trips=None) -> dict:
     """Enrichit un trajet de son allocation calculée À LA VOLÉE (jamais figée sur
     le document). Forme de retour stable : {trip, allocation, ytd_before,
     running_total_km, rate_missing_year}.
@@ -7014,13 +7019,25 @@ def _mileage_enrich_trip(trip: dict, scope) -> dict:
     - année sans taux → allocation=None + rate_missing_year (aucun montant
       deviné) ; l'org est flaggée via _mileage_flag_rate_missing.
     running_total_km = ytd_before + distance_km (cumul APRÈS ce trajet, colonne
-    « Cumul » exigée par l'ARC au carnet)."""
+    « Cumul » exigée par l'ARC au carnet).
+
+    [perf audit] `_preloaded_trips` : quand la liste des trajets de l'année est
+    déjà chargée en mémoire (cas `list_mileage_trips` qui enrichit N trajets), on
+    calcule le cumul YTD via `_mileage_sum_ytd` DIRECTEMENT sur cette liste au lieu
+    de re-requêter la DB par trajet (évite le N+1). Résultat IDENTIQUE : _mileage_sum_ytd
+    filtre déjà par (employee_key, vehicle_id, année), donc une liste couvrant les
+    années présentes suffit. Sans ce param → comportement inchangé (requête par trajet)."""
     year = int(_mileage_trip_date_str(trip["trip_date"])[:4])
     rates = _mileage_rate_for_year(year)
     employee_key = _mileage_employee_key(trip.get("employee_id"), trip.get("created_by_user_id"))
-    ytd_before = _mileage_ytd_before(
-        scope, employee_key, trip["vehicle_id"], trip["trip_date"], trip["id"],
-        current_created_at=trip.get("created_at", ""))
+    if _preloaded_trips is not None:
+        ytd_before = _mileage_sum_ytd(
+            _preloaded_trips, trip["id"], trip["trip_date"], employee_key,
+            trip["vehicle_id"], trip.get("created_at", ""))
+    else:
+        ytd_before = _mileage_ytd_before(
+            scope, employee_key, trip["vehicle_id"], trip["trip_date"], trip["id"],
+            current_created_at=trip.get("created_at", ""))
     distance_km = float(trip.get("distance_km", 0.0))
     running_total_km = round(ytd_before + distance_km, 2)
     if rates is None:
@@ -7132,7 +7149,28 @@ def list_mileage_trips(year: int = None, month: int = None, vehicle_id: str = No
         query["vehicle_id"] = vehicle_id
     docs = list(db.mileage_trips.find(query, {"_id": 0}))
     docs.sort(key=lambda d: (d["trip_date"], d["id"]))
-    return [_mileage_enrich_trip(d, scope) for d in docs]
+    # [perf audit] Cumul YTD en BATCH : au lieu d'une requête par trajet
+    # (_mileage_ytd_before ×N), on charge UNE fois les trajets des années présentes
+    # dans le résultat et on calcule chaque cumul en mémoire. Montants identiques
+    # (_mileage_sum_ytd filtre par employee+véhicule+année). Union des années =
+    # complète car le YTD d'un trajet ne dépend que de sa propre année.
+    preloaded = None
+    if docs:
+        years = sorted({_mileage_trip_date_str(d["trip_date"])[:4] for d in docs})
+        lo, hi = years[0], str(int(years[-1]) + 1)
+        preloaded = [
+            {
+                "id": t["id"], "trip_date": t["trip_date"],
+                "distance_km": t.get("distance_km", 0.0),
+                "created_at": t.get("created_at", ""),
+                "employee_key": _mileage_employee_key(t.get("employee_id"), t.get("created_by_user_id")),
+                "vehicle_id": t["vehicle_id"],
+            }
+            for t in db.mileage_trips.find(
+                {**scope, "trip_date": {"$gte": f"{lo}-01-01", "$lt": f"{hi}-01-01"}},
+                {"_id": 0})
+        ]
+    return [_mileage_enrich_trip(d, scope, _preloaded_trips=preloaded) for d in docs]
 
 
 @app.get("/api/mileage/trips/{trip_id}")
