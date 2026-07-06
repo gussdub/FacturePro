@@ -261,7 +261,14 @@ export default function BankImportWizard({ onCancel, onDone }) {
                    onChange={(e) => setBankLabel(e.target.value)}
                    style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 6, marginTop: 4 }} />
             <datalist id="bank-list">
-              {mappings.map(m => <option key={m.id} value={m.bank_label} />)}
+              {/* Dédup insensible à la casse : plusieurs imports partagent souvent la même
+                  banque (ex. « Dépenses guillaume ») — une seule suggestion suffit. */}
+              {Array.from(new Map(
+                mappings
+                  .map(m => (m.bank_label || "").trim())
+                  .filter(Boolean)
+                  .map(label => [label.toLowerCase(), label])
+              ).values()).map(label => <option key={label} value={label} />)}
             </datalist>
           </label>
           <div style={{ marginTop: 16, padding: 24, border: "2px dashed #d1d5db", borderRadius: 8, textAlign: "center" }}>
