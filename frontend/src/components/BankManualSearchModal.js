@@ -33,19 +33,23 @@ export default function BankManualSearchModal({ tx, onClose, onMatched }) {
           setResults(eligible);
         } else {
           const exps = (await axios.get(`${BACKEND_URL}/api/expenses`)).data || [];
-          const eligible = exps
-            .filter(e => !e.bank_transaction_id)  // exclut les dépenses déjà rapprochées
-            .map(e => {
-              const d = e.expense_date || e.date || "";
-              return {
-                kind: "expense", id: e.id,
-                _dd: _dateDiffDays(d, txDate),
-                _ad: Math.abs(Number(e.amount_cad) - txAmt),
-                label: `${d || "—"} — ${e.vendor || e.description || "(sans nom)"} — ${Number(e.amount_cad).toFixed(2)} $`,
-              };
-            });
-          eligible.sort(byRelevance);
-          setResults(eligible);
+          // On affiche TOUTES les dépenses : les non rapprochées (cliquables, triées par date
+          // proche) d'abord, puis les DÉJÀ rapprochées en grisé/non cliquables — pour qu'on voie
+          // pourquoi une dépense n'est pas sélectionnable (déjà liée à une autre transaction).
+          const mapped = exps.map(e => {
+            const d = e.expense_date || e.date || "";
+            const matched = !!e.bank_transaction_id;
+            return {
+              kind: "expense", id: e.id, disabled: matched,
+              _mm: matched ? 1 : 0,
+              _dd: _dateDiffDays(d, txDate),
+              _ad: Math.abs(Number(e.amount_cad) - txAmt),
+              label: `${d || "—"} — ${e.vendor || e.description || "(sans nom)"} — ${Number(e.amount_cad).toFixed(2)} $`
+                     + (matched ? "  · déjà rapprochée" : ""),
+            };
+          });
+          mapped.sort((a, b) => (a._mm - b._mm) || byRelevance(a, b));
+          setResults(mapped);
         }
       } finally { setLoading(false); }
     })();
@@ -80,9 +84,11 @@ export default function BankManualSearchModal({ tx, onClose, onMatched }) {
         <div style={{ maxHeight: 400, overflowY: "auto" }}>
           {loading && <p>Chargement…</p>}
           {!loading && filtered.map(r => (
-            <div key={r.id} onClick={() => !busy && match(r.kind, r.id)}
-                 style={{ padding: 8, borderBottom: "1px solid #e5e7eb", cursor: busy ? "wait" : "pointer", fontSize: 13 }}
-                 onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+            <div key={r.id} onClick={() => !busy && !r.disabled && match(r.kind, r.id)}
+                 style={{ padding: 8, borderBottom: "1px solid #e5e7eb", fontSize: 13,
+                          cursor: r.disabled ? "not-allowed" : (busy ? "wait" : "pointer"),
+                          color: r.disabled ? "#9ca3af" : "inherit" }}
+                 onMouseEnter={(e) => { if (!r.disabled) e.currentTarget.style.background = "#f3f4f6"; }}
                  onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
               {r.label}
             </div>
