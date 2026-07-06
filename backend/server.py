@@ -3285,6 +3285,69 @@ def migrate_mileage_logbook_v1():
     db.mileage_rate_reminders.create_index("id", unique=True)
 
 
+def migrate_bank_created_expenses_v1():
+    """Idempotente. Normalise les dépenses créées depuis une transaction bancaire au schéma
+    CANONIQUE (feature #7 — fix audit). L'ancien `create_expense_from_tx` écrivait un schéma
+    divergent : `date` au lieu d'`expense_date`, catégorie NICHÉE sous un dict `category`, taxes
+    en `tps_paid`/`tvq_paid`/`tvh_paid`. Résultat : ces dépenses étaient EXCLUES du P&L, du T2125,
+    du rapport taxes et du grand livre (tous filtrent/lisent `expense_date` + `category_code`/
+    `deductible_amount`/`gst_paid_cad` TOP-LEVEL). On aplatit et on renomme, sans rien recalculer
+    d'autre (montants inchangés).
+
+    Cible : uniquement l'ancien schéma — soit `category` de type objet (dict niché), soit
+    `expense_date` absent alors que `date` existe. Après passage, `category` est une chaîne (label)
+    et `expense_date` est présent → la requête ne matche plus (idempotent)."""
+    q = {"$or": [
+        {"category": {"$type": "object"}},
+        {"expense_date": {"$exists": False}, "date": {"$exists": True}},
+    ]}
+    fixed = 0
+    _settings_cache = {}
+    for exp in db.expenses.find(q, {"_id": 0}):
+        updates = {}
+        # 1) date -> expense_date (les rapports filtrent sur expense_date)
+        if not exp.get("expense_date") and exp.get("date"):
+            updates["expense_date"] = exp["date"]
+        # 2) catégorie nichée (dict) -> à plat : reconstruit le snapshot depuis le code stocké.
+        #    `**snap` inclut `category` = label (str) qui écrase le dict niché.
+        cat = exp.get("category")
+        if isinstance(cat, dict):
+            code = cat.get("category_code") or cat.get("code") or ""
+            amount_cad = float(exp.get("amount_cad", 0) or 0)
+            # Feature #14 — applique le % télécom usage mixte de l'org (parité create_expense) :
+            # sinon une dépense télécom migrée resterait 100 % déductible (sur-déduction/sur-CTI).
+            _org = exp.get("organization_id")
+            if _org not in _settings_cache:
+                _settings_cache[_org] = db.company_settings.find_one(
+                    {"organization_id": _org}, {"_id": 0}) or {}
+            _tpct = _telecom_business_pct(_settings_cache[_org], code)
+            try:
+                snap = _build_expense_category_snapshot(
+                    {"category_code": code}, amount_cad, telecom_business_pct=_tpct)
+            except Exception:
+                snap = {"category": "", "category_code": code, "category_custom_label": "",
+                        "category_arc_line": "", "deductible_percentage": 100,
+                        "deductible_amount": round(amount_cad, 2)}
+            updates.update(snap)
+        # 3) noms de taxes historiques -> canoniques (valeurs conservées, 0 pour create-from-tx)
+        if "gst_paid_cad" not in exp:
+            updates["gst_paid_cad"] = float(exp.get("tps_paid_cad") or exp.get("tps_paid") or 0)
+        if "qst_paid_cad" not in exp:
+            updates["qst_paid_cad"] = float(exp.get("tvq_paid") or 0)
+        if "hst_paid_cad" not in exp:
+            updates["hst_paid_cad"] = float(exp.get("tvh_paid") or 0)
+        # 4) champs canoniques manquants (affichage/filtre, jamais recalculés)
+        if "amount" not in exp:
+            updates["amount"] = float(exp.get("amount_cad", 0) or 0)
+        if "status" not in exp:
+            updates["status"] = "pending"
+        if updates:
+            db.expenses.update_one({"id": exp["id"]}, {"$set": updates})
+            fixed += 1
+    if fixed:
+        print(f"Migrated {fixed} bank-created expense(s) to canonical schema")
+
+
 def migrate_general_ledger_autopost_v1(target=None):
     """Idempotente. Grand livre Phase 2 — auto-posting (feature #12).
 
@@ -6689,32 +6752,52 @@ def create_expense_from_tx(tx_id: str, body: dict,
     category_code = body.get("category_code")
     if not category_code:
         raise HTTPException(422, "category_code required")
-    amount = abs(float(tx["amount_cad"]))
+    amount = round(abs(float(tx["amount_cad"])), 2)
     vendor = (body.get("vendor") or tx.get("description") or "")[:60]
+    # [SCHÉMA CANONIQUE — fix audit] Aligné EXACTEMENT sur create_expense / le carnet de route :
+    # `expense_date` (PAS `date`), snapshot catégorie ÉTALÉ À PLAT (`**cat_snapshot` → category_code,
+    # deductible_amount, category_arc_line… top-level), taxes en `gst_paid_cad`/`qst_paid_cad`/
+    # `hst_paid_cad`. Le schéma NICHÉ historique (`category` dict, `date`, `tps_paid`) rendait la
+    # dépense INVISIBLE au P&L, au T2125, au rapport taxes et au grand livre (tous filtrent/lisent
+    # ces champs top-level). Migration des dépenses existantes : migrate_bank_created_expenses_v1.
+    org_id = current_user.organization_id
+    _settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    # Feature #14 — % affaires télécom usage mixte (parité EXACTE avec create_expense) : sans lui,
+    # une dépense télécom créée depuis la banque resterait 100 % déductible -> sur-déduction P&L/
+    # T2125 + sur-réclamation du CTI/RTI (revue adversariale).
+    _tpct = _telecom_business_pct(_settings, category_code)
+    try:
+        cat_snapshot = _build_expense_category_snapshot(
+            {"category_code": category_code}, amount, telecom_business_pct=_tpct)
+    except Exception:
+        cat_snapshot = {"category": "", "category_code": category_code, "category_custom_label": "",
+                        "category_arc_line": "", "deductible_percentage": 100,
+                        "deductible_amount": amount}
     expense_doc = {
         "id": str(uuid.uuid4()),
         "organization_id": current_user.organization_id,
         "created_by_user_id": current_user.id,
         "user_id": current_user.id,  # legacy
-        "date": tx["date"],
-        "amount_cad": round(amount, 2),
+        "employee_id": "",
+        "description": (tx.get("description") or "")[:200],
+        "vendor": vendor,
+        "amount": amount,
+        "amount_cad": amount,
         "currency": "CAD",
         "exchange_rate_to_cad": 1.0,
-        "vendor": vendor,
-        "description": (tx.get("description") or "")[:200],
+        **cat_snapshot,
+        "gst_paid_cad": 0.0,
+        "qst_paid_cad": 0.0,
+        "hst_paid_cad": 0.0,
+        "taxes_auto_computed": False,
+        "expense_date": tx["date"],
+        "status": "pending",
+        "receipt_url": "",
+        "receipt_file_id": None,
+        "notes": "",
         "bank_transaction_id": tx["id"],
-        "tps_paid": 0.0,
-        "tvq_paid": 0.0,
-        "tvh_paid": 0.0,
-        "tps_paid_cad": 0.0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    # snapshot catégorie ARC (feature #3) — fallback safe si helper absent
-    try:
-        snapshot = _build_expense_category_snapshot({"category_code": category_code}, amount)
-        expense_doc["category"] = snapshot
-    except Exception:
-        expense_doc["category"] = {"code": category_code}
     db.expenses.insert_one(expense_doc)
     now = datetime.now(timezone.utc).isoformat()
     db.bank_transactions.update_one(
@@ -6724,8 +6807,7 @@ def create_expense_from_tx(tx_id: str, body: dict,
     # [GL P2 — audit fix] Une dépense créée depuis une transaction bancaire doit
     # être comptabilisée comme n'importe quelle dépense (parité avec create_expense).
     # Opt-in par org, idempotent, _safe_autopost avale toute erreur.
-    org_id = current_user.organization_id
-    _settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    # (org_id / _settings déjà chargés plus haut pour le % télécom.)
     if _settings.get("autopost_enabled"):
         _ensure_chart_seeded(org_id, current_user.id)
         _safe_autopost(
@@ -10727,6 +10809,11 @@ def seed_data():
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un
         # actionnaire ajoutés aux plans comptables existants (idempotente, additive)
         migrate_chart_add_accounts_v1()
+
+        # Migration feature #7 (fix audit) — normalise les dépenses créées depuis une
+        # transaction bancaire au schéma canonique (expense_date, catégorie à plat, taxes)
+        # sinon elles étaient exclues du P&L / T2125 / rapport taxes / grand livre (idempotente)
+        migrate_bank_created_expenses_v1()
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(
