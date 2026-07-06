@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import { Upload, ArrowRight, X } from "lucide-react";
 import { BACKEND_URL } from "../config";
@@ -23,7 +23,9 @@ export default function BankImportWizard({ onCancel, onDone }) {
   const [saveMapping, setSaveMapping] = useState(true);
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [err, setErr] = useState(null);
+  const previewSeq = useRef(0);
 
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/bank/mappings`)
@@ -81,8 +83,13 @@ export default function BankImportWizard({ onCancel, onDone }) {
     setStep(2);
   };
 
-  const runPreview = async () => {
-    setBusy(true); setErr(null); setPreview(null);
+  // Aperçu en direct : appelle le dry-run backend (le VRAI _parse_csv_rows) et n'applique
+  // que la réponse de la DERNIÈRE requête (garde anti-course via previewSeq), pour que ce
+  // qui s'affiche = exactement ce qui sera importé.
+  const refreshPreview = async () => {
+    if (!file || !previewValid()) return;
+    const seq = ++previewSeq.current;
+    setPreviewing(true); setErr(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -91,11 +98,26 @@ export default function BankImportWizard({ onCancel, onDone }) {
       const r = await axios.post(
         `${BACKEND_URL}/api/bank/imports?dry_run=true`, fd,
         { headers: { "Content-Type": "multipart/form-data" } });
-      setPreview(r.data);
+      if (seq === previewSeq.current) setPreview(r.data);
     } catch (e) {
-      setErr(e.response?.data?.detail || "Erreur de parsing");
-    } finally { setBusy(false); }
+      if (seq === previewSeq.current) {
+        setErr(e.response?.data?.detail || "Erreur de parsing");
+        setPreview(null);
+      }
+    } finally {
+      if (seq === previewSeq.current) setPreviewing(false);
+    }
   };
+
+  // Relance l'aperçu (débounced 400 ms) à chaque changement de fichier ou de réglage de
+  // mapping quand on est à l'étape 2. Le nettoyage annule le timer si un nouveau changement
+  // arrive avant l'échéance.
+  useEffect(() => {
+    if (step !== 2 || !file || !previewValid()) return;
+    const t = setTimeout(() => { refreshPreview(); }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, file, mapping]);
 
   const doImport = async () => {
     setBusy(true); setErr(null);
@@ -279,25 +301,27 @@ export default function BankImportWizard({ onCancel, onDone }) {
             {" "}Sauvegarder ce mapping comme « {bankLabel} »
           </label>
           <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-            Astuce : cliquez « Vérifier » et confirmez que les <strong>dates</strong> et les
-            <strong> montants</strong> de l'aperçu sont corrects (dépôts positifs, retraits négatifs)
-            avant d'importer.
+            L'aperçu ci-dessous se met à jour <strong>en direct</strong> quand tu changes un réglage.
+            Confirme que les <strong>dates</strong> et les <strong>montants</strong> (dépôts positifs,
+            retraits négatifs) sont corrects avant d'importer.
           </p>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-            <button onClick={runPreview} disabled={busy || !previewValid()}
-                    style={{ background: "#e5e7eb", padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer" }}>
-              {busy ? "…" : "Vérifier"}
-            </button>
-            <button onClick={doImport} disabled={!preview || busy}
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+            <button onClick={doImport} disabled={!preview || busy || previewing}
                     style={{ background: "#00A08C", color: "#fff", padding: "8px 16px", border: "none", borderRadius: 6,
-                             cursor: "pointer", opacity: (!preview || busy) ? 0.5 : 1 }}>
+                             cursor: "pointer", opacity: (!preview || busy || previewing) ? 0.5 : 1 }}>
               {busy ? "Import…" : "Importer"}
             </button>
             <button onClick={() => setStep(1)}
                     style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer" }}>
               ← Retour
             </button>
+            {previewing && <span style={{ fontSize: 12, color: "#6b7280" }}>Mise à jour de l'aperçu…</span>}
           </div>
+          {!previewValid() && (
+            <p style={{ fontSize: 13, color: "#92400e", background: "#fef3c7", padding: 10, borderRadius: 6 }}>
+              Renseigne les colonnes (Date, Description, Montant) pour générer l'aperçu en direct.
+            </p>
+          )}
           {preview && (
             <div>
               {showDateAmbiguityWarning && (
