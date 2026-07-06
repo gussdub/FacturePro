@@ -74,6 +74,21 @@ export default function BankMatchingScreen({ importId, onBack }) {
       onBack();
     } finally { setBusy(false); }
   };
+  // Relance l'auto-match sur les transactions encore non rapprochées (après avoir saisi de
+  // nouvelles dépenses, ou pour ré-appliquer le matcheur). Ne touche pas aux rapprochées/ignorées.
+  const onRematch = async () => {
+    setBusy(true);
+    try {
+      const r = await axios.post(`${BACKEND_URL}/api/bank/imports/${importId}/rematch`);
+      await fetchData();
+      const n = r.data?.auto_matched || 0;
+      alert(n > 0
+        ? `${n} transaction(s) rapprochée(s) automatiquement.`
+        : "Aucun nouveau rapprochement automatique trouvé (montant + date proche + nom requis).");
+    } catch {
+      setErr("Erreur lors du re-rapprochement");
+    } finally { setBusy(false); }
+  };
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
@@ -102,6 +117,15 @@ export default function BankMatchingScreen({ importId, onBack }) {
           </button>
         )}
       </div>
+      {!isClosed && (
+        <button onClick={onRematch} disabled={busy}
+                title="Comparer à nouveau les transactions non rapprochées avec tes dépenses/factures"
+                style={{ marginBottom: 14, background: "#fff", color: "#00A08C", border: "1.5px solid #00A08C",
+                         padding: "6px 14px", borderRadius: 6, cursor: busy ? "wait" : "pointer", fontSize: 13,
+                         fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <RotateCcw size={14} /> Relancer le rapprochement auto
+        </button>
+      )}
       <div style={{ marginBottom: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {[
           ["all", "Tout"],

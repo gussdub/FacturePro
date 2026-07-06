@@ -1148,13 +1148,17 @@ def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower
 
 def _score_expense_candidate(tx_date, target, exp, desc_lower):
     amount_diff = abs(float(exp.get("amount_cad", 0)) - target)
-    exp_date = _parse_iso_date(exp.get("date"))
+    exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
     date_diff = abs((tx_date - exp_date).days) if exp_date else 999
-    vendor = (exp.get("vendor") or "").lower()
     score = 1
     if date_diff <= 1:
         score += 1
-    if vendor and len(vendor) >= 3 and vendor in desc_lower:
+    # +1 "nom" : s'appuie sur le vendor OU la description de la dépense — beaucoup de dépenses
+    # saisies à la main n'ont pas de vendor extrait, le nom du fournisseur est alors dans la
+    # description. On teste dans les deux sens (l'un contient l'autre) pour tolérer « Genspark.ai »
+    # côté dépense vs « GENSPARK.AI 877-... » côté relevé.
+    name = (exp.get("vendor") or exp.get("description") or "").strip().lower()
+    if name and len(name) >= 3 and (name in desc_lower or (desc_lower and desc_lower in name)):
         score += 1
     return score, date_diff, amount_diff
 
@@ -1209,7 +1213,7 @@ def _auto_match_transactions(import_id, scope):
             for exp in open_expenses:
                 if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
                     continue
-                exp_date = _parse_iso_date(exp.get("date"))
+                exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
                 if not exp_date or abs((tx_date - exp_date).days) > 3:
                     continue
                 score, date_diff, amt_diff = _score_expense_candidate(
@@ -6489,7 +6493,7 @@ def get_bank_suggestions(tx_id: str,
                 {**scope, "bank_transaction_id": None}, {"_id": 0}):
             if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
                 continue
-            exp_date = _parse_iso_date(exp.get("date"))
+            exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
             if not exp_date or abs((tx_date - exp_date).days) > 3:
                 continue
             score, ddiff, adiff = _score_expense_candidate(
@@ -6679,6 +6683,19 @@ def delete_bank_import(import_id: str, force: bool = False,
         {"import_id": import_id, **_org_scope(current_user)})
     db.bank_imports.delete_one({"id": import_id, **_org_scope(current_user)})
     return Response(status_code=204)
+
+
+@app.post("/api/bank/imports/{import_id}/rematch")
+def rematch_bank_import(import_id: str,
+                        current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    """Relance l'auto-match sur les transactions ENCORE non rapprochées de l'import (utile après
+    avoir saisi de nouvelles dépenses, ou pour ré-appliquer le matcheur). Ne touche jamais aux
+    transactions déjà rapprochées ni ignorées. Retourne le nombre de nouveaux rapprochements."""
+    imp = db.bank_imports.find_one({"id": import_id, **_org_scope(current_user)}, {"_id": 0})
+    if not imp:
+        raise HTTPException(404, "Import not found")
+    matched = _auto_match_transactions(import_id, _org_scope(current_user))
+    return {"auto_matched": matched}
 
 
 # ─── Receipt OCR endpoints (feature #8) ───

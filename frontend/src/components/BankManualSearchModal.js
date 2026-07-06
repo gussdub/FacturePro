@@ -26,7 +26,7 @@ export default function BankManualSearchModal({ tx, onClose, onMatched }) {
           const eligible = exps.filter(e => !e.bank_transaction_id);
           setResults(eligible.map(e => ({
             kind: "expense", id: e.id,
-            label: `${e.date} — ${e.vendor || e.description || "(sans nom)"} — ${Number(e.amount_cad).toFixed(2)} $`,
+            label: `${e.expense_date || e.date || "—"} — ${e.vendor || e.description || "(sans nom)"} — ${Number(e.amount_cad).toFixed(2)} $`,
           })));
         }
       } finally { setLoading(false); }
