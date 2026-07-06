@@ -26,6 +26,11 @@ export default function BankImportWizard({ onCancel, onDone }) {
   const [previewing, setPreviewing] = useState(false);
   const [err, setErr] = useState(null);
   const previewSeq = useRef(0);
+  const previewInFlight = useRef(false);
+  // Un PDF est routé vers l'extraction IA. Détecté par MAGIC-BYTES dans onFileChosen
+  // (aligné exactement sur le backend raw[:16].lstrip().startswith("%PDF")), jamais par
+  // extension/MIME — sinon un PDF renommé .csv échapperait au bon flux et facturerait un scan.
+  const [isPdf, setIsPdf] = useState(false);
 
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/bank/mappings`)
@@ -66,13 +71,27 @@ export default function BankImportWizard({ onCancel, onDone }) {
     }
   }, [bankLabel, mappings]);
 
-  const onFileChosen = (e) => {
+  const onFileChosen = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    if (f.size > 5 * 1024 * 1024) {
-      setErr("Fichier trop volumineux (max 5 MB)"); return;
+    // Détection PDF par magic-bytes (%PDF, préambule d'espaces toléré) — aligne sur le backend.
+    let pdf = false;
+    try {
+      const head = new Uint8Array(await f.slice(0, 16).arrayBuffer());
+      let i = 0;
+      while (i < head.length && (head[i] === 0x20 || head[i] === 0x09 || head[i] === 0x0a || head[i] === 0x0d)) i++;
+      pdf = head[i] === 0x25 && head[i + 1] === 0x50 && head[i + 2] === 0x44 && head[i + 3] === 0x46; // "%PDF"
+    } catch {
+      pdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
     }
-    setFile(f); setErr(null);
+    const capMb = pdf ? 10 : 5;
+    if (f.size > capMb * 1024 * 1024) {
+      setErr(`Fichier trop volumineux (max ${capMb} MB)`); return;
+    }
+    previewSeq.current++;          // invalide toute réponse d'aperçu encore en vol
+    previewInFlight.current = false; // libère la garde (le fichier a changé)
+    setIsPdf(pdf);
+    setFile(f); setErr(null); setPreview(null); setPreviewing(false);
   };
 
   const goStep2 = () => {
@@ -87,13 +106,18 @@ export default function BankImportWizard({ onCancel, onDone }) {
   // que la réponse de la DERNIÈRE requête (garde anti-course via previewSeq), pour que ce
   // qui s'affiche = exactement ce qui sera importé.
   const refreshPreview = async () => {
-    if (!file || !previewValid()) return;
+    // Un PDF n'a pas de mapping de colonnes ; sinon on exige un mapping valide.
+    if (!file || (!isPdf && !previewValid())) return;
+    // Garde SYNCHRONE anti-double-fire (double-clic, StrictMode) : évite 2 dry_run — donc
+    // 2 scans facturés — sur un PDF. Le disabled React n'agit qu'au recommit, trop tard.
+    if (previewInFlight.current) return;
+    previewInFlight.current = true;
     const seq = ++previewSeq.current;
     setPreviewing(true); setErr(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("mapping", JSON.stringify(mapping));
+      if (!isPdf) fd.append("mapping", JSON.stringify(mapping));
       fd.append("bank_label", bankLabel);
       const r = await axios.post(
         `${BACKEND_URL}/api/bank/imports?dry_run=true`, fd,
@@ -105,6 +129,7 @@ export default function BankImportWizard({ onCancel, onDone }) {
         setPreview(null);
       }
     } finally {
+      previewInFlight.current = false;
       if (seq === previewSeq.current) setPreviewing(false);
     }
   };
@@ -113,16 +138,18 @@ export default function BankImportWizard({ onCancel, onDone }) {
   // mapping quand on est à l'étape 2. Le nettoyage annule le timer si un nouveau changement
   // arrive avant l'échéance.
   useEffect(() => {
-    if (step !== 2 || !file || !previewValid()) return;
+    // PDF exclu : son extraction (Claude, facturée) est déclenchée par un bouton explicite,
+    // jamais en direct — sinon chaque frappe consommerait un scan.
+    if (step !== 2 || isPdf || !file || !previewValid()) return;
     const t = setTimeout(() => { refreshPreview(); }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, file, mapping]);
+  }, [step, file, mapping, isPdf]);
 
   const doImport = async () => {
     setBusy(true); setErr(null);
     try {
-      if (saveMapping && bankLabel.trim()) {
+      if (!isPdf && saveMapping && bankLabel.trim()) {
         try {
           await axios.post(`${BACKEND_URL}/api/bank/mappings`,
             { ...mapping, bank_label: bankLabel });
@@ -130,16 +157,16 @@ export default function BankImportWizard({ onCancel, onDone }) {
       }
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("mapping", JSON.stringify(mapping));
+      if (!isPdf) fd.append("mapping", JSON.stringify(mapping));
       fd.append("bank_label", bankLabel);
       const r = await axios.post(`${BACKEND_URL}/api/bank/imports`, fd,
         { headers: { "Content-Type": "multipart/form-data" } });
       onDone(r.data.import.id);
     } catch (e) {
       if (e.response?.status === 409) {
-        setErr(`Ce CSV a déjà été importé.`);
+        setErr("Ce fichier a déjà été importé.");
       } else if (e.response?.status === 413) {
-        setErr("Fichier trop volumineux (max 5 MB / 5000 lignes).");
+        setErr("Fichier trop volumineux.");
       } else {
         setErr(e.response?.data?.detail || "Erreur d'import");
       }
@@ -166,6 +193,43 @@ export default function BankImportWizard({ onCancel, onDone }) {
       .map(r => parseInt(String(r.date).slice(8, 10), 10));
     return days.length > 0 && days.every(d => d <= 12);
   })();
+
+  // Tableau d'aperçu partagé (CSV live + PDF après extraction). Lignes en erreur en rouge.
+  const previewTable = preview ? (
+    <div>
+      {!isPdf && showDateAmbiguityWarning && (
+        <div style={{ background: "#fef3c7", color: "#92400e", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 13 }}>
+          ⚠️ Toutes les dates de l'aperçu ont un jour ≤ 12 : impossible de distinguer
+          JJ/MM de MM/JJ. Assure-toi d'avoir choisi le bon préréglage (français =
+          JJ/MM/AAAA, anglais = MM/JJ/AAAA) — sinon le mois sera inversé sans erreur visible.
+        </div>
+      )}
+      <h4>Aperçu ({preview.total_rows} lignes au total) :</h4>
+      <div style={{ maxHeight: 360, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+      <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
+            <th style={{ padding: 6 }}>Date</th>
+            <th style={{ padding: 6 }}>Description</th>
+            <th style={{ padding: 6, textAlign: "right" }}>Montant</th>
+          </tr>
+        </thead>
+        <tbody>
+          {preview.parsed_rows.map((r, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid #e5e7eb",
+                                 color: r.parse_error ? "#dc2626" : "inherit" }}>
+              <td style={{ padding: 6 }}>{r.date || "—"}</td>
+              <td style={{ padding: 6 }}>{r.description}</td>
+              <td style={{ padding: 6, textAlign: "right" }}>
+                {r.amount_cad != null ? r.amount_cad.toFixed(2) + " $" : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
@@ -203,9 +267,9 @@ export default function BankImportWizard({ onCancel, onDone }) {
           </label>
           <div style={{ marginTop: 16, padding: 24, border: "2px dashed #d1d5db", borderRadius: 8, textAlign: "center" }}>
             <Upload size={32} style={{ opacity: 0.5 }} />
-            <p>Choisis un fichier CSV (max 5 MB / 5000 lignes)</p>
-            <input type="file" accept=".csv,text/csv" onChange={onFileChosen} />
-            {file && <p style={{ color: "#059669", marginTop: 8 }}>{file.name} ({(file.size / 1024).toFixed(1)} Ko)</p>}
+            <p>Choisis un fichier <strong>CSV</strong> (max 5 MB / 5000 lignes) ou un <strong>relevé PDF</strong> (max 10 MB, extraction IA)</p>
+            <input type="file" accept=".csv,text/csv,.pdf,application/pdf" onChange={onFileChosen} />
+            {file && <p style={{ color: "#059669", marginTop: 8 }}>{file.name} ({(file.size / 1024).toFixed(1)} Ko){isPdf ? " — PDF (extraction IA)" : ""}</p>}
           </div>
           <button onClick={goStep2} disabled={!file || !bankLabel.trim()}
                   style={{ marginTop: 16, background: "#00A08C", color: "#fff", border: "none",
@@ -217,7 +281,50 @@ export default function BankImportWizard({ onCancel, onDone }) {
         </div>
       )}
 
-      {step === 2 && (
+      {step === 2 && isPdf && (
+        <div>
+          <div style={{ background: "#fef3c7", color: "#92400e", padding: 12, borderRadius: 6, marginBottom: 14, fontSize: 13, lineHeight: 1.5 }}>
+            ⚠️ <strong>Extraction par IA.</strong> Les transactions sont lues automatiquement depuis
+            le PDF. <strong>Vérifie chaque ligne</strong> (date, montant, dépôt = positif /
+            retrait = négatif) avant d'importer — l'IA peut manquer ou mal lire une ligne.
+            1 relevé = 1 scan de ton quota mensuel.
+          </div>
+          {!preview ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button onClick={refreshPreview} disabled={previewing}
+                      style={{ background: "#00A08C", color: "#fff", padding: "10px 20px", border: "none",
+                               borderRadius: 8, cursor: "pointer", opacity: previewing ? 0.6 : 1 }}>
+                {previewing ? "Analyse en cours…" : "Analyser le relevé (IA)"}
+              </button>
+              <button onClick={() => setStep(1)}
+                      style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer" }}>
+                ← Retour
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+                <button onClick={doImport} disabled={busy || previewing}
+                        style={{ background: "#00A08C", color: "#fff", padding: "8px 16px", border: "none", borderRadius: 6,
+                                 cursor: "pointer", opacity: (busy || previewing) ? 0.5 : 1 }}>
+                  {busy ? "Import…" : "Importer"}
+                </button>
+                <button onClick={refreshPreview} disabled={previewing}
+                        style={{ background: "#e5e7eb", padding: "8px 16px", border: "none", borderRadius: 6, cursor: "pointer" }}>
+                  {previewing ? "…" : "Ré-analyser"}
+                </button>
+                <button onClick={() => setStep(1)}
+                        style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer" }}>
+                  ← Retour
+                </button>
+              </div>
+              {previewTable}
+            </>
+          )}
+        </div>
+      )}
+
+      {step === 2 && !isPdf && (
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
             <label>Délimiteur
@@ -322,39 +429,7 @@ export default function BankImportWizard({ onCancel, onDone }) {
               Renseigne les colonnes (Date, Description, Montant) pour générer l'aperçu en direct.
             </p>
           )}
-          {preview && (
-            <div>
-              {showDateAmbiguityWarning && (
-                <div style={{ background: "#fef3c7", color: "#92400e", padding: 10, borderRadius: 6, marginBottom: 10, fontSize: 13 }}>
-                  ⚠️ Toutes les dates de l'aperçu ont un jour ≤ 12 : impossible de distinguer
-                  JJ/MM de MM/JJ. Assure-toi d'avoir choisi le bon préréglage (français =
-                  JJ/MM/AAAA, anglais = MM/JJ/AAAA) — sinon le mois sera inversé sans erreur visible.
-                </div>
-              )}
-              <h4>Aperçu ({preview.total_rows} lignes au total) :</h4>
-              <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
-                    <th style={{ padding: 6 }}>Date</th>
-                    <th style={{ padding: 6 }}>Description</th>
-                    <th style={{ padding: 6, textAlign: "right" }}>Montant</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.parsed_rows.map((r, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid #e5e7eb",
-                                         color: r.parse_error ? "#dc2626" : "inherit" }}>
-                      <td style={{ padding: 6 }}>{r.date || "—"}</td>
-                      <td style={{ padding: 6 }}>{r.description}</td>
-                      <td style={{ padding: 6, textAlign: "right" }}>
-                        {r.amount_cad != null ? r.amount_cad.toFixed(2) + " $" : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {previewTable}
         </div>
       )}
     </div>
