@@ -1181,24 +1181,60 @@ def _name_match(name, desc_lower):
     return bool(_significant_tokens(name) & _significant_tokens(desc_lower))
 
 
-def _score_expense_candidate(tx_date, target, exp, desc_lower):
-    """Score d'un candidat dépense. Le NOM (vendor OU description) est l'ancre : +2, et REQUIS
-    pour un auto-match (seuil 4). Bonus : montant EXACT (±0,01) +1 — départage deux dépenses de
-    même nom et privilégie l'exact sur le flou — et date proche (≤3j) +1. Max = 5.
-    Ainsi une dépense en devise (CAD estimé, non exact) au bon nom + date proche = 4 -> matche,
-    et un montant exact au bon nom l'emporte sur un montant approché du même fournisseur."""
+def _alias_bridges(tx_tokens, exp_tokens, aliases):
+    """Vrai si un alias APPRIS (rapprochement manuel passé) relie la description du relevé au
+    nom de la dépense : ses bank_tokens recoupent les tokens du relevé ET ses vendor_tokens
+    recoupent ceux de la dépense. Permet de rapprocher « Genspark.ai » -> « MainFunc » après
+    l'avoir fait manuellement une fois, même sans token commun direct. NE débloque QUE le
+    signal nom — le montant (±0,01 CAD / ±5 % devise) et la date restent requis."""
+    if not tx_tokens or not exp_tokens or not aliases:
+        return False
+    for a in aliases:
+        if (set(a.get("bank_tokens") or []) & tx_tokens) and (set(a.get("vendor_tokens") or []) & exp_tokens):
+            return True
+    return False
+
+
+def _score_expense_candidate(tx_date, target, exp, desc_lower, aliases=None, tx_tokens=None):
+    """Score d'un candidat dépense. Le NOM (vendor OU description, recoupement direct OU alias
+    APPRIS) est l'ancre : +2, REQUIS pour un auto-match (seuil 4). Bonus : montant EXACT (±0,01)
+    +1 et date proche (≤3j) +1. Max = 5."""
     amount_diff = abs(float(exp.get("amount_cad", 0) or 0) - target)
     exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
     date_diff = abs((tx_date - exp_date).days) if exp_date else 999
     name = exp.get("vendor") or exp.get("description") or ""
+    name_matched = _name_match(name, desc_lower)
+    if not name_matched:  # repli sur la mémoire de rapprochements manuels
+        name_matched = _alias_bridges(tx_tokens, _significant_tokens(name), aliases)
     score = 1  # dans la fourchette de montant
-    if _name_match(name, desc_lower):
+    if name_matched:
         score += 2
     if amount_diff <= 0.01:
         score += 1
     if date_diff <= 3:
         score += 1
     return score, date_diff, amount_diff
+
+
+def _record_match_alias(organization_id, tx_description, expense):
+    """Mémorise l'association (description relevé -> nom dépense) d'un rapprochement MANUEL,
+    UNIQUEMENT quand les noms ne se recoupent pas déjà directement (l'apprentissage n'a de
+    valeur que là). Upsert idempotent par (org, bank_tokens, vendor_tokens) + hit_count."""
+    bank_tokens = sorted(_significant_tokens(tx_description))
+    name = expense.get("vendor") or expense.get("description") or ""
+    vendor_tokens = sorted(_significant_tokens(name))
+    if not bank_tokens or not vendor_tokens:
+        return
+    if _name_match(name, (tx_description or "").lower()):
+        return  # déjà recoupé directement -> aucun alias nécessaire
+    now = datetime.now(timezone.utc)
+    db.bank_match_aliases.update_one(
+        {"organization_id": organization_id, "bank_tokens": bank_tokens, "vendor_tokens": vendor_tokens},
+        {"$set": {"organization_id": organization_id, "bank_tokens": bank_tokens,
+                  "vendor_tokens": vendor_tokens, "last_used_at": now},
+         "$setOnInsert": {"created_at": now},
+         "$inc": {"hit_count": 1}},
+        upsert=True)
 
 
 def _auto_match_transactions(import_id, scope):
@@ -1216,6 +1252,8 @@ def _auto_match_transactions(import_id, scope):
     clients_by_id = {c["id"]: (c.get("name") or "")
                      for c in db.clients.find(scope,
                                               {"_id": 0, "id": 1, "name": 1})}
+    # Mémoire de rapprochements manuels (feature #7.3) : alias description-relevé -> nom-dépense.
+    aliases = list(db.bank_match_aliases.find(scope, {"_id": 0}))
 
     txs = list(db.bank_transactions.find(
         {"import_id": import_id, **scope, "status": "unmatched",
@@ -1229,6 +1267,7 @@ def _auto_match_transactions(import_id, scope):
             continue
         target = abs(float(tx["amount_cad"]))
         desc_lower = (tx.get("description") or "").lower()
+        tx_tokens = _significant_tokens(tx.get("description"))
         candidates = []
 
         if tx["amount_cad"] > 0:  # crédit → factures
@@ -1264,7 +1303,7 @@ def _auto_match_transactions(import_id, scope):
                 if not exp_date or abs((tx_date - exp_date).days) > 7:  # fenêtre élargie (délai saisie/débit)
                     continue
                 score, date_diff, amt_diff = _score_expense_candidate(
-                    tx_date, target, exp, desc_lower)
+                    tx_date, target, exp, desc_lower, aliases, tx_tokens)
                 candidates.append((score, date_diff, amt_diff,
                                    {"kind": "expense", "id": exp["id"]}))
 
@@ -6434,7 +6473,17 @@ def match_bank_transaction(tx_id: str, body: dict,
     target_id = body.get("target_id")
     if not target_id:
         raise HTTPException(422, "target_id required")
-    return clean_doc(_apply_match(tx, kind, target_id, _org_scope(current_user)))
+    result = _apply_match(tx, kind, target_id, _org_scope(current_user))
+    # Mémoire d'apprentissage (feature #7.3) : mémorise l'association description-relevé ->
+    # nom-dépense de ce rapprochement MANUEL, pour auto-rapprocher les futures occurrences.
+    if kind == "expense":
+        exp = db.expenses.find_one({"id": target_id, **_org_scope(current_user)}, {"_id": 0})
+        if exp:
+            try:
+                _record_match_alias(current_user.organization_id, tx.get("description"), exp)
+            except Exception:
+                pass  # l'apprentissage ne doit jamais faire échouer le rapprochement
+    return clean_doc(result)
 
 
 @app.post("/api/bank/transactions/{tx_id}/unmatch")
@@ -6520,6 +6569,8 @@ def get_bank_suggestions(tx_id: str,
     tx_date = _parse_iso_date(tx["date"])
     target = abs(float(tx["amount_cad"]))
     desc_lower = (tx.get("description") or "").lower()
+    tx_tokens = _significant_tokens(tx.get("description"))
+    aliases = list(db.bank_match_aliases.find(scope, {"_id": 0}))
     invoices_out = []
     expenses_out = []
     if tx["amount_cad"] > 0:
@@ -6553,7 +6604,7 @@ def get_bank_suggestions(tx_id: str,
             if not exp_date or abs((tx_date - exp_date).days) > 3:
                 continue
             score, ddiff, adiff = _score_expense_candidate(
-                tx_date, target, exp, desc_lower)
+                tx_date, target, exp, desc_lower, aliases, tx_tokens)
             cands.append((score, ddiff, adiff, exp))
         cands.sort(key=lambda c: (-c[0], c[1], c[2]))
         for score, ddiff, adiff, exp in cands[:3]:
@@ -10588,6 +10639,8 @@ def seed_data():
             db.bank_pdf_extractions.create_index(
                 [("organization_id", 1), ("file_hash", 1)], unique=True)
         db.bank_pdf_extractions.create_index("created_at", expireAfterSeconds=_BANK_PDF_CACHE_TTL_SECONDS)
+        # Mémoire de rapprochements manuels (feature #7.3)
+        db.bank_match_aliases.create_index([("organization_id", 1)])
         print("Database indexes created")
 
         # Migration tax_registrations (Section 2 du spec) — idempotente
