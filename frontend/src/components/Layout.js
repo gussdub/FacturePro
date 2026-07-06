@@ -77,7 +77,11 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
           position: 'fixed', top: 0, left: 0, bottom: 0, height: '100vh', zIndex: 50,
           transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
           transition: 'transform 0.25s ease',
-        } : {}),
+        } : {
+          // Desktop : barre latérale collée en haut, hauteur du viewport -> le menu défile en son
+          // sein (nav flex:1 overflow:auto) et le bouton de déconnexion reste toujours visible en bas.
+          position: 'sticky', top: 0, height: '100vh', alignSelf: 'flex-start',
+        }),
       }}>
         {/* Logo Section */}
         <div style={{ padding: '24px' }}>
