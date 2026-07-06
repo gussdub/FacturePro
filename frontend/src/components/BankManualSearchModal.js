@@ -14,24 +14,42 @@ export default function BankManualSearchModal({ tx, onClose, onMatched }) {
     (async () => {
       setLoading(true);
       try {
+        const txDate = tx.date;
+        const txAmt = Math.abs(Number(tx.amount_cad) || 0);
+        // Trie par DATE la plus proche de la transaction (le rapprochement le plus probable en
+        // haut), puis par montant le plus proche pour départager.
+        const byRelevance = (a, b) => (a._dd - b._dd) || (a._ad - b._ad);
         if (isCredit) {
           const invs = (await axios.get(`${BACKEND_URL}/api/invoices`)).data || [];
-          const eligible = invs.filter(i => ["sent", "partial", "overdue"].includes(i.status));
-          setResults(eligible.map(i => ({
-            kind: "invoice_payment", id: i.id,
-            label: `${i.invoice_number} — Total ${Number(i.total).toFixed(2)} $ — Solde ${Number(i.outstanding_cad ?? i.total).toFixed(2)} $`,
-          })));
+          const eligible = invs
+            .filter(i => ["sent", "partial", "overdue"].includes(i.status))
+            .map(i => ({
+              kind: "invoice_payment", id: i.id,
+              _dd: _dateDiffDays(i.issue_date, txDate),
+              _ad: Math.abs(Number(i.outstanding_cad ?? i.total) - txAmt),
+              label: `${i.invoice_number} — Total ${Number(i.total).toFixed(2)} $ — Solde ${Number(i.outstanding_cad ?? i.total).toFixed(2)} $`,
+            }));
+          eligible.sort(byRelevance);
+          setResults(eligible);
         } else {
           const exps = (await axios.get(`${BACKEND_URL}/api/expenses`)).data || [];
-          const eligible = exps.filter(e => !e.bank_transaction_id);
-          setResults(eligible.map(e => ({
-            kind: "expense", id: e.id,
-            label: `${e.expense_date || e.date || "—"} — ${e.vendor || e.description || "(sans nom)"} — ${Number(e.amount_cad).toFixed(2)} $`,
-          })));
+          const eligible = exps
+            .filter(e => !e.bank_transaction_id)  // exclut les dépenses déjà rapprochées
+            .map(e => {
+              const d = e.expense_date || e.date || "";
+              return {
+                kind: "expense", id: e.id,
+                _dd: _dateDiffDays(d, txDate),
+                _ad: Math.abs(Number(e.amount_cad) - txAmt),
+                label: `${d || "—"} — ${e.vendor || e.description || "(sans nom)"} — ${Number(e.amount_cad).toFixed(2)} $`,
+              };
+            });
+          eligible.sort(byRelevance);
+          setResults(eligible);
         }
       } finally { setLoading(false); }
     })();
-  }, [tx.id, isCredit]);
+  }, [tx.id, isCredit, tx.date, tx.amount_cad]);
 
   const match = async (kind, target_id) => {
     setBusy(true);
@@ -74,6 +92,15 @@ export default function BankManualSearchModal({ tx, onClose, onMatched }) {
       </div>
     </div>
   );
+}
+
+// Écart en jours entre deux dates 'YYYY-MM-DD' (grand nombre si absente/invalide -> en bas).
+function _dateDiffDays(a, b) {
+  if (!a || !b) return 1e9;
+  const da = new Date(String(a).slice(0, 10) + "T00:00:00");
+  const db = new Date(String(b).slice(0, 10) + "T00:00:00");
+  if (isNaN(da.getTime()) || isNaN(db.getTime())) return 1e9;
+  return Math.abs((da - db) / 86400000);
 }
 
 const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
