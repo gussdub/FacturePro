@@ -731,14 +731,17 @@ _DATE_FORMAT_MAP = {
 
 
 def _parse_csv_date(value, fmt):
-    """Parse une cellule date selon fmt. Retourne 'YYYY-MM-DD' ou None."""
+    """Parse une cellule date selon fmt. Retourne 'YYYY-MM-DD' ou None.
+    Tolère les séparateurs / . - (ex. Desjardins VISA écrit 2026/06/01 alors que le
+    format choisi est YYYY-MM-DD) : value ET format sont normalisés sur '-' avant strptime."""
     if not value:
         return None
     py_fmt = _DATE_FORMAT_MAP.get(fmt)
     if not py_fmt:
         return None
+    sep_trans = str.maketrans("/.", "--")
     try:
-        dt = datetime.strptime(value.strip(), py_fmt)
+        dt = datetime.strptime(value.strip().translate(sep_trans), py_fmt.translate(sep_trans))
         return dt.strftime("%Y-%m-%d")
     except (ValueError, AttributeError):
         return None

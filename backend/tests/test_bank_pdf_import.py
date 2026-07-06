@@ -204,3 +204,13 @@ def test_sanitize_cell_strips_stacked_prefixes():
     assert not _sanitize_cell("==2+3").startswith("=")
     assert not _sanitize_cell("\t=cmd").startswith(("=", "\t"))
     assert _sanitize_cell("ok") == "ok"  # inchangé si pas de préfixe dangereux
+
+
+def test_date_separator_tolerance():
+    # Desjardins VISA écrit 2026/06/01 (slashes) même si le format choisi a des tirets.
+    from backend.server import _parse_csv_date
+    assert _parse_csv_date("2026/06/01", "YYYY-MM-DD") == "2026-06-01"
+    assert _parse_csv_date("2026-06-01", "YYYY-MM-DD") == "2026-06-01"
+    assert _parse_csv_date("01/06/2026", "DD/MM/YYYY") == "2026-06-01"
+    assert _parse_csv_date("01-06-2026", "DD/MM/YYYY") == "2026-06-01"
+    assert _parse_csv_date("IONOS 877", "YYYY-MM-DD") is None  # non-date -> None
