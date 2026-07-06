@@ -66,6 +66,55 @@ def test_expense_automatch_uses_expense_date(auth_headers):
         db.expenses.delete_one({"id": exp_id})
 
 
+def test_name_match_helper_permissive_but_anchored():
+    from backend.server import _name_match
+    assert _name_match("Genspark.ai", "genspark.ai 877-4612631 pa") is True
+    assert _name_match("Render Services Inc", "render.com ca") is True   # token « render »
+    assert _name_match("Anthropic, PBC", "anthropic claude sub") is True  # token « anthropic »
+    # mots génériques seuls ne matchent PAS (sinon faux rapprochements)
+    assert _name_match("Paiement Hydro", "paiement bell") is False
+    assert _name_match("Services ABC", "services xyz") is False
+
+
+def test_automatch_tolerates_date_drift(auth_headers):
+    # Dépense saisie le 08, débit bancaire le 12 (4 jours) : montant + nom -> auto-match quand même.
+    exp_id = _make_expense(auth_headers, 44.44, "DriftVendorXZ", "2099-09-08")
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-09-12,DriftVendorXZ paiement,-44.44\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "DRIFT"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] >= 1, "montant + nom devraient suffire malgré 4j d'écart"
+        assert data["transactions"][0]["match_id"] == exp_id
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": exp_id})
+
+
+def test_automatch_ambiguous_two_identical_not_matched(auth_headers):
+    # Deux dépenses même montant + même nom dans la fenêtre -> ambigu -> PAS d'auto-match.
+    e1 = _make_expense(auth_headers, 55.55, "AmbiguVendorQ", "2099-10-01")
+    e2 = _make_expense(auth_headers, 55.55, "AmbiguVendorQ", "2099-10-02")
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-10-01,AmbiguVendorQ,-55.55\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "AMBIG"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "deux candidats identiques ne doivent pas s'auto-rapprocher"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": e1})
+        db.expenses.delete_one({"id": e2})
+
+
 def test_rematch_endpoint_matches_after_expense_created(auth_headers):
     # Importe d'abord (aucune dépense -> aucun match), puis crée la dépense, puis re-match.
     import_id = None

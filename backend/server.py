@@ -1146,19 +1146,46 @@ def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower
     return score, date_diff, amount_diff
 
 
+# Mots trop génériques pour ancrer un rapprochement (sinon « Paiement Hydro » matcherait
+# « Paiement Bell »). Le recoupement de nom doit reposer sur un token DISTINCTIF.
+_MATCH_STOPWORDS = {
+    "inc", "ltd", "ltee", "corp", "llc", "the", "les", "des", "and", "pte",
+    "services", "service", "paiement", "payment", "achat", "purchase", "facture", "invoice",
+    "canada", "quebec", "montreal", "www", "com", "net", "org", "http", "https",
+    "abonnement", "subscription", "sub", "inc.", "pbc",
+}
+
+
+def _significant_tokens(s):
+    return {t for t in re.split(r"[^a-z0-9]+", (s or "").lower())
+            if len(t) >= 3 and t not in _MATCH_STOPWORDS}
+
+
+def _name_match(name, desc_lower):
+    """Vrai si le nom de la dépense (vendor OU description) recoupe la description bancaire :
+    inclusion dans un sens ou l'autre, OU partage d'au moins un token significatif (≥3 car,
+    hors mots génériques). Permissif mais ancré sur un vrai token — « genspark » matche
+    « GENSPARK.AI 877-... », mais « Paiement X » ne matche pas « Paiement Y »."""
+    name = (name or "").strip().lower()
+    if not name:
+        return False
+    if name in desc_lower or (desc_lower and desc_lower in name):
+        return True
+    return bool(_significant_tokens(name) & _significant_tokens(desc_lower))
+
+
 def _score_expense_candidate(tx_date, target, exp, desc_lower):
+    """Score d'un candidat dépense. Le NOM est le signal fort (poids 2) : montant exact + nom
+    qui recoupe = auto-match confiant même si la date dérive (délai saisie vs débit). La date
+    proche (≤3j) n'ajoute qu'un +1 de confiance. Max = 4."""
     amount_diff = abs(float(exp.get("amount_cad", 0)) - target)
     exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
     date_diff = abs((tx_date - exp_date).days) if exp_date else 999
-    score = 1
-    if date_diff <= 1:
-        score += 1
-    # +1 "nom" : s'appuie sur le vendor OU la description de la dépense — beaucoup de dépenses
-    # saisies à la main n'ont pas de vendor extrait, le nom du fournisseur est alors dans la
-    # description. On teste dans les deux sens (l'un contient l'autre) pour tolérer « Genspark.ai »
-    # côté dépense vs « GENSPARK.AI 877-... » côté relevé.
-    name = (exp.get("vendor") or exp.get("description") or "").strip().lower()
-    if name and len(name) >= 3 and (name in desc_lower or (desc_lower and desc_lower in name)):
+    name = exp.get("vendor") or exp.get("description") or ""
+    score = 1  # montant (déjà filtré ±0,01)
+    if _name_match(name, desc_lower):
+        score += 2
+    if date_diff <= 3:
         score += 1
     return score, date_diff, amount_diff
 
@@ -1214,7 +1241,7 @@ def _auto_match_transactions(import_id, scope):
                 if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
                     continue
                 exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
-                if not exp_date or abs((tx_date - exp_date).days) > 3:
+                if not exp_date or abs((tx_date - exp_date).days) > 7:  # fenêtre élargie (délai saisie/débit)
                     continue
                 score, date_diff, amt_diff = _score_expense_candidate(
                     tx_date, target, exp, desc_lower)
@@ -1225,8 +1252,10 @@ def _auto_match_transactions(import_id, scope):
             continue
         candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
         top = candidates[0]
-        # auto-match seulement si UNIQUE candidat score 3 (ou si second a score < 3)
-        if top[0] == 3 and (len(candidates) == 1 or candidates[1][0] < 3):
+        # auto-match seulement si le meilleur candidat est CONFIANT (score >= 3 : montant + nom
+        # pour une dépense, ou montant + date + client pour une facture) ET non ambigu
+        # (second candidat < 3, sinon deux dépenses même montant/nom -> laissé au manuel).
+        if top[0] >= 3 and (len(candidates) == 1 or candidates[1][0] < 3):
             try:
                 _apply_match(tx, top[3]["kind"], top[3]["id"], scope)
                 applied += 1
