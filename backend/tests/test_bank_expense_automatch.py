@@ -115,6 +115,49 @@ def test_automatch_ambiguous_two_identical_not_matched(auth_headers):
         db.expenses.delete_one({"id": e2})
 
 
+def test_foreign_currency_amount_tolerance(auth_headers):
+    # Dépense USD : CAD estimé 13.07, mais débit réel 13.50 (frais de change) -> doit matcher
+    # grâce à la tolérance ±5 % (0.43 <= 0.65), puis _apply_match adopte le montant exact.
+    exp_id = _make_expense(auth_headers, 13.07, "FxVendorZZ", "2099-11-01")
+    db.expenses.update_one({"id": exp_id}, {"$set": {"currency": "USD"}})  # devient étrangère
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-11-02,FxVendorZZ,-13.50\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "FX"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] >= 1, "l'écart de change (~3 %) devrait être toléré"
+        assert data["transactions"][0]["match_id"] == exp_id
+        # _apply_match a adopté le montant exact du relevé
+        exp = db.expenses.find_one({"id": exp_id})
+        assert abs(float(exp["amount_cad"]) - 13.50) < 0.01
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": exp_id})
+
+
+def test_foreign_currency_tolerance_bounded(auth_headers):
+    # La tolérance de change n'est PAS illimitée : un écart de ~22 % ne doit pas matcher.
+    exp_id = _make_expense(auth_headers, 13.07, "FxVendorBoundQ", "2099-11-01")
+    db.expenses.update_one({"id": exp_id}, {"$set": {"currency": "USD"}})
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-11-02,FxVendorBoundQ,-16.00\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "FXB"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "16.00 vs 13.07 (~22 %) dépasse la tolérance ±5 %"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": exp_id})
+
+
 def test_rematch_endpoint_matches_after_expense_created(auth_headers):
     # Importe d'abord (aucune dépense -> aucun match), puis crée la dépense, puis re-match.
     import_id = None

@@ -1238,7 +1238,15 @@ def _auto_match_transactions(import_id, scope):
 
         elif tx["amount_cad"] < 0:  # débit → dépenses
             for exp in open_expenses:
-                if abs(float(exp.get("amount_cad", 0)) - target) > 0.01:
+                exp_cad = float(exp.get("amount_cad", 0) or 0)
+                # Devise étrangère : le CAD stocké est une ESTIMATION (taux du jour de saisie) ;
+                # le montant réellement débité (frais de conversion ~2,5 % + mouvement du taux)
+                # diffère de quelques %. On élargit la tolérance montant à ±5 % pour ces dépenses.
+                # Le NOM + candidat unique restent requis pour l'auto-match (cf. score), et
+                # _apply_match adopte ensuite le montant CAD exact du relevé (correction de change).
+                is_foreign = (exp.get("currency") or "CAD").upper() != "CAD"
+                amount_tol = max(0.01, round(exp_cad * 0.05, 2)) if is_foreign else 0.01
+                if abs(exp_cad - target) > amount_tol:
                     continue
                 exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
                 if not exp_date or abs((tx_date - exp_date).days) > 7:  # fenêtre élargie (délai saisie/débit)
