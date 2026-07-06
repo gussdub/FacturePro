@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
 import FactureProLogo from '../components/FactureProLogo';
+import useIsMobile from '../hooks/useIsMobile';
 
 const LoginPage = () => {
   const [formData, setFormData] = useState({ email: '', password: '', companyName: '' });
@@ -11,6 +12,9 @@ const LoginPage = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login, register } = useAuth();
+  // En dessous de 1024px (mobile + tablette) on masque le hero marketing et on
+  // passe le formulaire en pleine largeur centré. Le desktop garde le split 50/50.
+  const isMobile = useIsMobile(1024);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -36,13 +40,13 @@ const LoginPage = () => {
 
   return (
     <div style={{
-      minHeight: '100vh', background: 'linear-gradient(to-br, #f0fdfa, #ccfbf1, #d1fae5)',
+      minHeight: '100dvh', background: 'linear-gradient(to bottom right, #f0fdfa, #ccfbf1, #d1fae5)',
       display: 'flex', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
     }}>
-      {/* Left Hero Section */}
+      {/* Left Hero Section (desktop uniquement) */}
       <div style={{
         width: '50%', background: 'linear-gradient(135deg, #00A08C, #47D2A7)',
-        position: 'relative', overflow: 'hidden', display: 'flex',
+        position: 'relative', overflow: 'hidden', display: isMobile ? 'none' : 'flex',
         flexDirection: 'column', justifyContent: 'center', padding: '60px'
       }}>
         <div style={{ position: 'absolute', top: '80px', left: '80px', width: '288px', height: '288px', background: 'rgba(255,255,255,0.1)', borderRadius: '50%', filter: 'blur(48px)' }} />
@@ -69,7 +73,7 @@ const LoginPage = () => {
               <div key={i} style={{
                 display: 'flex', alignItems: 'center', gap: '16px',
                 background: 'rgba(255,255,255,0.15)', padding: '16px 24px',
-                borderRadius: '12px', backdropFilter: 'blur(10px)'
+                borderRadius: '12px', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)'
               }}>
                 <div style={{ fontSize: '28px' }}>{feature.icon}</div>
                 <div>
@@ -83,7 +87,7 @@ const LoginPage = () => {
       </div>
 
       {/* Right side - Form */}
-      <div style={{ width: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px' }}>
+      <div style={{ width: isMobile ? '100%' : '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? '32px 16px' : '40px', boxSizing: 'border-box' }}>
         <div style={{ width: '100%', maxWidth: '460px' }}>
           <div style={{ textAlign: 'center', marginBottom: '40px' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '88px', height: '88px', borderRadius: '24px', marginBottom: '24px', overflow: 'hidden' }}>
@@ -99,8 +103,8 @@ const LoginPage = () => {
           </div>
 
           <div style={{
-            background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)',
-            padding: '32px', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)', border: 'none'
+            background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+            padding: isMobile ? '24px 20px' : '32px', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.15)', border: 'none'
           }}>
             {error && (
               <div style={{
@@ -134,9 +138,10 @@ const LoginPage = () => {
                   <input type={showPassword ? "text" : "password"} name="password" value={formData.password}
                     onChange={handleChange} placeholder="••••••••••" required data-testid="login-password-input"
                     style={{ width: '100%', height: '48px', fontSize: '16px', padding: '12px 52px 12px 16px', border: '1px solid #d1d5db', borderRadius: '12px', boxSizing: 'border-box' }} />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} style={{
-                    position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
-                    background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: '20px'
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'} style={{
+                    position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', fontSize: '20px',
+                    width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0'
                   }}>
                     {showPassword ? (
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

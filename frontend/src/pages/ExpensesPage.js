@@ -690,12 +690,12 @@ const ExpensesPage = () => {
   return (
     <div data-testid="expenses-page">
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? '16px' : '0', marginBottom: '24px' }}>
         <div>
           <h1 style={{ fontSize: '28px', fontWeight: '800', color: '#1f2937', margin: 0 }}>Depenses</h1>
           <p style={{ color: '#6b7280', margin: '4px 0 0', fontSize: '14px' }}>Gerez vos depenses et importez des CSV</p>
         </div>
-        <div style={{ display: 'flex', gap: '10px' }}>
+        <div style={{ display: isMobile ? 'grid' : 'flex', gridTemplateColumns: isMobile ? '1fr 1fr' : undefined, gap: '10px' }}>
           <input ref={fileInputRef} type="file" accept=".csv,.txt" onChange={handleFileSelect} style={{ display: 'none' }} />
           <button data-testid="import-csv-btn" onClick={() => fileInputRef.current?.click()} style={btnSecondary}>
             Importer CSV
@@ -707,8 +707,7 @@ const ExpensesPage = () => {
             style={{
               background: "#fff", color: "#00A08C", border: "1.5px solid #00A08C",
               padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 14,
-              fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6,
-              marginRight: 8,
+              fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
             }}
             title="Scanner un reçu avec extraction automatique">
             <ScanLine size={16} /> Scanner reçu
@@ -729,7 +728,7 @@ const ExpensesPage = () => {
               style={{
                 background: "#fff", color: "#00A08C", border: "1.5px solid #00A08C",
                 padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 14,
-                fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6,
+                fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
               }}
               title="Carnet de route (kilométrage)">
               <Car size={16} /> Carnet de route
