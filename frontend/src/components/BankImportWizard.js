@@ -143,7 +143,6 @@ export default function BankImportWizard({ onCancel, onDone }) {
     if (step !== 2 || isPdf || !file || !previewValid()) return;
     const t = setTimeout(() => { refreshPreview(); }, 400);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, file, mapping, isPdf]);
 
   const doImport = async () => {
