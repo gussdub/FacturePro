@@ -266,8 +266,8 @@ export default function BankImportWizard({ onCancel, onDone }) {
           </label>
           <div style={{ marginTop: 16, padding: 24, border: "2px dashed #d1d5db", borderRadius: 8, textAlign: "center" }}>
             <Upload size={32} style={{ opacity: 0.5 }} />
-            <p>Choisis un fichier <strong>CSV</strong> (max 5 MB / 5000 lignes) ou un <strong>relevé PDF</strong> (max 10 MB, extraction IA)</p>
-            <input type="file" accept=".csv,text/csv,.pdf,application/pdf" onChange={onFileChosen} />
+            <p>Choisis un fichier <strong>CSV</strong> ou <strong>Excel (.xlsx)</strong> (max 5 MB / 5000 lignes), ou un <strong>relevé PDF</strong> (max 10 MB, extraction IA)</p>
+            <input type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.pdf,application/pdf" onChange={onFileChosen} />
             {file && <p style={{ color: "#059669", marginTop: 8 }}>{file.name} ({(file.size / 1024).toFixed(1)} Ko){isPdf ? " — PDF (extraction IA)" : ""}</p>}
           </div>
           <button onClick={goStep2} disabled={!file || !bankLabel.trim()}

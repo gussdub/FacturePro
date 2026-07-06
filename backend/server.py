@@ -741,10 +741,18 @@ def _parse_csv_date(value, fmt):
         return None
     sep_trans = str.maketrans("/.", "--")
     try:
-        dt = datetime.strptime(value.strip().translate(sep_trans), py_fmt.translate(sep_trans))
-        return dt.strftime("%Y-%m-%d")
-    except (ValueError, AttributeError):
+        s = value.strip().translate(sep_trans)
+    except AttributeError:
         return None
+    # Format choisi, puis repli ISO : une vraie date de cellule XLSX est émise en YYYY-MM-DD
+    # (non ambiguë), quel que soit le date_format choisi — sans ce repli elle tomberait en rouge
+    # si l'utilisateur sélectionne DD/MM/YYYY. Le repli ne réussit que pour un vrai ISO 4-chiffres.
+    for f in (py_fmt.translate(sep_trans), "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, f).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
 
 
 def _normalize_amount(value):
@@ -776,6 +784,7 @@ def _compute_file_hash(data):
 
 
 ROW_LIMIT = 5000
+MAX_XLSX_COLS = 100  # borne dure de colonnes lues par ligne XLSX (anti zip-bomb mémoire)
 
 
 def _decode_bank_csv(csv_bytes):
@@ -795,17 +804,24 @@ def _decode_bank_csv(csv_bytes):
 
 
 def _parse_csv_rows(csv_bytes, mapping):
-    """Parse les lignes CSV selon le mapping. Retourne liste de dicts.
-    Lève ValueError("row limit") si > ROW_LIMIT lignes de données.
-    Chaque dict : {row_index, date, description, amount_cad, parse_error, raw_line(opt)}.
-    """
+    """Parse les lignes CSV selon le mapping (décode puis délègue à _map_bank_rows).
+    Lève ValueError("row limit") si > ROW_LIMIT lignes de données."""
     text = _decode_bank_csv(csv_bytes)
     reader = csv_module.reader(io.StringIO(text), delimiter=mapping["delimiter"])
+    return _map_bank_rows(reader, mapping)
+
+
+def _map_bank_rows(rows, mapping):
+    """Applique le mapping (colonnes, format date, débit/crédit, signe) à un itérable de
+    lignes (chaque ligne = liste de cellules str). Partagé par le CSV et le XLSX pour un
+    parsing IDENTIQUE. Retourne la liste de dicts {row_index, date, description, amount_cad,
+    parse_error, raw_line(opt)} ; lève ValueError('row limit') au-delà de ROW_LIMIT lignes."""
     out = []
     data_index = 0
     skip_header = mapping.get("has_header", True)
     expected_cols = None  # référence du nb de colonnes (l'en-tête, ou la 1re ligne de données)
-    for raw_row in reader:
+    for raw_row in rows:
+        raw_row = list(raw_row)
         # skip lignes vides
         if not raw_row or all((c or "").strip() == "" for c in raw_row):
             continue
@@ -872,6 +888,56 @@ def _parse_csv_rows(csv_bytes, mapping):
         out.append(row_dict)
         data_index += 1
     return out
+
+
+def _xlsx_cell_to_str(v):
+    """Convertit une cellule XLSX (typée) en chaîne pour le pipeline commun de mapping.
+    Les dates/heures -> 'YYYY-MM-DD' (le format choisi reste toléré via _parse_csv_date) ;
+    les nombres -> repr sans notation scientifique (ré-parsés par _normalize_amount)."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return str(v)
+    if hasattr(v, "strftime"):          # datetime.datetime ou datetime.date
+        return v.strftime("%Y-%m-%d")
+    if isinstance(v, float):
+        # format 'f' évite la notation scientifique ; inf/NaN -> "" (deviendra parse_error).
+        return format(v, "f").rstrip("0").rstrip(".") if math.isfinite(v) else ""
+    return str(v)
+
+
+def _parse_xlsx_rows(xlsx_bytes, mapping):
+    """Parse un relevé XLSX (1re feuille) via le MÊME pipeline que le CSV (_map_bank_rows).
+    openpyxl en lecture seule + data_only (valeurs calculées, pas de formule).
+    Bornes DURES anti zip-bomb : ROW_LIMIT+50 lignes lues ET MAX_XLSX_COLS colonnes/ligne
+    (une cellule très à droite ou une ligne maximalement large ne peut pas exploser la RAM).
+    Lève HTTPException 503 si openpyxl absent, ValueError si illisible ou > ROW_LIMIT lignes."""
+    try:
+        import openpyxl  # lazy : n'impacte pas le boot si la lib manque sur un env
+    except ImportError:
+        raise HTTPException(503, "Support XLSX indisponible sur ce serveur.")
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
+    except Exception:
+        raise ValueError("Fichier XLSX illisible ou corrompu")
+    try:
+        if not wb.sheetnames:
+            return _map_bank_rows([], mapping)
+        ws = wb[wb.sheetnames[0]]
+        raw_rows = []
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i > ROW_LIMIT + 50:      # borne de lecture (plafond réel de lignes dans _map_bank_rows)
+                break
+            # Tronque à MAX_XLSX_COLS AVANT de matérialiser les cellules : borne la mémoire à
+            # O(lignes × MAX_XLSX_COLS) même si la feuille a 16384 colonnes.
+            raw_rows.append([_xlsx_cell_to_str(c) for c in list(row)[:MAX_XLSX_COLS]])
+    finally:
+        wb.close()
+    # openpyxl (read_only) peut rogner les cellules vides de fin -> uniformise la largeur (bornée
+    # à MAX_XLSX_COLS pour ne pas répliquer une largeur contrôlée par l'attaquant) sans faux mismatch.
+    width = min(max((len(r) for r in raw_rows), default=0), MAX_XLSX_COLS)
+    norm = [r[:width] + [""] * (width - len(r)) for r in raw_rows]
+    return _map_bank_rows(norm, mapping)
 
 
 def _get_invoice_outstanding(invoice):
@@ -6148,9 +6214,10 @@ async def create_bank_import(
     response: Response = None,
     current_user: CurrentUser = Depends(require_permission("bank:write")),
 ):
-    # ── 1. lecture + détection PDF vs CSV (magic-bytes, préambule d'espaces toléré) ──
+    # ── 1. lecture + détection PDF / XLSX / CSV (magic-bytes) ──
     raw = await file.read()
     is_pdf = raw[:16].lstrip().startswith(b"%PDF")
+    is_xlsx = raw[:4] == b"PK\x03\x04"  # XLSX = archive ZIP Office Open XML
 
     # ── PDF : extraction des transactions via Claude (feature #7.1) ──
     # Réutilise le MÊME pipeline aval (dédup, bank_transactions, auto-match) que le CSV.
@@ -6181,7 +6248,7 @@ async def create_bank_import(
         _delete_pdf_extraction(current_user.organization_id, file_hash)
         return result
 
-    # ── CSV : size cap + mapping + parse (comportement existant) ──
+    # ── CSV ou XLSX : size cap + mapping + parse (même mapping/pipeline, parseur choisi) ──
     if len(raw) > MAX_BANK_CSV_BYTES:
         raise HTTPException(413, f"File exceeds size limit ({MAX_BANK_CSV_BYTES // (1024*1024)} MB)")
 
@@ -6198,8 +6265,9 @@ async def create_bank_import(
     else:
         raise HTTPException(422, "mapping_id or mapping required")
 
+    src = "xlsx" if is_xlsx else "csv"
     try:
-        parsed = _parse_csv_rows(raw, mapping_doc)
+        parsed = _parse_xlsx_rows(raw, mapping_doc) if is_xlsx else _parse_csv_rows(raw, mapping_doc)
     except ValueError as e:
         if "row limit" in str(e):
             raise HTTPException(413, str(e))
@@ -6208,7 +6276,7 @@ async def create_bank_import(
     if dry_run:
         if response is not None:
             response.status_code = 200
-        return {"parsed_rows": parsed[:10], "total_rows": len(parsed), "source": "csv"}
+        return {"parsed_rows": parsed[:10], "total_rows": len(parsed), "source": src}
 
     file_hash = _compute_file_hash(raw)
     existing = db.bank_imports.find_one(
@@ -6218,8 +6286,9 @@ async def create_bank_import(
 
     return _persist_bank_import(
         current_user, parsed, file_hash,
-        bank_label or mapping_doc.get("bank_label"), file.filename or "import.csv",
-        mapping_id=mapping_id, source="csv")
+        bank_label or mapping_doc.get("bank_label"),
+        file.filename or ("import.xlsx" if is_xlsx else "import.csv"),
+        mapping_id=mapping_id, source=src)
 
 
 def _import_with_live_counts(imp):
