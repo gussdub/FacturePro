@@ -1237,6 +1237,47 @@ def _record_match_alias(organization_id, tx_description, expense):
         upsert=True)
 
 
+def _expense_dup_fingerprint(exp):
+    """Empreinte des champs qui rendent deux dépenses VRAIMENT interchangeables pour un
+    rapprochement 1:1 : devise, montant CAD, payeur, libellé, catégorie ARC + déductibilité,
+    taxes payées. Deux dépenses partageant cette empreinte produisent des livres IDENTIQUES
+    quel que soit l'appariement -> l'ambiguïté est bénigne (abonnement récurrent débité N fois).
+
+    Le MOINDRE écart (fournisseur distinct écrasé par les stopwords « Tremblay Inc » vs « Ltd »,
+    projet/catégorie différent, devise, taxes) donne des empreintes différentes => on NE relâche
+    PAS le garde-fou anti-faux-rapprochement. Robuste aux deux schémas de dépense (saisie manuelle
+    à plat : category_code/gst_paid_cad ; créée depuis tx : category niché/tps_paid) : on ne
+    compare que des dépenses ENTRE elles, donc une extraction cohérente suffit."""
+    def _norm(v):
+        return re.sub(r"\s+", " ", str(v or "").strip().lower())
+
+    def _num(v):
+        try:
+            return round(float(v or 0), 2)
+        except (TypeError, ValueError):
+            return 0.0
+    cat = exp.get("category")
+    cat_nested = cat if isinstance(cat, dict) else {}
+    cat_label = cat if isinstance(cat, str) else cat_nested.get("category")
+    return (
+        (exp.get("currency") or "CAD").strip().upper(),
+        _num(exp.get("amount_cad")),
+        _norm(exp.get("vendor")),
+        _norm(exp.get("description")),
+        _norm(exp.get("category_code") or cat_nested.get("category_code")),
+        _norm(cat_label),
+        _num(exp.get("deductible_amount") or cat_nested.get("deductible_amount")),
+        _num(exp.get("gst_paid_cad") or exp.get("tps_paid_cad") or exp.get("tps_paid")),
+        _num(exp.get("qst_paid_cad") or exp.get("tvq_paid")),
+        _num(exp.get("hst_paid_cad") or exp.get("tvh_paid")),
+        # notes / employé : seuls champs d'identité restants où l'utilisateur distingue deux
+        # dépenses par ailleurs identiques (ex. « Stripe » projet A vs B saisi dans les notes).
+        # Les inclure ferme même l'échange d'attribution bénin (revue adversariale, 2e ronde).
+        _norm(exp.get("notes")),
+        _norm(exp.get("employee_id")),
+    )
+
+
 def _auto_match_transactions(import_id, scope):
     """Pour chaque transaction unmatched de l'import, tente un match auto.
     Retourne nombre de matches appliqués.
@@ -1304,8 +1345,13 @@ def _auto_match_transactions(import_id, scope):
                     continue
                 score, date_diff, amt_diff = _score_expense_candidate(
                     tx_date, target, exp, desc_lower, aliases, tx_tokens)
+                # Empreinte complète (payeur, libellé, montant, devise, catégorie, taxes) : sert à
+                # détecter les DOUBLONS INDISCERNABLES à la décision (abonnement récurrent débité N
+                # fois). NB : une simple signature de tokens ne suffit PAS (les stopwords écrasent
+                # « Tremblay Inc » et « Tremblay Ltd » sur le même token) -> revue adversariale.
                 candidates.append((score, date_diff, amt_diff,
-                                   {"kind": "expense", "id": exp["id"]}))
+                                   {"kind": "expense", "id": exp["id"],
+                                    "fp": _expense_dup_fingerprint(exp)}))
 
         if not candidates:
             continue
@@ -1316,11 +1362,31 @@ def _auto_match_transactions(import_id, scope):
             # facture : montant exact + date + client (score 3) ET unique.
             ok = top[0] == 3 and second < 3
         else:
-            # dépense : nom REQUIS (seuil 4) ET AUCUN autre candidat crédible (2e < 4). Dès que
+            # dépense : nom REQUIS (seuil 4) ET (candidat unique OU 2e candidat < 4). Dès que
             # deux candidats sont plausibles sur le nom — même fournisseur (une charge en devise
             # au CAD estimé décalé) ou fournisseurs distincts au montant exact fortuit — c'est
             # ambigu -> laissé au manuel (jamais de faux rapprochement sur le seul montant exact).
-            ok = top[0] >= 4 and (len(candidates) == 1 or second < 4)
+            #
+            # EXCEPTION (doublons indiscernables) : si TOUS les concurrents crédibles (score ≥ 4)
+            # partagent l'empreinte EXACTE du meilleur (même payeur, libellé, montant, catégorie,
+            # taxes) ET sont en CAD, l'ambiguïté est bénigne — un abonnement récurrent débité N fois
+            # (Emergent.sh 144,67 $) s'apparie 1:1 quel que soit l'ordre et produit des livres
+            # identiques. On prend le plus proche en date puis on consomme (open_expenses) -> 1:1.
+            #
+            # Restreint au CAD : pour une dépense en devise, amount_cad n'est qu'un ESTIMÉ (≠ débité)
+            # et _apply_match le RÉÉCRIT au montant du relevé — deux estimés égaux ne prouvent donc
+            # pas l'interchangeabilité (revue adversariale : USD Vercel). Le garde-fou reste PLEIN
+            # pour fournisseurs distincts (Hydro-Québec vs Hydro-Ottawa, « Tremblay Inc » vs « Ltd »),
+            # montants décalés (Bell 100↔105), catégories/projets distincts (Copilot A vs B), devises.
+            if top[0] < 4:
+                ok = False
+            elif len(candidates) == 1 or second < 4:
+                ok = True
+            else:
+                top_fp = top[3].get("fp")
+                is_cad = bool(top_fp) and top_fp[0] == "CAD"
+                ok = is_cad and all(c[3].get("fp") == top_fp
+                                    for c in candidates if c[0] >= 4)
         if ok:
             try:
                 _apply_match(tx, top[3]["kind"], top[3]["id"], scope)

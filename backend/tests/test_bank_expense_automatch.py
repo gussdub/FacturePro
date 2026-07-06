@@ -95,19 +95,163 @@ def test_automatch_tolerates_date_drift(auth_headers):
         db.expenses.delete_one({"id": exp_id})
 
 
-def test_automatch_ambiguous_two_identical_not_matched(auth_headers):
-    # Deux dépenses même montant + même nom dans la fenêtre -> ambigu -> PAS d'auto-match.
-    e1 = _make_expense(auth_headers, 55.55, "AmbiguVendorQ", "2099-10-01")
-    e2 = _make_expense(auth_headers, 55.55, "AmbiguVendorQ", "2099-10-02")
+def test_automatch_different_vendors_same_amount_not_matched(auth_headers):
+    # GARDE-FOU : deux fournisseurs DISTINCTS qui recoupent tous deux la description (token
+    # « acme ») au MÊME montant exact -> vraie ambiguïté -> PAS d'auto-match. Les signatures
+    # fournisseur diffèrent ({acme,foods} vs {acme,tools}) : non interchangeables.
+    e1 = _make_expense(auth_headers, 55.55, "Acme Foods", "2099-10-01")
+    e2 = _make_expense(auth_headers, 55.55, "Acme Tools", "2099-10-01")
     import_id = None
     try:
-        csv = "Date,Description,Montant\n2099-10-01,AmbiguVendorQ,-55.55\n"
+        csv = "Date,Description,Montant\n2099-10-01,ACME,-55.55\n"
         r = client.post("/api/bank/imports", headers=auth_headers,
                         files={"file": ("r.csv", csv, "text/csv")},
                         data={"mapping": json.dumps(MAP), "bank_label": "AMBIG"})
         data = r.json()
         import_id = data["import"]["id"]
-        assert data["auto_matched"] == 0, "deux candidats identiques ne doivent pas s'auto-rapprocher"
+        assert data["auto_matched"] == 0, "fournisseurs distincts au même montant = ambigu, non matché"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": e1})
+        db.expenses.delete_one({"id": e2})
+
+
+def test_automatch_recurring_identical_expenses_paired(auth_headers):
+    # ABONNEMENT RÉCURRENT (cas signalé : Emergent.sh 144,67 $ débité plusieurs fois). Trois
+    # dépenses IDENTIQUES (même fournisseur normalisé + même montant CAD exact) + trois
+    # transactions identiques -> doublons interchangeables -> appariées 1:1 (plus proche en date,
+    # puis consommation). Chaque dépense est consommée exactement une fois.
+    e1 = _make_expense(auth_headers, 144.67, "Emergent Labs", "2099-09-27")
+    e2 = _make_expense(auth_headers, 144.67, "Emergent Labs", "2099-09-28")
+    e3 = _make_expense(auth_headers, 144.67, "Emergent Labs", "2099-09-29")
+    import_id = None
+    try:
+        csv = ("Date,Description,Montant\n"
+               "2099-09-27,emergent.sh,-144.67\n"
+               "2099-09-28,emergent.sh,-144.67\n"
+               "2099-09-29,emergent.sh,-144.67\n")
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "RECUR"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 3, "les 3 débits récurrents identiques devraient s'apparier 1:1"
+        matched_ids = {t["match_id"] for t in data["transactions"] if t.get("match_id")}
+        assert matched_ids == {e1, e2, e3}, "chaque dépense identique consommée exactement une fois"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        for e in (e1, e2, e3):
+            db.expenses.delete_one({"id": e})
+
+
+def test_automatch_single_tx_two_identical_expenses_matches_one(auth_headers):
+    # Une seule transaction + deux dépenses IDENTIQUES (doublons interchangeables) -> on en
+    # rapproche une (la plus proche en date) ; l'autre reste ouverte pour revue manuelle.
+    e1 = _make_expense(auth_headers, 55.55, "DupVendorZ", "2099-10-01")
+    e2 = _make_expense(auth_headers, 55.55, "DupVendorZ", "2099-10-02")
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-10-01,DupVendorZ,-55.55\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "DUP1"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 1, "doublons interchangeables -> une (la plus proche) matchée"
+        assert data["transactions"][0]["match_id"] == e1, "la plus proche en date (01) est choisie"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": e1})
+        db.expenses.delete_one({"id": e2})
+
+
+# ─── Non-régression : la relaxation « doublons » ne doit PAS s'appliquer à de fausses
+#     interchangeabilités (revue adversariale de la feature #7.4). ───
+
+def test_dup_relax_blocked_stopword_collision(auth_headers):
+    # BLOQUANT (revue) : « Tremblay Services Inc » et « Tremblay Services Ltd » — deux payeurs
+    # DISTINCTS. Les stopwords (inc/ltd/services) écrasaient les deux sur le même token {tremblay} ;
+    # l'empreinte COMPLÈTE (libellé entier) les distingue -> ambigu -> PAS d'auto-match.
+    e1 = _make_expense(auth_headers, 500.00, "Tremblay Services Inc", "2099-06-14")
+    e2 = _make_expense(auth_headers, 500.00, "Tremblay Services Ltd", "2099-06-16")
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-06-15,TREMBLAY,-500.00\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "TREM"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "deux payeurs distincts (Inc vs Ltd) ne sont PAS interchangeables"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": e1})
+        db.expenses.delete_one({"id": e2})
+
+
+def test_dup_relax_blocked_currency_mismatch(auth_headers):
+    # Une dépense CAD et une dépense USD (même libellé/montant estimé) ne sont PAS interchangeables :
+    # l'empreinte inclut la devise -> ambigu -> PAS d'auto-match (revue : Vercel USD vs CAD).
+    e1 = _make_expense(auth_headers, 50.00, "CloudVendorQ", "2099-07-01")
+    e2 = _make_expense(auth_headers, 50.00, "CloudVendorQ", "2099-07-02")
+    db.expenses.update_one({"id": e2}, {"$set": {"currency": "USD"}})
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-07-01,CloudVendorQ,-50.00\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "CURX"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "devises différentes -> non interchangeables"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": e1})
+        db.expenses.delete_one({"id": e2})
+
+
+def test_dup_relax_blocked_two_foreign(auth_headers):
+    # BLOQUANT (revue) : deux dépenses USD au MÊME estimé CAD ne sont PAS interchangeables — leurs
+    # vrais débits diffèrent et _apply_match réécrit le montant. La relaxation est réservée au CAD.
+    e1 = _make_expense(auth_headers, 27.20, "VercelQ", "2099-07-09")
+    e2 = _make_expense(auth_headers, 27.20, "VercelQ", "2099-07-10")
+    db.expenses.update_many({"id": {"$in": [e1, e2]}}, {"$set": {"currency": "USD"}})
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-07-10,VercelQ,-27.20\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "FGN2"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "devise étrangère : estimé CAD non fiable -> jamais de relaxation"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": e1})
+        db.expenses.delete_one({"id": e2})
+
+
+def test_dup_relax_blocked_different_category(auth_headers):
+    # Même fournisseur/montant mais CATÉGORIES ARC distinctes (revue : Copilot projet A vs B,
+    # Google Workspace vs Ads) -> imputations différentes -> non interchangeables -> PAS d'auto-match.
+    e1 = _make_expense(auth_headers, 25.00, "GitHubQ", "2099-08-01")  # office_supplies
+    e2 = _make_expense(auth_headers, 25.00, "GitHubQ", "2099-08-02")
+    db.expenses.update_one({"id": e2}, {"$set": {"category_code": "advertising"}})
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-08-01,GitHubQ,-25.00\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "CATX"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "catégories ARC différentes -> non interchangeables"
     finally:
         if import_id:
             client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
