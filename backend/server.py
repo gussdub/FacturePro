@@ -1149,16 +1149,23 @@ def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower
 # Mots trop génériques pour ancrer un rapprochement (sinon « Paiement Hydro » matcherait
 # « Paiement Bell »). Le recoupement de nom doit reposer sur un token DISTINCTIF.
 _MATCH_STOPWORDS = {
-    "inc", "ltd", "ltee", "corp", "llc", "the", "les", "des", "and", "pte",
+    "inc", "ltd", "ltee", "corp", "llc", "the", "les", "des", "and", "pte", "pbc",
     "services", "service", "paiement", "payment", "achat", "purchase", "facture", "invoice",
     "canada", "quebec", "montreal", "www", "com", "net", "org", "http", "https",
-    "abonnement", "subscription", "sub", "inc.", "pbc",
+    "abonnement", "subscription", "sub", "mensuel", "annuel", "plan", "pro", "frais",
+    # termes bancaires / génériques trop peu distinctifs pour ancrer un fournisseur
+    "visa", "mastercard", "amex", "card", "carte", "debit", "credit", "transaction",
+    "transfer", "transfert", "retrait", "depot", "interac", "preauto", "preautorise",
+    "prelevement", "reglement", "montreal", "www",
 }
 
 
 def _significant_tokens(s):
+    # Tokens distinctifs pour ancrer un nom de fournisseur : >=3 car, ALPHABÉTIQUES (pas
+    # purement numériques — une année/un numéro/un montant ne caractérise pas un fournisseur),
+    # hors mots génériques/bancaires. Ainsi « genspark » ancre, mais « 2026 »/« 877 » non.
     return {t for t in re.split(r"[^a-z0-9]+", (s or "").lower())
-            if len(t) >= 3 and t not in _MATCH_STOPWORDS}
+            if len(t) >= 3 and not t.isdigit() and t not in _MATCH_STOPWORDS}
 
 
 def _name_match(name, desc_lower):
@@ -1175,16 +1182,20 @@ def _name_match(name, desc_lower):
 
 
 def _score_expense_candidate(tx_date, target, exp, desc_lower):
-    """Score d'un candidat dépense. Le NOM est le signal fort (poids 2) : montant exact + nom
-    qui recoupe = auto-match confiant même si la date dérive (délai saisie vs débit). La date
-    proche (≤3j) n'ajoute qu'un +1 de confiance. Max = 4."""
-    amount_diff = abs(float(exp.get("amount_cad", 0)) - target)
+    """Score d'un candidat dépense. Le NOM (vendor OU description) est l'ancre : +2, et REQUIS
+    pour un auto-match (seuil 4). Bonus : montant EXACT (±0,01) +1 — départage deux dépenses de
+    même nom et privilégie l'exact sur le flou — et date proche (≤3j) +1. Max = 5.
+    Ainsi une dépense en devise (CAD estimé, non exact) au bon nom + date proche = 4 -> matche,
+    et un montant exact au bon nom l'emporte sur un montant approché du même fournisseur."""
+    amount_diff = abs(float(exp.get("amount_cad", 0) or 0) - target)
     exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
     date_diff = abs((tx_date - exp_date).days) if exp_date else 999
     name = exp.get("vendor") or exp.get("description") or ""
-    score = 1  # montant (déjà filtré ±0,01)
+    score = 1  # dans la fourchette de montant
     if _name_match(name, desc_lower):
         score += 2
+    if amount_diff <= 0.01:
+        score += 1
     if date_diff <= 3:
         score += 1
     return score, date_diff, amount_diff
@@ -1239,13 +1250,14 @@ def _auto_match_transactions(import_id, scope):
         elif tx["amount_cad"] < 0:  # débit → dépenses
             for exp in open_expenses:
                 exp_cad = float(exp.get("amount_cad", 0) or 0)
-                # Devise étrangère : le CAD stocké est une ESTIMATION (taux du jour de saisie) ;
-                # le montant réellement débité (frais de conversion ~2,5 % + mouvement du taux)
-                # diffère de quelques %. On élargit la tolérance montant à ±5 % pour ces dépenses.
-                # Le NOM + candidat unique restent requis pour l'auto-match (cf. score), et
-                # _apply_match adopte ensuite le montant CAD exact du relevé (correction de change).
-                is_foreign = (exp.get("currency") or "CAD").upper() != "CAD"
-                amount_tol = max(0.01, round(exp_cad * 0.05, 2)) if is_foreign else 0.01
+                # Montant EXACT (±0,01) par défaut. Fourchette ±5 % du montant de la TRANSACTION
+                # uniquement pour une dépense marquée en devise étrangère (son CAD est un estimé
+                # ≠ débité). Pour une dépense CAD, aucun estimé de change n'excuse un écart : un
+                # montant décalé = probablement une AUTRE charge du même fournisseur -> exact requis
+                # (sinon faux rapprochement — cf. revue : Bell 100↔105, vol glouton entre tx).
+                cur = (exp.get("currency") or "CAD").strip().upper()
+                is_foreign = cur not in ("", "CAD")
+                amount_tol = max(0.02, round(target * 0.05, 2)) if is_foreign else 0.01
                 if abs(exp_cad - target) > amount_tol:
                     continue
                 exp_date = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
@@ -1260,10 +1272,17 @@ def _auto_match_transactions(import_id, scope):
             continue
         candidates.sort(key=lambda c: (-c[0], c[1], c[2]))
         top = candidates[0]
-        # auto-match seulement si le meilleur candidat est CONFIANT (score >= 3 : montant + nom
-        # pour une dépense, ou montant + date + client pour une facture) ET non ambigu
-        # (second candidat < 3, sinon deux dépenses même montant/nom -> laissé au manuel).
-        if top[0] >= 3 and (len(candidates) == 1 or candidates[1][0] < 3):
+        second = candidates[1][0] if len(candidates) > 1 else -999
+        if tx["amount_cad"] > 0:
+            # facture : montant exact + date + client (score 3) ET unique.
+            ok = top[0] == 3 and second < 3
+        else:
+            # dépense : nom REQUIS (seuil 4) ET AUCUN autre candidat crédible (2e < 4). Dès que
+            # deux candidats sont plausibles sur le nom — même fournisseur (une charge en devise
+            # au CAD estimé décalé) ou fournisseurs distincts au montant exact fortuit — c'est
+            # ambigu -> laissé au manuel (jamais de faux rapprochement sur le seul montant exact).
+            ok = top[0] >= 4 and (len(candidates) == 1 or second < 4)
+        if ok:
             try:
                 _apply_match(tx, top[3]["kind"], top[3]["id"], scope)
                 applied += 1

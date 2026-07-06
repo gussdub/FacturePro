@@ -115,6 +115,71 @@ def test_automatch_ambiguous_two_identical_not_matched(auth_headers):
         db.expenses.delete_one({"id": e2})
 
 
+def test_automatch_token_name_with_fx_gap_usd_marked(auth_headers):
+    # Relevé « Genspark.ai » 29.64 vs dépense « MainFunc PTE. LTD. (Genspark) » 29.01 en USD :
+    # token « genspark » + montant à ~2 % (tolérance change) + date 1j -> auto-match.
+    exp_id = _make_expense(auth_headers, 29.01, "MainFunc PTE. LTD. (Genspark)", "2099-09-19")
+    db.expenses.update_one({"id": exp_id}, {"$set": {"currency": "USD"}})
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-09-18,Genspark.ai,-29.64\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "TOK"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] >= 1, "USD marqué : token + montant ~2 % + date devraient matcher"
+        assert data["transactions"][0]["match_id"] == exp_id
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": exp_id})
+
+
+def test_cad_nonexact_amount_not_matched(auth_headers):
+    # SÉCURITÉ (revue) : dépense CAD au montant décalé (une AUTRE facture Bell, écart ~5 %) NE
+    # doit PAS s'auto-rapprocher — sans marquage devise, un écart de montant sur CAD est suspect.
+    exp_id = _make_expense(auth_headers, 100.00, "Bell Mobilite", "2099-03-08")  # CAD
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-03-10,PAIEMENT BELL CANADA,-105.00\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "BELL"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "CAD au montant décalé de 5 % ne doit pas matcher"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": exp_id})
+
+
+def test_numeric_token_is_not_a_name_anchor(auth_headers):
+    from backend.server import _name_match
+    assert _name_match("Uber 2026", "lyft 2026 frais") is False   # « 2026 » n'ancre pas
+    assert _name_match("Depanneur 123", "restaurant 123") is False
+    assert _name_match("Genspark.ai", "genspark.ai 877 4612631") is True  # token alpha OK
+
+
+def test_amount_close_without_name_not_matched(auth_headers):
+    # Montant dans la fourchette ±5 % MAIS aucun nom qui recoupe -> PAS d'auto-match (nom requis).
+    exp_id = _make_expense(auth_headers, 200.00, "Totalement Autre Chose", "2099-12-01")
+    import_id = None
+    try:
+        csv = "Date,Description,Montant\n2099-12-01,MYSTERY VENDOR XYZ,-198.00\n"
+        r = client.post("/api/bank/imports", headers=auth_headers,
+                        files={"file": ("r.csv", csv, "text/csv")},
+                        data={"mapping": json.dumps(MAP), "bank_label": "NONAME"})
+        data = r.json()
+        import_id = data["import"]["id"]
+        assert data["auto_matched"] == 0, "montant proche sans nom qui recoupe ne doit pas matcher"
+    finally:
+        if import_id:
+            client.delete(f"/api/bank/imports/{import_id}?force=true", headers=auth_headers)
+        db.expenses.delete_one({"id": exp_id})
+
+
 def test_foreign_currency_amount_tolerance(auth_headers):
     # Dépense USD : CAD estimé 13.07, mais débit réel 13.50 (frais de change) -> doit matcher
     # grâce à la tolérance ±5 % (0.43 <= 0.65), puis _apply_match adopte le montant exact.
