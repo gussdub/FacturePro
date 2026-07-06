@@ -3,6 +3,7 @@ import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { BACKEND_URL, formatCurrency } from '../config';
 import QuickActionCard from '../components/QuickActionCard';
+import useIsMobile from '../hooks/useIsMobile';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { Users, FileText, FilePen, DollarSign, AlertTriangle, CheckCircle, ArrowUpRight, Receipt, Wallet } from 'lucide-react';
 
@@ -10,6 +11,7 @@ const CHART_COLORS = ['#09090b', '#52525b', '#a1a1aa', '#002FA7', '#d4d4d8', '#7
 
 const Dashboard = ({ navigate }) => {
   const { user } = useAuth();
+  const isMobile = useIsMobile();
   const [stats, setStats] = useState({ loading: true });
   const [overdue, setOverdue] = useState({ loading: true, data: null });
   const [analytics, setAnalytics] = useState({ loading: true, data: null });
@@ -89,7 +91,7 @@ const Dashboard = ({ navigate }) => {
       </div>
 
       {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '28px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)', gap: '16px', marginBottom: '28px' }}>
         {[
           { id: 'clients', icon: Users, val: stats.data?.total_clients || 0, label: 'Clients' },
           { id: 'invoices', icon: FileText, val: stats.data?.total_invoices || 0, label: 'Factures' },
@@ -148,12 +150,12 @@ const Dashboard = ({ navigate }) => {
         </div>
         {reminderMsg && <div data-testid="reminder-message" style={{ background: reminderMsg.includes('Erreur') ? '#fef2f2' : '#f0fdf4', border: `1px solid ${reminderMsg.includes('Erreur') ? '#fecaca' : '#bbf7d0'}`, color: reminderMsg.includes('Erreur') ? '#991b1b' : '#166534', padding: '8px 14px', borderRadius: '4px', marginBottom: '12px', fontSize: '12px', cursor: 'pointer' }} onClick={() => setReminderMsg('')}>{reminderMsg}</div>}
         {hasOverdue ? (
-          <div style={{ borderRadius: '4px', overflow: 'hidden', border: '1px solid #e4e4e7' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 0.8fr 0.7fr 0.8fr 0.8fr', background: '#fafafa', padding: '8px 14px', fontSize: '11px', fontWeight: '600', color: '#a1a1aa', borderBottom: '1px solid #e4e4e7', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ borderRadius: '4px', overflow: 'hidden', border: '1px solid #e4e4e7', overflowX: isMobile ? 'auto' : 'visible' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 0.8fr 0.7fr 0.8fr 0.8fr', minWidth: isMobile ? '620px' : 'auto', background: '#fafafa', padding: '8px 14px', fontSize: '11px', fontWeight: '600', color: '#a1a1aa', borderBottom: '1px solid #e4e4e7', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               <span>Facture</span><span>Client</span><span style={{ textAlign: 'right' }}>Montant</span><span style={{ textAlign: 'center' }}>Retard</span><span style={{ textAlign: 'center' }}>Dernier rappel</span><span style={{ textAlign: 'right' }}>Action</span>
             </div>
             {overdueData.overdue_invoices.map(inv => (
-              <div key={inv.id} data-testid={`overdue-row-${inv.id}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 0.8fr 0.7fr 0.8fr 0.8fr', padding: '10px 14px', borderBottom: '1px solid #f4f4f5', alignItems: 'center', fontSize: '13px' }}>
+              <div key={inv.id} data-testid={`overdue-row-${inv.id}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 0.8fr 0.7fr 0.8fr 0.8fr', minWidth: isMobile ? '620px' : 'auto', padding: '10px 14px', borderBottom: '1px solid #f4f4f5', alignItems: 'center', fontSize: '13px' }}>
                 <span style={{ fontWeight: '600', color: '#09090b' }}>{inv.invoice_number}</span>
                 <span style={{ color: '#52525b' }}>{inv.client_name}</span>
                 <span style={{ textAlign: 'right', fontWeight: '700', color: '#dc2626' }}>{formatCurrency(inv.total)}</span>
@@ -173,7 +175,7 @@ const Dashboard = ({ navigate }) => {
 
       {/* Expense Analytics Charts */}
       {hasExpenses && (
-        <div data-testid="expense-analytics" style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '16px', marginBottom: '28px' }}>
+        <div data-testid="expense-analytics" style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1.5fr', gap: '16px', marginBottom: '28px' }}>
           {/* Pie Chart */}
           <div style={{ background: '#ffffff', border: '1px solid #e4e4e7', borderRadius: '6px', padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
@@ -212,7 +214,7 @@ const Dashboard = ({ navigate }) => {
       {/* Quick Actions */}
       <div style={{ background: '#ffffff', border: '1px solid #e4e4e7', borderRadius: '6px', padding: '20px' }}>
         <h3 style={{ margin: '0 0 16px 0', fontSize: '14px', fontWeight: '700', color: '#09090b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions rapides</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: '12px' }}>
           <QuickActionCard icon={Users} title="Gerer les clients" description="Ajouter, modifier vos clients" onClick={() => navigate('/clients')} />
           <QuickActionCard icon={FileText} title="Creer une facture" description="Nouvelle facture client" onClick={() => navigate('/invoices')} />
           <QuickActionCard icon={FilePen} title="Creer une soumission" description="Devis pour prospect" onClick={() => navigate('/quotes')} />

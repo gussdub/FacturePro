@@ -4,6 +4,7 @@ import { DollarSign, AlertTriangle } from 'lucide-react';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
 import PaymentModal from '../components/PaymentModal';
+import useIsMobile from '../hooks/useIsMobile';
 
 const STATUS_CONFIG = {
   draft:   { label: 'Brouillon', bg: '#f3f4f6', color: '#374151', icon: '✎' },
@@ -22,6 +23,7 @@ const RECURRENCE_CONFIG = {
 };
 
 const InvoicesPage = () => {
+  const isMobile = useIsMobile();
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
   const [products, setProducts] = useState([]);
@@ -421,7 +423,7 @@ const InvoicesPage = () => {
               </h3>
             </div>
             <form onSubmit={handleSubmit} style={{ padding: '24px 28px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                 <div>
                   <label style={labelStyle}>Client *</label>
                   <select data-testid="invoice-client-select" value={formData.client_id}
@@ -437,7 +439,7 @@ const InvoicesPage = () => {
                     placeholder={editingInvoice ? editingInvoice.invoice_number : 'Ex: INV-0001'} style={inputStyle} />
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
                   <label style={labelStyle}>Échéance *</label>
                   <input type="date" value={formData.due_date}
@@ -483,8 +485,8 @@ const InvoicesPage = () => {
               {/* Items table */}
               <div style={{ marginBottom: '20px' }}>
                 <label style={labelStyle}>Articles et services</label>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: '10px', overflow: 'hidden' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', gap: '0', background: '#008F7A', color: '#fff', padding: '10px 12px', fontSize: '12px', fontWeight: '600' }}>
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: '10px', overflow: 'hidden', overflowX: isMobile ? 'auto' : 'hidden' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', minWidth: isMobile ? '460px' : 'auto', gap: '0', background: '#008F7A', color: '#fff', padding: '10px 12px', fontSize: '12px', fontWeight: '600' }}>
                     <span>Description</span><span style={{ textAlign: 'center' }}>Qté</span>
                     <span style={{ textAlign: 'center' }}>Prix unit.</span><span style={{ textAlign: 'center' }}>Total</span><span></span>
                   </div>
@@ -493,7 +495,7 @@ const InvoicesPage = () => {
                       Sélectionnez un produit ou ajoutez un article manuellement
                     </div>
                   ) : formData.items.map((item, i) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', gap: '8px', padding: '10px 12px', background: i % 2 === 0 ? '#fff' : '#f9fafb', alignItems: 'center' }}>
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', minWidth: isMobile ? '460px' : 'auto', gap: '8px', padding: '10px 12px', background: i % 2 === 0 ? '#fff' : '#f9fafb', alignItems: 'center' }}>
                       <input data-testid={`inv-item-desc-${i}`} type="text" value={item.description}
                         onChange={e => updateItem(i, 'description', e.target.value)} required placeholder="Description"
                         style={{ ...inputStyle, padding: '8px' }} />
@@ -557,7 +559,7 @@ const InvoicesPage = () => {
               {/* Recurrence */}
               <div style={{ background: '#faf5ff', border: '1px solid #e9d5ff', borderRadius: '10px', padding: '16px', marginBottom: '20px' }}>
                 <label style={{ ...labelStyle, color: '#6b21a8' }}>Facturation récurrente</label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
                   <div>
                     <label style={{ ...labelStyle, fontSize: '12px' }}>Fréquence</label>
                     <select data-testid="invoice-recurrence" value={formData.recurrence}

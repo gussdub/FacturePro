@@ -959,7 +959,7 @@ const ExpensesPage = () => {
                   ⚠ Extraction partielle — remplis les champs manquants.
                 </div>
               )}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
                 <div>
                   <label style={labelStyle}>Employe <span style={{ color: '#9ca3af', fontWeight: '400' }}>(optionnel)</span></label>
                   <select data-testid="expense-employee-select" value={formData.employee_id}
@@ -1057,7 +1057,7 @@ const ExpensesPage = () => {
                 <p style={{ marginTop: 0, marginBottom: 12, fontSize: 12, color: '#6b7280' }}>
                   Saisis ces montants pour les inclure dans ton rapport TPS/TVQ trimestriel.
                 </p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: 10 }}>
                   <div>
                     <label htmlFor="gst-paid-input" style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#374151' }}>TPS payée</label>
                     <input
@@ -1456,6 +1456,7 @@ const ExpensesPage = () => {
 
 // ─── Carnet de route — onglets (squelette, remplis aux Tasks 15-17) ───
 function MileageTripsTab() {
+  const isMobile = useIsMobile();
   const { token } = useAuth();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -1663,7 +1664,7 @@ function MileageTripsTab() {
         </div>
       )}
 
-      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 24, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
         <select data-testid="mileage-favorite-select" value={form.favorite_id} onChange={(e) => applyFavorite(e.target.value)} style={{ ...input, gridColumn: '1 / -1' }}>
           <option value="">Depuis un favori…</option>
           {favorites.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}
@@ -1757,6 +1758,7 @@ function MileageTripsTab() {
   );
 }
 function MileageVehiclesTab() {
+  const isMobile = useIsMobile();
   const { token } = useAuth();
   const authCfg = { headers: { Authorization: `Bearer ${token}` } };
   const [vehicles, setVehicles] = useState([]);
@@ -1814,7 +1816,7 @@ function MileageVehiclesTab() {
   return (
     <div data-testid="mileage-vehicles-tab">
       {error && <div style={{ background: '#fee2e2', color: '#991b1b', padding: 10, borderRadius: 6, marginBottom: 12 }}>{error}</div>}
-      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 20, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'end' }}>
+      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 20, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr 1fr auto', gap: 10, alignItems: isMobile ? 'stretch' : 'end' }}>
         <label style={{ fontSize: 13 }}>Nom *
           <input placeholder="Ex. Honda perso" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={input} /></label>
         <label style={{ fontSize: 13 }}>Marque / modèle
@@ -1858,6 +1860,7 @@ function MileageVehiclesTab() {
 }
 
 function MileageFavoritesTab() {
+  const isMobile = useIsMobile();
   const { token, hasPermission } = useAuth();
   const canWrite = hasPermission("expenses:write");
   const authCfg = { headers: { Authorization: `Bearer ${token}` } };
@@ -1957,7 +1960,7 @@ function MileageFavoritesTab() {
       </p>
 
       {canWrite && (
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 24, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, marginBottom: 24, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
           <input placeholder="Nom (ex: Domicile → Client ABC) *" data-testid="mileage-favorite-label" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} style={{ ...input, gridColumn: '1 / -1' }} />
           <input placeholder="Départ" data-testid="mileage-favorite-origin" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value })} style={input} />
           <input placeholder="Arrivée" data-testid="mileage-favorite-destination" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} style={input} />
