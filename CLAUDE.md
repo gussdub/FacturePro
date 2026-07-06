@@ -108,6 +108,15 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-05 — Import relevé PDF + aperçu de mapping CSV en direct (feature #7.1)**
+  - **Aperçu de mapping CSV en direct** (frontend seul) : dans `BankImportWizard` étape 2, l'aperçu se met à jour automatiquement (débounced 400 ms, garde anti-course `previewSeq`) à chaque changement de réglage, servi par le VRAI `dry_run` backend (`_parse_csv_rows`) — donc aperçu == import, aucun parseur JS parallèle. Bouton « Vérifier » retiré.
+  - **Import de relevé PDF via Claude** : `POST /api/bank/imports` détecte le PDF par magic-bytes (`raw[:16].lstrip().startswith(b"%PDF")`) et l'envoie à Claude Haiku 4.5 (`_call_anthropic_bank_extract`, réutilise l'infra du scan de reçus #8, bloc `document` base64). `_normalize_bank_rows` produit la MÊME forme que le CSV (`{row_index,date,description,amount_cad,parse_error,raw_line}`) : crédit → +, débit → −, ligne douteuse → `parse_error` (jamais un montant faux silencieux). Pipeline aval partagé via `_persist_bank_import` (dédup hash, `bank_transactions`, auto-match).
+  - **Garanties argent (durcies par revue adversariale opus, 3 blocking + 3 important corrigés)** : (1) **aperçu == import** — extraction cachée par (org, hash) dans `bank_pdf_extractions` ; l'import réutilise STRICTEMENT le cache, ne ré-extrait jamais (cache absent → 409 « relance l'analyse ») ; (2) **1 relevé = 1 scan** — réservation atomique via index UNIQUE (org, hash) + `insert_one`/`DuplicateKeyError` avant `_check_and_bill_scan`, rollback complet (rembourse + nettoie) sur 429/erreur, exactement une fois ; (3) **dédup 409 AVANT extraction** — ré-importer un PDF déjà importé ne coûte rien ; (4) index TTL 2 h auto-purge le cache.
+  - Frontend : champ fichier `.csv`+`.pdf`, détection PDF par **magic-bytes** (`FileReader`, aligné backend — un PDF renommé `.csv` ne peut pas déclencher l'aperçu live facturé) ; flux PDF = bouton explicite « Analyser le relevé (IA) » (aperçu live gaté hors PDF), avertissement « extraction IA à vérifier », aperçu de TOUTES les lignes (tableau défilable), garde synchrone `previewInFlight` anti-double-clic.
+  - Bonus sécurité : `_sanitize_cell` strippe désormais les préfixes d'injection CSV **empilés** (boucle). Quota réutilisé : 400 scans/org/mois partagés avec l'OCR de reçus.
+  - Limites v1 : CAD only (comme le rapprochement), pas de re-extraction déterministe (Haiku), relevés très longs bornés par `max_tokens=8192` + cap 10 MB.
+  - Tests : **12 nouveaux** (`test_bank_pdf_import.py`), 36/36 tests bancaires in-process verts, 0 régression CSV.
+
 - **2026-07-03 — Carnet de route kilométrage (feature #13)**
   - 4 nouvelles collections org-scopées : `mileage_trips`, `mileage_favorites`, `mileage_vehicles`, `mileage_rate_reminders`
   - Table des taux ARC dans le code (`MILEAGE_RATES` 2024-2026, full/reduced : 2024=0,70/0,64 ; 2025=0,72/0,66 ; 2026=0,73/0,67) + seuil 5 000 km ; helper `_mileage_rate_for_year` (aucun fallback silencieux : année absente → allocation `None`, jamais un mauvais montant)
