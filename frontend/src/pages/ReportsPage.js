@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BACKEND_URL } from '../config';
 import T2125ReportSection from '../components/T2125ReportSection';
+import GifiReportSection from '../components/GifiReportSection';
 
 const QUARTERS = [
   { value: 'Q1', label: 'T1 (jan-mar)', start: '01-01', end: '03-31' },
@@ -478,6 +479,7 @@ function ReportsPage() {
   // incorporés ; on cache l'onglet pour une société par actions.
   const [entityType, setEntityType] = useState('sole_proprietor');
   const showT2125 = entityType === 'sole_proprietor';
+  const showGifi = entityType === 'corporation';
 
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/settings/company`)
@@ -485,11 +487,12 @@ function ReportsPage() {
       .catch(() => {});
   }, []);
 
-  // Si l'onglet actif devient invalide (T2125 caché pour une société), replier
-  // sur le rapport TPS/TVQ.
+  // Si l'onglet actif devient invalide (T2125 caché pour une société, GIFI caché
+  // pour un autonome), replier sur le rapport TPS/TVQ.
   useEffect(() => {
     if (activeTab === 't2125' && !showT2125) setActiveTab('sales_tax');
-  }, [activeTab, showT2125]);
+    if (activeTab === 'gifi' && !showGifi) setActiveTab('sales_tax');
+  }, [activeTab, showT2125, showGifi]);
 
   const tabStyle = (isActive) => ({
     padding: '10px 18px',
@@ -521,10 +524,17 @@ function ReportsPage() {
             Déclaration T2125
           </button>
         )}
+        {showGifi && (
+          <button style={tabStyle(activeTab === 'gifi')}
+            onClick={() => setActiveTab('gifi')}>
+            Sommaire GIFI
+          </button>
+        )}
       </div>
       {activeTab === 'sales_tax' && <SalesTaxReportSection />}
       {activeTab === 'pnl' && <PnlReportSection />}
       {activeTab === 't2125' && showT2125 && <T2125ReportSection />}
+      {activeTab === 'gifi' && showGifi && <GifiReportSection />}
     </div>
   );
 }
