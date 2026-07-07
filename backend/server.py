@@ -488,6 +488,67 @@ def _build_expense_category_snapshot(expense_data, amount_cad, telecom_business_
     return snapshot
 
 
+def migrate_expense_tax_codes_v1():
+    """Migration idempotente (feature #7.6) — ré-annote les dépenses historiques :
+    - Ajoute category_t2125_line + category_t2125_label_fr + category_gifi_code +
+      category_gifi_label_en (nouveau schéma).
+    - Corrige category_arc_line si erroné (bank 8620→8710, subs 8740→8760,
+      subcontracts 9367→9060, advertising 8520→8521).
+
+    Idempotente : ne cible QUE les dépenses dont category_gifi_code est absent (null,
+    missing ou vide). Au 2e passage, la clause est fausse -> no-op. Montants et
+    déductibilité inchangés (on ne recalcule PAS deductible_amount pour éviter tout
+    effet de bord sur les livres — la migration précédente F7.5 traite l'aplatissement
+    et le % télécom).
+
+    Retourne {updated: int, touched_ids: list[str]}.
+    """
+    updated = 0
+    touched = []
+    q = {
+        "category_code": {"$exists": True, "$ne": ""},
+        "$or": [
+            {"category_gifi_code": {"$exists": False}},
+            {"category_gifi_code": None},
+            {"category_gifi_code": ""},
+        ],
+    }
+    for exp in db.expenses.find(q, {"_id": 0, "id": 1, "category_code": 1}):
+        code = (exp.get("category_code") or "").strip()
+        cat = _find_category(code)
+        if code == "other":
+            t2125_line = cat["t2125_line"] if cat else "9270"
+            t2125_label_fr = cat["t2125_label_fr"] if cat else "Autres dépenses"
+            gifi_code = cat["gifi_code"] if cat else "9270"
+            gifi_label_en = cat["gifi_label_en"] if cat else "Other expenses"
+        elif cat:
+            t2125_line = cat["t2125_line"]
+            t2125_label_fr = cat["t2125_label_fr"]
+            gifi_code = cat["gifi_code"]
+            gifi_label_en = cat["gifi_label_en"]
+        else:
+            # Code inconnu : on marque gifi_code avec un sentinel "_" (jamais un vrai
+            # code fiscal) pour que la clause d'idempotence trouve un champ non-vide
+            # au prochain run.
+            t2125_line = ""
+            t2125_label_fr = ""
+            gifi_code = "_"
+            gifi_label_en = ""
+        result = db.expenses.update_one(
+            {"id": exp["id"]},
+            {"$set": {
+                "category_t2125_line": t2125_line,
+                "category_t2125_label_fr": t2125_label_fr,
+                "category_gifi_code": gifi_code,
+                "category_gifi_label_en": gifi_label_en,
+                "category_arc_line": t2125_line,  # aligné sur T2125 (corrige les erreurs historiques)
+            }})
+        if result.modified_count:
+            updated += 1
+            touched.append(exp["id"])
+    return {"updated": updated, "touched_ids": touched}
+
+
 # ─── Sales tax report helpers (feature #4 du spec tax-report) ───
 
 PROVINCES_VALID = frozenset({
@@ -10894,6 +10955,12 @@ def seed_data():
         # transaction bancaire au schéma canonique (expense_date, catégorie à plat, taxes)
         # sinon elles étaient exclues du P&L / T2125 / rapport taxes / grand livre (idempotente)
         migrate_bank_created_expenses_v1()
+
+        # Feature #7.6 — ré-annote les dépenses avec t2125_line + gifi_code, corrige arc_line.
+        try:
+            migrate_expense_tax_codes_v1()
+        except Exception:
+            pass
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(

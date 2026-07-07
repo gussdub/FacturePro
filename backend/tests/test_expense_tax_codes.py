@@ -111,3 +111,50 @@ def test_categories_endpoint_returns_dual_codes(auth_headers):
     assert subs["gifi_label_en"] == "Office expenses"
     # arc_line n'est plus dans le modèle canonique (T1)
     assert "arc_line" not in subs, "arc_line ne doit plus être présent sur la catégorie"
+
+
+def test_migration_backfills_dual_codes(auth_headers):
+    """Une dépense legacy (uniquement category_arc_line + arc_line erroné) reçoit
+    les 4 nouveaux champs + un category_arc_line corrigé après migration."""
+    from backend.server import migrate_expense_tax_codes_v1
+    # Créer une dépense legacy manuellement en DB (schéma pré-migration)
+    org_id = _probe_org_id(auth_headers)
+    if not org_id:
+        pytest.skip("org_id indisponible")
+    from backend import server
+    legacy_id = "test_legacy_migr_" + os.urandom(4).hex()
+    server.db.expenses.insert_one({
+        "id": legacy_id, "organization_id": org_id, "user_id": "test",
+        "amount": 100.0, "amount_cad": 100.0, "currency": "CAD",
+        "category_code": "subscriptions", "category": "Abonnements et licences",
+        "category_arc_line": "8740",  # ancien code erroné
+        "deductible_percentage": 100, "deductible_amount": 100.0,
+        "expense_date": "2099-01-15",
+    })
+    try:
+        stats = migrate_expense_tax_codes_v1()
+        assert stats["updated"] >= 1
+        migrated = server.db.expenses.find_one({"id": legacy_id}, {"_id": 0})
+        assert migrated["category_t2125_line"] == "8760"
+        assert migrated["category_gifi_code"] == "8810"
+        assert migrated["category_arc_line"] == "8760", "arc_line legacy corrigé"
+        # 2e passage : rien à faire (idempotent)
+        stats2 = migrate_expense_tax_codes_v1()
+        assert legacy_id not in stats2.get("touched_ids", []), \
+            "migration doit être idempotente sur cette dépense"
+    finally:
+        server.db.expenses.delete_one({"id": legacy_id})
+
+
+def _probe_org_id(auth_headers):
+    """Récupère l'org_id du user de test via une dépense sonde."""
+    r = client.post("/api/expenses", headers=auth_headers, json={
+        "amount": 1.00, "currency": "CAD", "category_code": "office_supplies",
+        "description": "PROBE", "expense_date": "2099-01-01"})
+    if r.status_code not in (200, 201):
+        return None
+    exp_id = r.json()["id"]
+    from backend import server
+    doc = server.db.expenses.find_one({"id": exp_id}, {"_id": 0})
+    server.db.expenses.delete_one({"id": exp_id})
+    return doc.get("organization_id") if doc else None
