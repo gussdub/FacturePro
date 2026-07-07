@@ -10731,6 +10731,57 @@ def get_gifi_report_csv(
                      headers={"Content-Disposition": f'attachment; filename="gifi-{year}.csv"'})
 
 
+def _render_gifi_pdf(report):
+    """Rendu PDF minimaliste du sommaire GIFI (feature #7.6). Structure : titre,
+    période, tableau code/label/montant, total. ReportLab, format A4."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=40, bottomMargin=40,
+                            leftMargin=40, rightMargin=40)
+    styles = getSampleStyleSheet()
+    story = [
+        Paragraph(f"Sommaire GIFI — {report['year']}", styles["Title"]),
+        Paragraph(f"Base : {report['basis']}", styles["Normal"]),
+        Spacer(1, 12),
+    ]
+    data = [["Code GIFI", "Libellé", "Montant CAD"]]
+    for ln in report["lines"]:
+        data.append([ln["code"], ln["label"], f"{ln['amount']:,.2f} $"])
+    data.append(["", "Total", f"{report['total']:,.2f} $"])
+    tbl = Table(data, colWidths=[80, 320, 100])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#00A08C")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+    ]))
+    story.append(tbl)
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.get("/api/reports/gifi/pdf")
+def get_gifi_report_pdf(
+    year: int,
+    basis: str = "accrual",
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
+):
+    """Retourne le rapport Sommaire GIFI en PDF (entité corporation)."""
+    scope = _org_scope(current_user)
+    if basis not in T2125_VALID_BASES:
+        raise HTTPException(422, "basis must be 'accrual' or 'cash'")
+    report = _build_gifi_report(scope, year, basis)
+    pdf_bytes = _render_gifi_pdf(report)
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                     headers={"Content-Disposition": f'attachment; filename="gifi-{year}.pdf"'})
+
+
 # ─── T2125 export endpoints (feature #10) ───
 
 

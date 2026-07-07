@@ -240,3 +240,18 @@ def test_gifi_report_csv(auth_headers):
     finally:
         from backend import server
         server.db.expenses.delete_one({"id": e})
+
+
+def test_gifi_report_pdf(auth_headers):
+    e = client.post("/api/expenses", headers=auth_headers, json={
+        "amount": 200.0, "currency": "CAD", "category_code": "professional_fees",
+        "description": "Comptable", "expense_date": "2099-06-01"}).json()["id"]
+    try:
+        r = client.get("/api/reports/gifi/pdf?year=2099&basis=cash", headers=auth_headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/pdf")
+        assert r.content[:4] == b"%PDF", "doit être un PDF valide"
+        assert len(r.content) > 500  # taille raisonnable pour un PDF avec au moins une ligne
+    finally:
+        from backend import server
+        server.db.expenses.delete_one({"id": e})
