@@ -10710,6 +10710,27 @@ def get_gifi_report(
     return _build_gifi_report(_org_scope(current_user), year, basis)
 
 
+@app.get("/api/reports/gifi/csv")
+def get_gifi_report_csv(
+    year: int,
+    basis: str = "accrual",
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
+):
+    """Retourne le rapport Sommaire GIFI en CSV (entité corporation)."""
+    scope = _org_scope(current_user)
+    if basis not in T2125_VALID_BASES:
+        raise HTTPException(422, "basis must be 'accrual' or 'cash'")
+    report = _build_gifi_report(scope, year, basis)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Code GIFI", "Libellé (EN)", "Montant CAD"])
+    for ln in report["lines"]:
+        w.writerow([ln["code"], ln["label"], f"{ln['amount']:.2f}"])
+    w.writerow(["", "Total", f"{report['total']:.2f}"])
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+                     headers={"Content-Disposition": f'attachment; filename="gifi-{year}.csv"'})
+
+
 # ─── T2125 export endpoints (feature #10) ───
 
 

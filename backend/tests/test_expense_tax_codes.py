@@ -223,3 +223,20 @@ def test_gifi_report_endpoint(auth_headers):
         from backend import server
         for eid in (e1, e2):
             server.db.expenses.delete_one({"id": eid})
+
+
+def test_gifi_report_csv(auth_headers):
+    e = client.post("/api/expenses", headers=auth_headers, json={
+        "amount": 100.0, "currency": "CAD", "category_code": "advertising",
+        "description": "Facebook ads", "expense_date": "2099-05-01"}).json()["id"]
+    try:
+        r = client.get("/api/reports/gifi/csv?year=2099&basis=cash", headers=auth_headers)
+        assert r.status_code == 200
+        body = r.text
+        assert "Code GIFI" in body or "GIFI" in body
+        assert "8520" in body  # advertising GIFI
+        assert "Advertising and promotion" in body
+        assert "100" in body
+    finally:
+        from backend import server
+        server.db.expenses.delete_one({"id": e})
