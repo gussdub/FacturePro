@@ -158,3 +158,38 @@ def _probe_org_id(auth_headers):
     doc = server.db.expenses.find_one({"id": exp_id}, {"_id": 0})
     server.db.expenses.delete_one({"id": exp_id})
     return doc.get("organization_id") if doc else None
+
+
+def test_gifi_group_by_code_aggregates_correctly():
+    """_gifi_group_by_code agrège les dépenses par category_gifi_code + attache le label."""
+    from backend.server import _gifi_group_by_code
+    flat = {
+        "meals_entertainment": {"gross": 200.0, "deductible": 100.0,
+                                 "t2125_line": "8523", "gifi_code": "8523"},
+        "rent": {"gross": 1000.0, "deductible": 1000.0,
+                 "t2125_line": "8910", "gifi_code": "8910"},
+        "subscriptions": {"gross": 50.0, "deductible": 50.0,
+                          "t2125_line": "8760", "gifi_code": "8810"},
+    }
+    grouped = _gifi_group_by_code(flat)
+    by_code = {g["code"]: g for g in grouped}
+    assert by_code["8523"]["amount"] == 100.0  # déductible
+    assert by_code["8523"]["label"] == "Meals and entertainment"
+    assert by_code["8910"]["amount"] == 1000.0
+    # subscriptions → 8810 GIFI (pas 8760 T2125)
+    assert by_code["8810"]["amount"] == 50.0
+    assert by_code["8810"]["label"] == "Office expenses"
+
+
+def test_flatten_reads_both_codes():
+    """_flatten_pnl_expenses attache t2125_line ET gifi_code sur chaque catégorie."""
+    from backend.server import _flatten_pnl_expenses
+    groups = [{
+        "expenses": [
+            {"category_code": "subscriptions", "gross": 50.0, "deductible": 50.0},
+        ],
+    }]
+    flat = _flatten_pnl_expenses(groups)
+    assert "subscriptions" in flat
+    assert flat["subscriptions"]["t2125_line"] == "8760"
+    assert flat["subscriptions"]["gifi_code"] == "8810"

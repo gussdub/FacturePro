@@ -7289,6 +7289,60 @@ def _t2125_group_by_arc_line(flat_expenses, exclude_codes=None):
     return out
 
 
+def _flatten_pnl_expenses(expense_groups):
+    """Convertit expense_groups (de _aggregate_pnl) en dict plat par category_code,
+    en attachant les DEUX codes fiscaux (t2125_line + gifi_code) via lookup catalogue.
+
+    Feature #7.6 : successeur agnostique de `_t2125_flatten_pnl_expenses`. Le rapport
+    T2125 continue d'utiliser `_t2125_flatten_pnl_expenses` (rétrocompat) ; le nouveau
+    rapport GIFI utilise ce helper puis `_gifi_group_by_code`.
+
+    Retourne : {code: {gross, deductible, t2125_line, gifi_code}}.
+    """
+    flat = {}
+    for group in (expense_groups or []):
+        for exp in (group.get("expenses") or []):
+            code = (exp.get("category_code") or "").strip() or "other"
+            cat = _find_category(code)
+            t2125_line = cat["t2125_line"] if cat else "9270"
+            gifi_code = cat["gifi_code"] if cat else "9270"
+            if code not in flat:
+                flat[code] = {"gross": 0.0, "deductible": 0.0,
+                              "t2125_line": t2125_line, "gifi_code": gifi_code}
+            flat[code]["gross"] += float(exp.get("gross", 0) or 0)
+            flat[code]["deductible"] += float(exp.get("deductible", 0) or 0)
+    for code in flat:
+        flat[code]["gross"] = round(flat[code]["gross"], 2)
+        flat[code]["deductible"] = round(flat[code]["deductible"], 2)
+    return flat
+
+
+def _gifi_group_by_code(flat_expenses, exclude_codes=None):
+    """Agrège les catégories par code GIFI (rapport Sommaire GIFI, feature #7.6).
+
+    Miroir de `_t2125_group_by_arc_line`. Retourne une liste triée par code :
+        [{"code": "8523", "label": "Meals and entertainment", "amount": 100.0}, ...]
+    Le montant est le DÉDUCTIBLE (comme le rapport T2125). exclude_codes permet
+    de retirer certains category_code (ex. home_office ajusté séparément).
+    """
+    exclude = set(exclude_codes or [])
+    by_code = {}
+    labels = {}
+    for code, data in flat_expenses.items():
+        if code in exclude:
+            continue
+        gifi = data.get("gifi_code") or "9270"
+        by_code[gifi] = by_code.get(gifi, 0.0) + float(data.get("deductible", 0) or 0)
+        # Label = gifi_label_en de la catégorie (source unique)
+        cat = _find_category(code)
+        if cat and gifi not in labels:
+            labels[gifi] = cat["gifi_label_en"]
+    return sorted([{"code": c, "label": labels.get(c, "Other expenses"),
+                    "amount": round(a, 2)}
+                   for c, a in by_code.items()],
+                  key=lambda x: x["code"])
+
+
 def _t2125_compute_home_office_adjustment(flat_expenses, home_pct):
     """Mode exclusif : si home_pct > 0, retourne le dict ajustement pour la ligne 9945.
     Les catégories rent/utilities/insurance doivent être retirées de leurs lignes ARC
