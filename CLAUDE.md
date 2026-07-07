@@ -108,6 +108,14 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-06 — Codes fiscaux adaptés au type d'entité (feature #7.6)**
+  - **Problème** : les catégories de dépenses affichaient un unique code `arc_line` — soit erroné (bank 8620, subs 8740, subcontracts 9367 n'existent pas au T2125), soit inadapté au type d'entité. Une société par actions voyait le code T2125 (autonome) alors qu'elle déclare avec des codes **GIFI** (T2 fédéral + CO-17 Québec).
+  - **Correctif** : chaque catégorie porte désormais DEUX codes fiscaux — `t2125_line` (autonome) + `gifi_code` (société). Le snapshot fige les deux ; le picker affiche celui du régime en cours (« T2125 ligne 8760 » ou « GIFI 8810 ») ; le rapport T2125 reste pour l'autonome, un nouveau **rapport « Sommaire GIFI »** apparaît pour la société.
+  - **Corrections des codes historiques** : bank 8620 → T2125 8710 / GIFI 8715 ; subscriptions 8740 → T2125 8760 / GIFI 8810 ; subcontracts 9367 → T2125 9060 / GIFI 9110 ; advertising T2125=8521 ≠ GIFI=8520 ; télécom cell/internet raffiné en GIFI 9225/9152. Corrections verrouillées par 2 rondes de recherche adversariale multi-sources CRA (RC4088, T2 SCH125, canada.ca) — 15 claims confirmés 3/3.
+  - **Migration** idempotente au startup (`migrate_expense_tax_codes_v1`) : ré-annote les dépenses historiques avec les deux codes + aligne `category_arc_line` sur le T2125 corrigé (P&L / T2125 automatiquement plus exacts). Aucun montant ni % déductible touché.
+  - **Bonus** : `BankCreateExpenseModal` picker silencieusement cassé depuis un refactor antérieur (consommait `[{group_code,...}]` alors que l'API retourne `{categories, groups}`) — fixé au passage en T9.
+  - Tests : `test_expense_tax_codes.py` (12 tests : constants, snapshot, endpoint, migration idempotente, rapport GIFI JSON/CSV/PDF).
+
 - **2026-07-06 — Fix audit : dépenses créées depuis une transaction bancaire invisibles aux rapports (feature #7.5)**
   - **Bug** : `create_expense_from_tx` (bouton « Créer une dépense » sur une transaction) écrivait un schéma DIVERGENT — `date` au lieu d'`expense_date`, catégorie NICHÉE sous un dict `category`, taxes en `tps_paid`/`tvq_paid`. Or tous les lecteurs comptables (P&L #5, rapport taxes #4, T2125 #10, grand livre #12) filtrent/lisent `expense_date` + `category_code`/`deductible_amount`/`gst_paid_cad` **au top-level**. Conséquence : ces dépenses étaient **entièrement exclues** du P&L, du T2125 et du rapport TPS/TVQ, et **sans écriture au grand livre** (l'autopost lève 400 sur `expense_date` manquant).
   - **Part A** — `create_expense_from_tx` écrit désormais le **schéma canonique à plat**, identique à `create_expense`/au carnet de route (`expense_date`, `**cat_snapshot`, `gst_paid_cad`…), **y compris le % affaires télécom usage mixte** (feature #14 — sinon sur-déduction + sur-réclamation du CTI ; trouvé en revue adversariale).
