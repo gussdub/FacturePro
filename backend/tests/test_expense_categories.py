@@ -16,7 +16,8 @@ class TestExpenseCategoriesConstant:
         assert len(EXPENSE_CATEGORIES) == 20
 
     def test_each_entry_has_required_keys(self):
-        required = {"code", "label_fr", "label_en", "arc_line", "deductible_percentage", "group"}
+        required = {"code", "label_fr", "label_en", "t2125_line", "t2125_label_fr",
+                    "gifi_code", "gifi_label_en", "deductible_percentage", "group"}
         for cat in EXPENSE_CATEGORIES:
             assert required.issubset(cat.keys()), f"Missing keys in {cat['code']}: {required - cat.keys()}"
 
@@ -28,19 +29,19 @@ class TestExpenseCategoriesConstant:
         cat = _find_category("meals_entertainment")
         assert cat is not None
         assert cat["deductible_percentage"] == 50
-        assert cat["arc_line"] == "8523"
+        assert cat["t2125_line"] == "8523"
         assert cat["group"] == "marketing"
 
     def test_office_expenses_is_100_percent(self):
         cat = _find_category("office_expenses")
         assert cat is not None
         assert cat["deductible_percentage"] == 100
-        assert cat["arc_line"] == "8810"
+        assert cat["t2125_line"] == "8810"
 
     def test_other_category_present(self):
         cat = _find_category("other")
         assert cat is not None
-        assert cat["arc_line"] == ""
+        assert cat["t2125_line"] == "9270"
         assert cat["deductible_percentage"] == 100
         assert cat["group"] == "other"
 
@@ -70,7 +71,7 @@ class TestFindCategory:
     def test_returns_dict_for_canonical_code(self):
         cat = _find_category("rent")
         assert cat["label_fr"] == "Loyer"
-        assert cat["arc_line"] == "8910"
+        assert cat["t2125_line"] == "8910"
 
     def test_returns_none_for_unknown(self):
         assert _find_category("definitely_not_a_real_code") is None

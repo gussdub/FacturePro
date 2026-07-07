@@ -28,3 +28,34 @@ def auth_headers():
     r = client.post("/api/auth/login", json={"email": "gussdub@gmail.com", "password": "testpass123"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_expense_categories_have_dual_codes():
+    """Chaque catégorie porte les 4 nouveaux champs (t2125_line + t2125_label_fr +
+    gifi_code + gifi_label_en) et n'a PLUS de arc_line."""
+    from backend.server import EXPENSE_CATEGORIES
+    required = {"code", "label_fr", "label_en", "t2125_line", "t2125_label_fr",
+                "gifi_code", "gifi_label_en", "deductible_percentage", "group"}
+    for cat in EXPENSE_CATEGORIES:
+        missing = required - set(cat.keys())
+        assert not missing, f"{cat['code']} manque {missing}"
+        assert "arc_line" not in cat, f"{cat['code']} porte encore l'ancien arc_line"
+
+
+def test_expense_categories_correct_codes():
+    """Codes fiscaux corrigés par la revue adversariale multi-sources CRA."""
+    from backend.server import EXPENSE_CATEGORIES
+    by = {c["code"]: c for c in EXPENSE_CATEGORIES}
+    # Corrections dues aux erreurs historiques
+    assert by["bank_charges"]["t2125_line"] == "8710"
+    assert by["bank_charges"]["gifi_code"] == "8715"
+    assert by["subscriptions"]["t2125_line"] == "8760"
+    assert by["subscriptions"]["gifi_code"] == "8810"
+    assert by["subcontracts"]["t2125_line"] == "9060"  # pas de ligne T2125 dédiée
+    assert by["subcontracts"]["gifi_code"] == "9110"
+    # T2125 8521 ≠ GIFI 8520 pour la pub (à 1 chiffre d'écart)
+    assert by["advertising"]["t2125_line"] == "8521"
+    assert by["advertising"]["gifi_code"] == "8520"
+    # Télécom : T2125 pas de ligne dédiée (convention 9220), GIFI granulaire
+    assert by["telecom_cell"]["gifi_code"] == "9225"
+    assert by["telecom_internet"]["gifi_code"] == "9152"

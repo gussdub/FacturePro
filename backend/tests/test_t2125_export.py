@@ -12,8 +12,8 @@ class TestT2125LineLabels:
         assert T2125_LABEL_TABLE_TAX_YEAR == 2024
 
     def test_known_line(self):
-        assert T2125_LINE_LABELS["8520"] == "Publicité et promotion"
-        assert T2125_LINE_LABELS["8523"] == "Repas et représentation"
+        assert T2125_LINE_LABELS["8521"] == "Publicité"
+        assert T2125_LINE_LABELS["8523"] == "Repas et frais de représentation"
         assert T2125_LINE_LABELS["9945"] == "Frais d'utilisation de la résidence aux fins de l'entreprise"
 
     def test_all_expense_categories_arc_lines_covered(self):
@@ -21,7 +21,7 @@ class TestT2125LineLabels:
         Test de régression : ajouter une catégorie sans libellé doit faire échouer."""
         missing = []
         for cat in EXPENSE_CATEGORIES:
-            arc_line = cat.get("arc_line") or ""
+            arc_line = cat.get("t2125_line") or ""
             if arc_line and arc_line not in T2125_LINE_LABELS:
                 missing.append((cat["code"], arc_line))
         assert not missing, f"Catégories avec arc_line non couverte : {missing}"
@@ -107,9 +107,9 @@ class TestGroupByArcLine:
         assert line_8523["note"] == "50 % déductible"
 
     def test_label_from_table(self):
-        flat = {"advertising": {"gross": 100.0, "deductible": 100.0, "arc_line": "8520"}}
+        flat = {"advertising": {"gross": 100.0, "deductible": 100.0, "arc_line": "8521"}}
         out = _t2125_group_by_arc_line(flat)
-        assert out[0]["label"] == "Publicité et promotion"
+        assert out[0]["label"] == "Publicité"
 
     def test_unknown_arc_line_label_fallback(self):
         flat = {"x": {"gross": 10.0, "deductible": 10.0, "arc_line": "9999"}}

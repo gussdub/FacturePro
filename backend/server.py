@@ -154,32 +154,93 @@ EXPENSE_CATEGORY_GROUPS = {
 }
 
 EXPENSE_CATEGORIES = [
-    # Bureau et administration
-    {"code": "office_expenses",    "label_fr": "Frais de bureau",         "label_en": "Office expenses",         "arc_line": "8810", "deductible_percentage": 100, "group": "office"},
-    {"code": "office_supplies",    "label_fr": "Fournitures",             "label_en": "Office supplies",         "arc_line": "8811", "deductible_percentage": 100, "group": "office"},
-    {"code": "professional_fees",  "label_fr": "Honoraires professionnels","label_en": "Professional fees",      "arc_line": "8860", "deductible_percentage": 100, "group": "office"},
-    {"code": "bank_charges",       "label_fr": "Frais bancaires",         "label_en": "Bank charges",            "arc_line": "8620", "deductible_percentage": 100, "group": "office"},
-    {"code": "subscriptions",      "label_fr": "Abonnements et licences", "label_en": "Subscriptions & licences", "arc_line": "8740", "deductible_percentage": 100, "group": "office"},
-    {"code": "telecom_cell",       "label_fr": "Télécom — cellulaire",    "label_en": "Telecom — mobile",        "arc_line": "9220", "deductible_percentage": 100, "group": "office"},
-    {"code": "telecom_internet",   "label_fr": "Télécom — internet",      "label_en": "Telecom — internet",      "arc_line": "9220", "deductible_percentage": 100, "group": "office"},
+    # code, label_fr, label_en, t2125_line, t2125_label_fr, gifi_code, gifi_label_en, deductible_percentage, group
+    # Bureau
+    {"code": "office_expenses",    "label_fr": "Frais de bureau",         "label_en": "Office expenses",
+     "t2125_line": "8810", "t2125_label_fr": "Frais de bureau",
+     "gifi_code":  "8810", "gifi_label_en": "Office expenses",
+     "deductible_percentage": 100, "group": "office"},
+    {"code": "office_supplies",    "label_fr": "Fournitures",             "label_en": "Office supplies",
+     "t2125_line": "8811", "t2125_label_fr": "Papeterie et fournitures de bureau",
+     "gifi_code":  "8811", "gifi_label_en": "Office stationery and supplies",
+     "deductible_percentage": 100, "group": "office"},
+    {"code": "professional_fees",  "label_fr": "Honoraires professionnels","label_en": "Professional fees",
+     "t2125_line": "8860", "t2125_label_fr": "Honoraires professionnels",
+     "gifi_code":  "8860", "gifi_label_en": "Professional fees",
+     "deductible_percentage": 100, "group": "office"},
+    {"code": "bank_charges",       "label_fr": "Frais bancaires",         "label_en": "Bank charges",
+     "t2125_line": "8710", "t2125_label_fr": "Intérêts et frais bancaires",
+     "gifi_code":  "8715", "gifi_label_en": "Bank charges",
+     "deductible_percentage": 100, "group": "office"},
+    {"code": "subscriptions",      "label_fr": "Abonnements et licences", "label_en": "Subscriptions & licences",
+     "t2125_line": "8760", "t2125_label_fr": "Taxes d'affaires, droits d'adhésion et licences",
+     "gifi_code":  "8810", "gifi_label_en": "Office expenses",
+     "deductible_percentage": 100, "group": "office"},
+    {"code": "telecom_cell",       "label_fr": "Télécom — cellulaire",    "label_en": "Telecom — mobile",
+     "t2125_line": "9220", "t2125_label_fr": "Services publics",
+     "gifi_code":  "9225", "gifi_label_en": "Telephone and telecommunications",
+     "deductible_percentage": 100, "group": "office"},
+    {"code": "telecom_internet",   "label_fr": "Télécom — internet",      "label_en": "Telecom — internet",
+     "t2125_line": "9220", "t2125_label_fr": "Services publics",
+     "gifi_code":  "9152", "gifi_label_en": "Internet",
+     "deductible_percentage": 100, "group": "office"},
     # Marketing
-    {"code": "advertising",        "label_fr": "Publicité et promotion",  "label_en": "Advertising & promotion", "arc_line": "8520", "deductible_percentage": 100, "group": "marketing"},
-    {"code": "meals_entertainment","label_fr": "Repas et représentation", "label_en": "Meals & entertainment",   "arc_line": "8523", "deductible_percentage": 50,  "group": "marketing"},
-    # Local et services publics
-    {"code": "rent",               "label_fr": "Loyer",                   "label_en": "Rent",                    "arc_line": "8910", "deductible_percentage": 100, "group": "premises"},
-    {"code": "utilities",          "label_fr": "Services publics",        "label_en": "Utilities",               "arc_line": "9220", "deductible_percentage": 100, "group": "premises"},
-    {"code": "insurance",          "label_fr": "Assurances",              "label_en": "Insurance",               "arc_line": "8690", "deductible_percentage": 100, "group": "premises"},
-    {"code": "repairs_maintenance","label_fr": "Entretien et réparations","label_en": "Repairs & maintenance",   "arc_line": "8960", "deductible_percentage": 100, "group": "premises"},
-    # Déplacements et véhicule
-    {"code": "travel",             "label_fr": "Frais de déplacement",    "label_en": "Travel",                  "arc_line": "9200", "deductible_percentage": 100, "group": "travel"},
-    {"code": "vehicle_expenses",   "label_fr": "Frais de véhicule",       "label_en": "Vehicle expenses",        "arc_line": "9281", "deductible_percentage": 100, "group": "travel"},
-    {"code": "delivery",           "label_fr": "Livraison et fret",       "label_en": "Delivery & freight",      "arc_line": "9275", "deductible_percentage": 100, "group": "travel"},
-    # Personnel et services
-    {"code": "salaries",           "label_fr": "Salaires et avantages",   "label_en": "Salaries & benefits",     "arc_line": "9060", "deductible_percentage": 100, "group": "personnel"},
-    {"code": "subcontracts",       "label_fr": "Sous-traitance",          "label_en": "Subcontracts",            "arc_line": "9367", "deductible_percentage": 100, "group": "personnel"},
-    {"code": "management_fees",    "label_fr": "Frais de gestion",        "label_en": "Management fees",         "arc_line": "8871", "deductible_percentage": 100, "group": "personnel"},
+    {"code": "advertising",        "label_fr": "Publicité et promotion",  "label_en": "Advertising & promotion",
+     "t2125_line": "8521", "t2125_label_fr": "Publicité",
+     "gifi_code":  "8520", "gifi_label_en": "Advertising and promotion",
+     "deductible_percentage": 100, "group": "marketing"},
+    {"code": "meals_entertainment","label_fr": "Repas et représentation", "label_en": "Meals & entertainment",
+     "t2125_line": "8523", "t2125_label_fr": "Repas et frais de représentation",
+     "gifi_code":  "8523", "gifi_label_en": "Meals and entertainment",
+     "deductible_percentage": 50,  "group": "marketing"},
+    # Locaux
+    {"code": "rent",               "label_fr": "Loyer",                   "label_en": "Rent",
+     "t2125_line": "8910", "t2125_label_fr": "Loyer",
+     "gifi_code":  "8910", "gifi_label_en": "Rental",
+     "deductible_percentage": 100, "group": "premises"},
+    {"code": "utilities",          "label_fr": "Services publics",        "label_en": "Utilities",
+     "t2125_line": "9220", "t2125_label_fr": "Services publics",
+     "gifi_code":  "9220", "gifi_label_en": "Utilities",
+     "deductible_percentage": 100, "group": "premises"},
+    {"code": "insurance",          "label_fr": "Assurances",              "label_en": "Insurance",
+     "t2125_line": "8690", "t2125_label_fr": "Assurances",
+     "gifi_code":  "8690", "gifi_label_en": "Insurance",
+     "deductible_percentage": 100, "group": "premises"},
+    {"code": "repairs_maintenance","label_fr": "Entretien et réparations","label_en": "Repairs & maintenance",
+     "t2125_line": "8960", "t2125_label_fr": "Entretien et réparations",
+     "gifi_code":  "8960", "gifi_label_en": "Repairs and maintenance",
+     "deductible_percentage": 100, "group": "premises"},
+    # Déplacements
+    {"code": "travel",             "label_fr": "Frais de déplacement",    "label_en": "Travel",
+     "t2125_line": "9200", "t2125_label_fr": "Frais de déplacement",
+     "gifi_code":  "9200", "gifi_label_en": "Travel expenses",
+     "deductible_percentage": 100, "group": "travel"},
+    {"code": "vehicle_expenses",   "label_fr": "Frais de véhicule",       "label_en": "Vehicle expenses",
+     "t2125_line": "9281", "t2125_label_fr": "Frais de véhicule à moteur",
+     "gifi_code":  "9281", "gifi_label_en": "Vehicle expenses",
+     "deductible_percentage": 100, "group": "travel"},
+    {"code": "delivery",           "label_fr": "Livraison et fret",       "label_en": "Delivery & freight",
+     "t2125_line": "9275", "t2125_label_fr": "Livraison, transport et messagerie",
+     "gifi_code":  "9275", "gifi_label_en": "Delivery, freight and express",
+     "deductible_percentage": 100, "group": "travel"},
+    # Personnel
+    {"code": "salaries",           "label_fr": "Salaires et avantages",   "label_en": "Salaries & benefits",
+     "t2125_line": "9060", "t2125_label_fr": "Salaires, traitements et avantages",
+     "gifi_code":  "9060", "gifi_label_en": "Salaries and wages",
+     "deductible_percentage": 100, "group": "personnel"},
+    {"code": "subcontracts",       "label_fr": "Sous-traitance",          "label_en": "Subcontracts",
+     "t2125_line": "9060", "t2125_label_fr": "Salaires, traitements et avantages",
+     "gifi_code":  "9110", "gifi_label_en": "Sub-contracts",
+     "deductible_percentage": 100, "group": "personnel"},
+    {"code": "management_fees",    "label_fr": "Frais de gestion",        "label_en": "Management fees",
+     "t2125_line": "8871", "t2125_label_fr": "Frais de gestion et d'administration",
+     "gifi_code":  "8871", "gifi_label_en": "Management and administration fees",
+     "deductible_percentage": 100, "group": "personnel"},
     # Autre
-    {"code": "other",              "label_fr": "Autre",                   "label_en": "Other",                   "arc_line": "",     "deductible_percentage": 100, "group": "other"},
+    {"code": "other",              "label_fr": "Autre",                   "label_en": "Other",
+     "t2125_line": "9270", "t2125_label_fr": "Autres dépenses",
+     "gifi_code":  "9270", "gifi_label_en": "Other expenses",
+     "deductible_percentage": 100, "group": "other"},
 ]
 
 
@@ -379,7 +440,7 @@ def _build_expense_category_snapshot(expense_data, amount_cad, telecom_business_
         arc_line, percentage = "", 100
     elif cat:
         label = cat["label_fr"]
-        arc_line = cat["arc_line"]
+        arc_line = cat["t2125_line"]
         percentage = cat["deductible_percentage"]
     else:
         # Unknown or empty code: graceful — use whatever raw category text was sent.
@@ -588,7 +649,7 @@ def _aggregate_pnl(scope, start, end, basis):
             rows.append({
                 "code": cat["code"],
                 "label": cat["label_fr"],
-                "arc_line": cat["arc_line"],
+                "arc_line": cat["t2125_line"],
                 "gross": round(stats["gross"], 2),
                 "deductible": round(stats["deductible"], 2),
             })
@@ -652,7 +713,7 @@ def _merge_expense_groups(current_groups, previous_groups):
             rows.append({
                 "code": code,
                 "label": cat_def["label_fr"],
-                "arc_line": cat_def["arc_line"],
+                "arc_line": cat_def["t2125_line"],
                 "current": {
                     "gross": c_cat["gross"] if c_cat else 0,
                     "deductible": c_cat["deductible"] if c_cat else 0,
@@ -7077,25 +7138,24 @@ VEHICLE_CATEGORIES = {"vehicle_expenses"}
 T2125_LINE_LABELS = {
     # Revenu
     "8000": "Recettes brutes",
-    # Dépenses — couvre toutes les arc_line de EXPENSE_CATEGORIES + ajustements
-    "8520": "Publicité et promotion",
-    "8523": "Repas et représentation",
-    "8620": "Frais bancaires",
+    # Dépenses — libellés officiels ARC (T2125 F(24))
+    "8521": "Publicité",
+    "8523": "Repas et frais de représentation",
     "8690": "Assurances",
-    "8740": "Abonnements et licences",
+    "8710": "Intérêts et frais bancaires",
+    "8760": "Taxes d'affaires, droits d'adhésion et licences",
     "8810": "Frais de bureau",
-    "8811": "Fournitures de bureau",
+    "8811": "Papeterie et fournitures de bureau",
     "8860": "Honoraires professionnels",
-    "8871": "Frais de gestion",
+    "8871": "Frais de gestion et d'administration",
     "8910": "Loyer",
     "8960": "Entretien et réparations",
-    "9060": "Salaires et avantages",
+    "9060": "Salaires, traitements et avantages",
     "9200": "Frais de déplacement",
     "9220": "Services publics",
     "9270": "Autres dépenses",
-    "9275": "Livraison et fret",
-    "9281": "Frais relatifs aux véhicules à moteur",
-    "9367": "Sous-traitance",
+    "9275": "Livraison, transport et messagerie",
+    "9281": "Frais de véhicule à moteur",
     "9945": "Frais d'utilisation de la résidence aux fins de l'entreprise",
 }
 
