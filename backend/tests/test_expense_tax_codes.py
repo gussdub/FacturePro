@@ -90,3 +90,24 @@ def test_snapshot_unknown_code_graceful():
     assert snap["category_t2125_line"] == ""
     assert snap["category_gifi_code"] == ""
     assert snap["category_arc_line"] == ""
+
+
+def test_categories_endpoint_returns_dual_codes(auth_headers):
+    """GET /api/expense-categories retourne les 4 nouveaux champs par catégorie.
+
+    L'endpoint expose une enveloppe {"categories": [...], "groups": {...}} —
+    contrat inchangé (ExpensesPage.js le consomme tel quel)."""
+    r = client.get("/api/expense-categories", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert "categories" in payload and "groups" in payload
+    cats = payload["categories"]
+    assert isinstance(cats, list) and len(cats) >= 20
+    by = {c["code"]: c for c in cats}
+    subs = by["subscriptions"]
+    assert subs["t2125_line"] == "8760"
+    assert subs["t2125_label_fr"] == "Taxes d'affaires, droits d'adhésion et licences"
+    assert subs["gifi_code"] == "8810"
+    assert subs["gifi_label_en"] == "Office expenses"
+    # arc_line n'est plus dans le modèle canonique (T1)
+    assert "arc_line" not in subs, "arc_line ne doit plus être présent sur la catégorie"
