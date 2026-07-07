@@ -7301,16 +7301,16 @@ def _flatten_pnl_expenses(expense_groups):
     """
     flat = {}
     for group in (expense_groups or []):
-        for exp in (group.get("expenses") or []):
-            code = (exp.get("category_code") or "").strip() or "other"
+        for cat_row in (group.get("categories") or []):
+            code = (cat_row.get("code") or "").strip() or "other"
             cat = _find_category(code)
             t2125_line = cat["t2125_line"] if cat else "9270"
             gifi_code = cat["gifi_code"] if cat else "9270"
             if code not in flat:
                 flat[code] = {"gross": 0.0, "deductible": 0.0,
                               "t2125_line": t2125_line, "gifi_code": gifi_code}
-            flat[code]["gross"] += float(exp.get("gross", 0) or 0)
-            flat[code]["deductible"] += float(exp.get("deductible", 0) or 0)
+            flat[code]["gross"] += float(cat_row.get("gross", 0) or 0)
+            flat[code]["deductible"] += float(cat_row.get("deductible", 0) or 0)
     for code in flat:
         flat[code]["gross"] = round(flat[code]["gross"], 2)
         flat[code]["deductible"] = round(flat[code]["deductible"], 2)
@@ -7475,6 +7475,29 @@ def _build_t2125_report(scope, year, basis):
         "net_income_line": "9369",
         "is_partial_year": year >= datetime.now(timezone.utc).year,
     }
+
+
+def _build_gifi_report(scope, year, basis):
+    """Rapport Sommaire GIFI (feature #7.6) — miroir simplifié de T2125.
+
+    Agrège les dépenses de l'année via _aggregate_pnl (même base que P&L / T2125)
+    puis groupe par code GIFI. Pas d'ajustement home/vehicle (une société traite ces
+    postes différemment — hors périmètre v1).
+
+    Contrairement à T2125, aucune borne d'année n'est imposée ici (le rapport GIFI
+    n'est pas soumis à la même contrainte de millésime fiscal — cf. tests feature #7.6
+    qui valident l'agrégation avec une année future arbitraire).
+    """
+    if basis not in T2125_VALID_BASES:
+        raise HTTPException(422, "basis must be 'accrual' or 'cash'")
+
+    period = {"start": f"{year}-01-01", "end": f"{year}-12-31"}
+
+    pnl = _aggregate_pnl(scope, period["start"], period["end"], basis=basis)
+    flat_expenses = _flatten_pnl_expenses(pnl.get("expense_groups", []))
+    lines = _gifi_group_by_code(flat_expenses)
+    total = round(sum(ln["amount"] for ln in lines), 2)
+    return {"year": year, "basis": basis, "lines": lines, "total": total}
 
 
 # ─── Quotes CRUD ───
@@ -10672,6 +10695,19 @@ def get_pnl_report_pdf(
     filename = f"etat-des-resultats-{start}-au-{end}.pdf"
     return StreamingResponse(pdf_buffer, media_type="application/pdf",
                               headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ─── GIFI report endpoint (feature #7.6) ───
+
+
+@app.get("/api/reports/gifi")
+def get_gifi_report(
+    year: int,
+    basis: str = "accrual",
+    current_user: CurrentUser = Depends(require_permission("reports:read")),
+):
+    """Retourne le rapport Sommaire GIFI au format JSON pour preview UI (entité corporation)."""
+    return _build_gifi_report(_org_scope(current_user), year, basis)
 
 
 # ─── T2125 export endpoints (feature #10) ───

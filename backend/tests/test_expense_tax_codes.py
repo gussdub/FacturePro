@@ -182,14 +182,44 @@ def test_gifi_group_by_code_aggregates_correctly():
 
 
 def test_flatten_reads_both_codes():
-    """_flatten_pnl_expenses attache t2125_line ET gifi_code sur chaque catégorie."""
+    """_flatten_pnl_expenses attache t2125_line ET gifi_code sur chaque catégorie.
+
+    Shape fidèle à _aggregate_pnl: expense_groups[].categories[] avec "code"
+    (pas "expenses[].category_code" — ancienne forme incorrecte)."""
     from backend.server import _flatten_pnl_expenses
     groups = [{
-        "expenses": [
-            {"category_code": "subscriptions", "gross": 50.0, "deductible": 50.0},
+        "categories": [
+            {"code": "subscriptions", "gross": 50.0, "deductible": 50.0},
         ],
     }]
     flat = _flatten_pnl_expenses(groups)
     assert "subscriptions" in flat
     assert flat["subscriptions"]["t2125_line"] == "8760"
     assert flat["subscriptions"]["gifi_code"] == "8810"
+
+
+def test_gifi_report_endpoint(auth_headers):
+    """GET /api/reports/gifi?year=YYYY&basis=cash retourne l'agrégation par gifi_code."""
+    # Créer deux dépenses dans deux catégories distinctes
+    e1 = client.post("/api/expenses", headers=auth_headers, json={
+        "amount": 100.0, "currency": "CAD", "category_code": "meals_entertainment",
+        "description": "Diner client", "expense_date": "2099-04-10"}).json()["id"]
+    e2 = client.post("/api/expenses", headers=auth_headers, json={
+        "amount": 500.0, "currency": "CAD", "category_code": "rent",
+        "description": "Loyer avril", "expense_date": "2099-04-01"}).json()["id"]
+    try:
+        r = client.get("/api/reports/gifi?year=2099&basis=cash", headers=auth_headers)
+        assert r.status_code == 200, r.text
+        report = r.json()
+        assert "lines" in report and "total" in report
+        by = {ln["code"]: ln for ln in report["lines"]}
+        assert "8523" in by  # meals GIFI
+        assert "8910" in by  # rent GIFI
+        # Meals 50% déductible → 50.0
+        assert by["8523"]["amount"] == 50.0
+        assert by["8523"]["label"] == "Meals and entertainment"
+        assert by["8910"]["amount"] == 500.0
+    finally:
+        from backend import server
+        for eid in (e1, e2):
+            server.db.expenses.delete_one({"id": eid})
