@@ -114,7 +114,8 @@ class TestBuildExpenseCategorySnapshot:
         assert snap["category"] == "Cotisations syndicales"
         assert snap["category_code"] == "other"
         assert snap["category_custom_label"] == "Cotisations syndicales"
-        assert snap["category_arc_line"] == ""
+        # F7.6-T2 : "other" a désormais un code T2125/GIFI dédié (9270), plus vide.
+        assert snap["category_arc_line"] == "9270"
         assert snap["deductible_percentage"] == 100
         assert snap["deductible_amount"] == 50.0
 

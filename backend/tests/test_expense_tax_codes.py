@@ -59,3 +59,34 @@ def test_expense_categories_correct_codes():
     # Télécom : T2125 pas de ligne dédiée (convention 9220), GIFI granulaire
     assert by["telecom_cell"]["gifi_code"] == "9225"
     assert by["telecom_internet"]["gifi_code"] == "9152"
+
+
+def test_snapshot_writes_dual_codes():
+    """Le snapshot fige category_t2125_line + category_gifi_code + garde
+    category_arc_line pour la rétrocompat du rapport T2125."""
+    from backend.server import _build_expense_category_snapshot
+    snap = _build_expense_category_snapshot({"category_code": "subscriptions"}, 100.0)
+    assert snap["category_t2125_line"] == "8760"
+    assert snap["category_t2125_label_fr"] == "Taxes d'affaires, droits d'adhésion et licences"
+    assert snap["category_gifi_code"] == "8810"
+    assert snap["category_gifi_label_en"] == "Office expenses"
+    # Rétrocompat : category_arc_line = category_t2125_line
+    assert snap["category_arc_line"] == "8760"
+
+
+def test_snapshot_other_code_empty_gifi_ok():
+    """Le code 'other' a un gifi/t2125 dédiés (9270) — pas de champ vide."""
+    from backend.server import _build_expense_category_snapshot
+    snap = _build_expense_category_snapshot({"category_code": "other"}, 50.0)
+    assert snap["category_t2125_line"] == "9270"
+    assert snap["category_gifi_code"] == "9270"
+
+
+def test_snapshot_unknown_code_graceful():
+    """Un code inconnu → snapshot avec champs vides (comportement legacy conservé)."""
+    from backend.server import _build_expense_category_snapshot
+    snap = _build_expense_category_snapshot(
+        {"category_code": "totally_made_up", "category": "Mon label libre"}, 10.0)
+    assert snap["category_t2125_line"] == ""
+    assert snap["category_gifi_code"] == ""
+    assert snap["category_arc_line"] == ""

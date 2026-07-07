@@ -424,34 +424,54 @@ def _build_expense_category_snapshot(expense_data, amount_cad, telecom_business_
 
     Returns:
         dict avec category, category_code, category_custom_label,
-        category_arc_line, deductible_percentage, deductible_amount.
+        category_t2125_line, category_t2125_label_fr,
+        category_gifi_code, category_gifi_label_en,
+        category_arc_line (LEGACY = category_t2125_line pour rétrocompat rapport T2125),
+        deductible_percentage, deductible_amount.
 
     Comportement :
     - Si category_code est un code canonique → snapshot depuis le catalogue.
-    - Si category_code == "other" → utilise category_custom_label (fallback "Autre").
+    - Si category_code == "other" → utilise category_custom_label (fallback "Autre") ;
+      les codes T2125/GIFI = 9270 (Autres dépenses).
     - Sinon (vide, inconnu) → graceful : reprend le label legacy "category",
-      arc_line="", percentage=100.
+      t2125/gifi/arc_line = "", percentage = 100.
     """
     code = (expense_data.get("category_code") or "").strip()
     custom_label = expense_data.get("category_custom_label", "").strip()
     cat = _find_category(code)
     if code == "other":
         label = custom_label or "Autre"
-        arc_line, percentage = "", 100
+        t2125_line = cat["t2125_line"] if cat else "9270"
+        t2125_label_fr = cat["t2125_label_fr"] if cat else "Autres dépenses"
+        gifi_code = cat["gifi_code"] if cat else "9270"
+        gifi_label_en = cat["gifi_label_en"] if cat else "Other expenses"
+        percentage = 100
     elif cat:
         label = cat["label_fr"]
-        arc_line = cat["t2125_line"]
+        t2125_line = cat["t2125_line"]
+        t2125_label_fr = cat["t2125_label_fr"]
+        gifi_code = cat["gifi_code"]
+        gifi_label_en = cat["gifi_label_en"]
         percentage = cat["deductible_percentage"]
     else:
-        # Unknown or empty code: graceful — use whatever raw category text was sent.
+        # Code inconnu ou vide : graceful — libellé legacy, aucun code fiscal figé.
         label = expense_data.get("category", "")
-        arc_line, percentage = "", 100
+        t2125_line = ""
+        t2125_label_fr = ""
+        gifi_code = ""
+        gifi_label_en = ""
+        percentage = 100
     deductible = round(amount_cad * percentage / 100, 2)
     snapshot = {
         "category": label,
         "category_code": code,
         "category_custom_label": custom_label if code == "other" else "",
-        "category_arc_line": arc_line,
+        "category_t2125_line": t2125_line,
+        "category_t2125_label_fr": t2125_label_fr,
+        "category_gifi_code": gifi_code,
+        "category_gifi_label_en": gifi_label_en,
+        # LEGACY (rétrocompat rapport T2125 + export CSV existants) — aligné sur T2125.
+        "category_arc_line": t2125_line,
         "deductible_percentage": percentage,
         "deductible_amount": deductible,
     }
