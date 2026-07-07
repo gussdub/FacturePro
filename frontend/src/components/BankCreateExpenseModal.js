@@ -1,10 +1,19 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import axios from "axios";
 import { X } from "lucide-react";
 import { BACKEND_URL } from "../config";
 
+function taxCodeLabel(cat, entityType) {
+  if (!cat) return '';
+  if (entityType === 'corporation') {
+    return cat.gifi_code ? ` — GIFI ${cat.gifi_code}` : '';
+  }
+  return cat.t2125_line ? ` — T2125 ligne ${cat.t2125_line}` : '';
+}
+
 export default function BankCreateExpenseModal({ tx, onClose, onCreated }) {
-  const [categoryGroups, setCategoryGroups] = useState([]);
+  const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
+  const [entityType, setEntityType] = useState('sole_proprietor');
   const [categoryCode, setCategoryCode] = useState("");
   const [vendor, setVendor] = useState((tx.description || "").slice(0, 60));
   const [busy, setBusy] = useState(false);
@@ -12,9 +21,25 @@ export default function BankCreateExpenseModal({ tx, onClose, onCreated }) {
 
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/expense-categories`)
-      .then(r => setCategoryGroups(r.data || []))
+      .then(r => setCategoryCatalog(r.data || { categories: [], groups: {} }))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/settings/company`)
+      .then(r => setEntityType(r.data?.entity_type || 'sole_proprietor'))
+      .catch(() => {});
+  }, []);
+
+  const groupedCategories = useMemo(() => {
+    const grouped = {};
+    (categoryCatalog.categories || []).forEach(cat => {
+      const g = cat.group || 'other';
+      if (!grouped[g]) grouped[g] = [];
+      grouped[g].push(cat);
+    });
+    return grouped;
+  }, [categoryCatalog]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -50,13 +75,30 @@ export default function BankCreateExpenseModal({ tx, onClose, onCreated }) {
             <select value={categoryCode} onChange={(e) => setCategoryCode(e.target.value)}
                     required style={{ width: "100%", padding: 6, marginTop: 4, border: "1px solid #d1d5db", borderRadius: 4 }}>
               <option value="">— choisir —</option>
-              {categoryGroups.map(g => (
-                <optgroup key={g.group_code} label={g.group_label}>
-                  {(g.categories || []).map(c => (
-                    <option key={c.code} value={c.code}>{c.label_fr || c.label || c.code}</option>
+              {Object.entries(groupedCategories)
+                .filter(([groupKey]) => groupKey !== 'other')
+                .map(([groupKey, cats]) => (
+                  <optgroup key={groupKey} label={categoryCatalog.groups?.[groupKey] || groupKey}>
+                    {cats.map(c => (
+                      <option key={c.code} value={c.code}>
+                        {c.label_fr || c.label || c.code}
+                        {c.deductible_percentage < 100 ? ` ${c.deductible_percentage}%` : ''}
+                        {taxCodeLabel(c, entityType)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))
+              }
+              {groupedCategories.other && (
+                <optgroup label={categoryCatalog.groups?.other || 'Autre'}>
+                  {groupedCategories.other.map(c => (
+                    <option key={c.code} value={c.code}>
+                      {c.label_fr || c.label || c.code}
+                      {taxCodeLabel(c, entityType)}
+                    </option>
                   ))}
                 </optgroup>
-              ))}
+              )}
             </select>
           </label>
           {err && <p style={{ color: "#dc2626", fontSize: 13 }}>{err}</p>}

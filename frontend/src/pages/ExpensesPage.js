@@ -7,6 +7,14 @@ import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 import { useAuth } from '../context/AuthContext';
 import useIsMobile from '../hooks/useIsMobile';
 
+function taxCodeLabel(cat, entityType) {
+  if (!cat) return '';
+  if (entityType === 'corporation') {
+    return cat.gifi_code ? ` — GIFI ${cat.gifi_code}` : '';
+  }
+  return cat.t2125_line ? ` — T2125 ligne ${cat.t2125_line}` : '';
+}
+
 function computeTaxesPaid(amountGross, province) {
   const a = parseFloat(amountGross) || 0;
   if (a <= 0) return { gst: 0, qst: 0, hst: 0 };
@@ -50,6 +58,7 @@ const ExpensesPage = () => {
     gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false,
   });
   const [categoryCatalog, setCategoryCatalog] = useState({ categories: [], groups: {} });
+  const [entityType, setEntityType] = useState('sole_proprietor');
   const [exchangeRates, setExchangeRates] = useState(null); // { CAD:1, USD:0.73, ... } | null (unités étrangères par 1 CAD)
   const [companyProvince, setCompanyProvince] = useState('QC');
   // % d'usage d'affaires du véhicule (T2125 feature #10). > 0 = méthode « frais réels au prorata »,
@@ -109,6 +118,7 @@ const ExpensesPage = () => {
       .then(resp => {
         setCompanyProvince(resp.data.province || 'QC');
         setVehicleBusinessPct(Number(resp.data.vehicle_business_percentage) || 0);
+        setEntityType(resp.data?.entity_type || 'sole_proprietor');
       })
       .catch(() => {});
   }, []);
@@ -1011,7 +1021,7 @@ const ExpensesPage = () => {
                           <option key={cat.code} value={cat.code}>
                             {cat.label_fr}
                             {cat.deductible_percentage < 100 ? ` ${cat.deductible_percentage}%` : ''}
-                            {cat.arc_line ? ` (${cat.arc_line})` : ''}
+                            {taxCodeLabel(cat, entityType)}
                           </option>
                         ))}
                       </optgroup>
