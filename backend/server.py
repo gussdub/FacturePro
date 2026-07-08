@@ -3136,126 +3136,46 @@ def _expense_net_business_cad(exp):
 
 
 def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> list:
-    """Lignes de l'écriture de dépense (spec §5.6).
+    """Lignes de l'écriture de charge d'une dépense (feature #7.7 — dérivé des helpers unifiés).
 
-    `amount` est saisi TTC (taxes incluses ; cohérent avec un reçu scanné,
-    feature #8) → `amount_cad` est le décaissement TOTAL. Les `*_paid_cad` sont la
-    part de taxe récupérable ; elles sont saisies dans la DEVISE de la dépense
-    (create_expense les stocke VERBATIM, sans conversion, alors qu'il convertit
-    `amount_cad`) → on les reconvertit ici au taux `exchange_rate_to_cad` pour une
-    dépense en devise étrangère, EXACTEMENT comme _build_invoice_revenue_lines le
-    fait pour les taxes de facture (§5.1). No-op pour une dépense CAD (cas dominant,
-    feature #8). La charge nette est calculée PAR DIFFÉRENCE (amount_cad − Σ taxes)
-    → l'écriture est TOUJOURS équilibrée (Dr charge nette + Dr taxes 12xx ==
-    Cr amount_cad), quelle que soit la combinaison de taxes.
+    Dr 5xxx (charge NETTE = amount − personal − taxes récupérables, compte résolu par catégorie,
+    fallback 5900) / Dr 1200/1210/1220 (taxes récupérables : 50 % repas, prorata télécom avec
+    seuils via _expense_recoverable_tax_cad) / Dr offset actionnaire (portion perso télécom,
+    compte de BILAN 1300 par défaut) / Cr 1000 (Encaisse) ou 2000 (Fournisseurs) selon le flag org.
 
-    GARDE-FOU [COMPTA] : si les taxes récupérables saisies dépassent le décaissement
-    total (erreur de saisie : on ne récupère jamais plus de taxe que le montant TTC
-    payé), la charge nette par différence deviendrait NÉGATIVE → ligne de débit < 0,
-    illégale, rejetée par _validate_entry_balance (l'écriture ne serait alors PAS
-    postée du tout, seul un autopost_error resterait — trou comptable silencieux).
-    On PLAFONNE donc les taxes à `amount_cad` (proportionnellement si plusieurs) →
-    net = 0, aucune ligne négative, écriture équilibrée et POSTÉE.
-
-    Dr 5xxx (charge nette, compte résolu par catégorie, fallback 5900) /
-    Dr 1200/1210/1220 (taxes récupérables, si > 0 ; 1220 créé à la volée) /
-    Cr 1000 (Encaisse, défaut) OU 2000 (Comptes fournisseurs) selon le flag org
-    `expense_default_credit_account` (validé ∈ {"1000","2000"}, défaut "1000")."""
+    Équilibre partie double GARANTI par construction : le total des taxes est plafonné à
+    (amount − personal) par _expense_recoverable_tax_cad, donc net ≥ 0 et
+    Σ débits (net + taxes + personal) == Cr amount_cad au cent exact."""
     amount_cad = round(float(expense.get("amount_cad", 0) or 0), 2)
+    gst_cad, qst_cad, hst_cad = _expense_recoverable_tax_cad(expense)
+    personal_cad = min(max(round(float(expense.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amount_cad)
+    net_cad = round(amount_cad - personal_cad - gst_cad - qst_cad - hst_cad, 2)
+    if net_cad < 0:
+        net_cad = 0.0  # défensif : le plafonnement des taxes garantit déjà net ≥ 0
 
-    # Reconversion des taxes en CAD (devise de dépense → CAD), comme pour les taxes
-    # de facture. Divise par le taux uniquement si la dépense est en devise
-    # étrangère et le taux est valide ; sinon prend la valeur telle quelle.
-    rate = expense.get("exchange_rate_to_cad") or 1.0
-    is_foreign = expense.get("currency") not in (None, "", "CAD") and rate > 0
-
-    def _tax_cad(x):
-        x = float(x or 0)
-        return round((x / rate), 2) if is_foreign else round(x, 2)
-
-    gst_cad = _tax_cad(expense.get("gst_paid_cad"))
-    qst_cad = _tax_cad(expense.get("qst_paid_cad"))
-    hst_cad = _tax_cad(expense.get("hst_paid_cad"))
-
-    # [COMPTA] Plafonne les taxes récupérables à amount_cad si leur somme le dépasse
-    # (erreur de saisie). Réduction PROPORTIONNELLE pour préserver la ventilation
-    # relative TPS/TVQ/TVH ; le reliquat d'arrondi va sur la première taxe non nulle
-    # pour que Σ taxes == amount_cad au cent exact (net = 0, équilibre exact).
-    total_tax = round(gst_cad + qst_cad + hst_cad, 2)
-    if total_tax > amount_cad and total_tax > 0:
-        ratio = amount_cad / total_tax
-        gst_cad = round(gst_cad * ratio, 2)
-        qst_cad = round(qst_cad * ratio, 2)
-        hst_cad = round(hst_cad * ratio, 2)
-        drift = round(amount_cad - (gst_cad + qst_cad + hst_cad), 2)
-        # Le reliquat d'arrondi va sur la 1re taxe non nulle → Σ taxes == amount_cad.
-        if drift != 0:
-            if gst_cad > 0:
-                gst_cad = round(gst_cad + drift, 2)
-            elif qst_cad > 0:
-                qst_cad = round(qst_cad + drift, 2)
-            elif hst_cad > 0:
-                hst_cad = round(hst_cad + drift, 2)
-
-    net_cad = round(amount_cad - gst_cad - qst_cad - hst_cad, 2)
-
-    # Compte de crédit : Encaisse (défaut) ou Comptes fournisseurs selon le flag.
-    settings = db.company_settings.find_one(
-        {"organization_id": org_id}, {"_id": 0}) or {}
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
     credit_number = settings.get("expense_default_credit_account", "1000")
     if credit_number not in ("1000", "2000"):
-        credit_number = "1000"  # robuste : valeur inconnue → Encaisse
+        credit_number = "1000"
 
-    expense_acc = _resolve_expense_account(org_id, user_id,
-                                           expense.get("category_code"))
+    expense_acc = _resolve_expense_account(org_id, user_id, expense.get("category_code"))
     if expense_acc is None:
         raise ValueError("Compte de charge introuvable (5900 attendu)")
 
-    # La ligne de charge n'est incluse QUE si net_cad > 0. Quand les taxes ont été
-    # plafonnées à amount_cad (net = 0), aucune charge n'est à comptabiliser :
-    # inclure une ligne débit=0/crédit=0 serait rejeté par _validate_entry_balance
-    # (« soit un débit soit un crédit, pas les deux » — 0 des deux côtés).
-    # [COMPTA] Feature #14 — dépense télécom à usage mixte : la portion PERSONNELLE n'est
-    # pas une charge de la société → elle va à un compte actionnaire (« Dû par un
-    # actionnaire », 1300 par défaut, configurable via telecom_personal_offset_account).
-    # Le crédit de taxe (CTI) ne s'applique qu'à la portion affaires. La portion perso est
-    # posée en RÉSIDU pour garantir Σ débits == crédit au cent près (équilibre exact).
-    # Clamp défensif : personal ∈ [0, amount]. Le snapshot le garantit déjà, mais on ne fait
-    # JAMAIS confiance à une valeur stockée pour l'équilibre partie double (édition DB directe,
-    # code futur) — sinon personal > amount produirait Σdébit > crédit (écriture rejetée).
-    personal_cad = min(max(round(float(expense.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amount_cad)
+    lines = []
+    if net_cad > 0:
+        lines.append({"account_id": expense_acc["id"], "debit": net_cad, "credit": 0.0})
+    if gst_cad > 0:
+        lines.append(_autopost_debit(org_id, user_id, "1200", gst_cad))
+    if qst_cad > 0:
+        lines.append(_autopost_debit(org_id, user_id, "1210", qst_cad))
+    if hst_cad > 0:
+        lines.append(_autopost_debit(
+            org_id, user_id, "1220", hst_cad,
+            create_if_missing=True, kind="asset", name="TVH à recouvrer"))
     if personal_cad > 0:
-        biz_frac = (amount_cad - personal_cad) / amount_cad if amount_cad > 0 else 0.0
-        gst_b = round(gst_cad * biz_frac, 2)
-        qst_b = round(qst_cad * biz_frac, 2)
-        hst_b = round(hst_cad * biz_frac, 2)
-        # Garantit charge_b >= 0 : si (perso + taxes affaires) dépasse le montant (données
-        # aberrantes — taxes ≈ 100 % de la facture), on rogne les taxes affaires pour préserver
-        # l'équilibre exact (Σdébit == crédit), plutôt que d'abandonner une charge négative.
-        over = round(personal_cad + gst_b + qst_b + hst_b - amount_cad, 2)
-        if over > 0:
-            take = min(gst_b, over); gst_b = round(gst_b - take, 2); over = round(over - take, 2)
-        if over > 0:
-            take = min(qst_b, over); qst_b = round(qst_b - take, 2); over = round(over - take, 2)
-        if over > 0:
-            take = min(hst_b, over); hst_b = round(hst_b - take, 2); over = round(over - take, 2)
-        charge_b = round(amount_cad - personal_cad - gst_b - qst_b - hst_b, 2)
-        lines = []
-        if charge_b > 0:
-            lines.append({"account_id": expense_acc["id"], "debit": charge_b, "credit": 0.0})
-        if gst_b > 0:
-            lines.append(_autopost_debit(org_id, user_id, "1200", gst_b))
-        if qst_b > 0:
-            lines.append(_autopost_debit(org_id, user_id, "1210", qst_b))
-        if hst_b > 0:
-            lines.append(_autopost_debit(
-                org_id, user_id, "1220", hst_b,
-                create_if_missing=True, kind="asset", name="TVH à recouvrer"))
-        # Compte offset de la portion perso : doit être un compte de BILAN (actif ou passif —
-        # ex. 1300 Dû par un actionnaire, ou 2200 prêt d'actionnaire), JAMAIS un compte de
-        # résultat (5xxx) ni de taxe récupérable (1200/1210/1220) — sinon la portion perso
-        # redeviendrait une charge déductible / un faux CTI. Type dérivé du numéro ; garde-fou
-        # sur le compte résolu ; fallback 1300 si invalide.
+        # Compte offset de la portion perso : compte de BILAN (actif/passif), JAMAIS 5xxx ni taxe
+        # récupérable (sinon la portion perso redeviendrait une charge / un faux CTI). Fallback 1300.
         offset_num = str(settings.get("telecom_personal_offset_account") or "1300").strip() or "1300"
         offset_kind = _account_type_for_number(offset_num) or "asset"
         offset_acc = _resolve_ledger_account(
@@ -3267,22 +3187,6 @@ def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> lis
                 org_id, user_id, "1300", create_if_missing=True,
                 kind="asset", name="Dû par un actionnaire")
         lines.append({"account_id": offset_acc["id"], "debit": personal_cad, "credit": 0.0})
-        lines.append(_autopost_credit(org_id, user_id, credit_number, amount_cad))
-        return lines
-
-    # Cas normal (non télécom, ou télécom 100 % affaires) : inchangé.
-    lines = []
-    if net_cad > 0:
-        lines.append({"account_id": expense_acc["id"], "debit": net_cad,
-                      "credit": 0.0})
-    if gst_cad > 0:
-        lines.append(_autopost_debit(org_id, user_id, "1200", gst_cad))
-    if qst_cad > 0:
-        lines.append(_autopost_debit(org_id, user_id, "1210", qst_cad))
-    if hst_cad > 0:
-        lines.append(_autopost_debit(
-            org_id, user_id, "1220", hst_cad,
-            create_if_missing=True, kind="asset", name="TVH à recouvrer"))
     lines.append(_autopost_credit(org_id, user_id, credit_number, amount_cad))
     return lines
 

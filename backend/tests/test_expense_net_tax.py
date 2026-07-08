@@ -78,3 +78,45 @@ def test_recoverable_capped_at_business_amount():
     e = _exp(category_code="office_supplies", amount_cad=10.0, gst_paid_cad=8.0, qst_paid_cad=8.0)
     gst, qst, hst = _expense_recoverable_tax_cad(e)
     assert abs((gst + qst + hst) - 10.0) < 0.011
+
+
+# ─── T2 : grand livre refactoré ───
+
+def _line_account_number(server_mod, line):
+    acc = server_mod.db.chart_of_accounts.find_one({"id": line.get("account_id")}, {"_id": 0, "account_number": 1})
+    return acc.get("account_number") if acc else None
+
+
+def test_gl_charge_lines_meals_50pct(auth_headers):
+    """Une écriture de repas récupère 50% de la taxe (12xx) et pose le reste en charge (5xxx)."""
+    from backend import server
+    org = server.db.users.find_one({"email": "gussdub@gmail.com"})
+    org_id = org.get("organization_id")
+    if not org_id:
+        pytest.skip("org_id indisponible")
+    prev = server.db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    server.db.company_settings.update_one({"organization_id": org_id},
+        {"$set": {"autopost_enabled": True}}, upsert=True)
+    exp_id = None
+    try:
+        r = client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "meals_entertainment",
+            "description": "Diner client", "expense_date": "2099-04-10",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98})
+        assert r.status_code in (200, 201), r.text
+        exp_id = r.json()["id"]
+        exp = server.db.expenses.find_one({"id": exp_id}, {"_id": 0})
+        lines = server._build_expense_charge_lines(org_id, org["id"], exp)
+        debits = round(sum(l.get("debit", 0) for l in lines), 2)
+        credits = round(sum(l.get("credit", 0) for l in lines), 2)
+        assert debits == credits == 114.98, f"équilibre: Dr {debits} Cr {credits}"
+        # Charge nette 5xxx = 107.49 (net de 50% de taxe)
+        # Taxes récupérables 12xx = 7.49 (50% de 14.98)
+        tax_debit = round(sum(l.get("debit", 0) for l in lines
+                              if _line_account_number(server, l) in ("1200", "1210", "1220")), 2)
+        assert tax_debit == 7.49, f"taxes récupérables attendues 7.49, obtenu {tax_debit}"
+    finally:
+        if exp_id:
+            client.delete(f"/api/expenses/{exp_id}", headers=auth_headers)
+        server.db.company_settings.update_one({"organization_id": org_id},
+            {"$set": {"autopost_enabled": prev.get("autopost_enabled", False)}})
