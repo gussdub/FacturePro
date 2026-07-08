@@ -705,16 +705,23 @@ def _aggregate_pnl(scope, start, end, basis):
         code = e.get("category_code") or "other"
         if code not in by_code:
             by_code[code] = {"gross": 0.0, "deductible": 0.0}
-        # [COMPTA] Feature #14 — pour une dépense télécom à usage mixte, la portion
-        # personnelle n'est PAS une charge de la société : le « brut » comptabilisé est
-        # la portion affaires (montant total moins la portion perso). Les autres dépenses
-        # (repas 50 %, etc.) gardent leur montant total en brut, seul le déductible varie.
-        gross_val = float(e.get("amount_cad", 0) or 0)
-        personal = e.get("personal_use_amount_cad")
-        if personal is not None:
-            gross_val -= float(personal or 0)
+        # [COMPTA] Feature #7.7 — la charge est NETTE des taxes récupérables (CTI/RTI),
+        # alignée EXACTEMENT sur le grand livre (_expense_net_business_cad). La déductibilité
+        # (50 % repas, etc.) s'applique AU NET. Pour le télécom, la portion affaires est déjà
+        # isolée dans net_business et est 100 % déductible.
+        gross_val = _expense_net_business_cad(e)
+        if e.get("personal_use_amount_cad") is not None:
+            ded_val = gross_val  # télécom : portion affaires nette, 100 % déductible
+        else:
+            # Fallback : dérive le taux du catalogue si l'ancien schéma n'a pas snapshoté
+            # deductible_percentage (dépenses pré-#3), pour garder le 50 % repas.
+            pct = e.get("deductible_percentage")
+            if pct is None:
+                cat = _find_category(code)
+                pct = cat["deductible_percentage"] if cat else 100
+            ded_val = round(gross_val * float(pct) / 100, 2)
         by_code[code]["gross"] += gross_val
-        by_code[code]["deductible"] += float(e.get("deductible_amount", 0) or 0)
+        by_code[code]["deductible"] += ded_val
 
     groups_order = ["office", "marketing", "premises", "travel", "personnel", "other"]
     expense_groups = []

@@ -87,6 +87,36 @@ def _line_account_number(server_mod, line):
     return acc.get("account_number") if acc else None
 
 
+def test_pnl_net_of_tax(auth_headers):
+    """Le P&L compte la charge NETTE : office 114.98 → gross 100.00 ; repas → 107.49 / déd. 53.75."""
+    ids = []
+    try:
+        ids.append(client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "office_supplies",
+            "description": "Fournitures", "expense_date": "2099-07-05",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98}).json()["id"])
+        ids.append(client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "meals_entertainment",
+            "description": "Diner", "expense_date": "2099-07-06",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98}).json()["id"])
+        r = client.get("/api/reports/pnl?start=2099-07-01&end=2099-07-31&basis=accrual",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        flat = {}
+        for g in r.json()["expense_groups"]:
+            for c in g["categories"]:
+                flat[c["code"]] = c["current"]
+        assert flat["office_supplies"]["gross"] == 100.00, flat["office_supplies"]
+        assert flat["office_supplies"]["deductible"] == 100.00
+        assert flat["meals_entertainment"]["gross"] == 107.49, flat["meals_entertainment"]
+        # 107.49 × 50% = 53.745 → banker's rounding produit 53.74 (attendu 53.74 ou 53.75).
+        assert abs(flat["meals_entertainment"]["deductible"] - 53.745) <= 0.01
+    finally:
+        from backend import server
+        for i in ids:
+            server.db.expenses.delete_one({"id": i})
+
+
 def test_gl_charge_lines_meals_50pct(auth_headers):
     """Une écriture de repas récupère 50% de la taxe (12xx) et pose le reste en charge (5xxx)."""
     from backend import server
