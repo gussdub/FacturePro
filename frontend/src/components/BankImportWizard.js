@@ -41,9 +41,29 @@ export default function BankImportWizard({ onCancel, onDone }) {
       .catch(() => {});
   }, []);
 
-  // Sélection d'un préréglage intégré (ex. Desjardins AccèsD) : pré-remplit les colonnes.
-  // L'aperçu (dry-run) reste la validation avant l'import.
+  // Sélection d'un préréglage : soit un intégré (Desjardins AccèsD), soit un mapping
+  // sauvegardé par l'utilisateur (préfixe "saved:"). L'aperçu (dry-run) reste la validation.
   const applyPreset = (key) => {
+    if (key.startsWith("saved:")) {
+      const label = key.slice(6);
+      const found = mappings.find(m => (m.bank_label || "") === label);
+      if (!found) { setPresetHint(null); return; }
+      setMapping({
+        delimiter: found.delimiter || ",",
+        has_header: !!found.has_header,
+        date_column: found.date_column ?? 0,
+        date_format: found.date_format || "YYYY-MM-DD",
+        description_column: found.description_column ?? 1,
+        amount_mode: found.amount_mode || "single",
+        amount_column: found.amount_column,
+        debit_column: found.debit_column,
+        credit_column: found.credit_column,
+        sign_convention: found.sign_convention || "positive_is_credit",
+      });
+      setBankLabel(label);
+      setPresetHint(null);
+      return;
+    }
     const p = presets.find(x => x.key === key);
     if (!p) { setPresetHint(null); return; }
     setMapping({ ...DEFAULT_MAPPING, ...p.mapping });
@@ -242,13 +262,30 @@ export default function BankImportWizard({ onCancel, onDone }) {
 
       {step === 1 && (
         <div>
-          {presets.length > 0 && (
+          {(presets.length > 0 || mappings.length > 0) && (
             <label style={{ display: "block", marginBottom: 12 }}>
               Préréglage (optionnel)
               <select defaultValue="" onChange={(e) => applyPreset(e.target.value)}
                       style={{ width: "100%", padding: 8, border: "1px solid #d1d5db", borderRadius: 6, marginTop: 4 }}>
                 <option value="">— Configuration manuelle —</option>
-                {presets.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+                {presets.length > 0 && (
+                  <optgroup label="Banques">
+                    {presets.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+                  </optgroup>
+                )}
+                {mappings.length > 0 && (
+                  <optgroup label="💾 Tes mappings enregistrés">
+                    {/* Dédup insensible à la casse (plusieurs imports = même mapping). */}
+                    {Array.from(new Map(
+                      mappings
+                        .map(m => (m.bank_label || "").trim())
+                        .filter(Boolean)
+                        .map(label => [label.toLowerCase(), label])
+                    ).values()).map(label => (
+                      <option key={`saved:${label}`} value={`saved:${label}`}>{label}</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               {presetHint && (
                 <p style={{ fontSize: 12, color: "#6b7280", marginTop: 6, lineHeight: 1.4 }}>💡 {presetHint}</p>
@@ -408,11 +445,25 @@ export default function BankImportWizard({ onCancel, onDone }) {
                    })} />
             {" "}Convention: positif = crédit (décocher si ta banque inverse)
           </label>
-          <label style={{ display: "block", marginBottom: 12 }}>
-            <input type="checkbox" checked={saveMapping}
-                   onChange={(e) => setSaveMapping(e.target.checked)} />
-            {" "}Sauvegarder ce mapping comme « {bankLabel} »
-          </label>
+          <div style={{ marginBottom: 12, padding: 10, background: "#f9fafb", borderRadius: 6, border: "1px solid #e5e7eb" }}>
+            <label style={{ display: "block", marginBottom: 8 }}>
+              <input type="checkbox" checked={saveMapping}
+                     onChange={(e) => setSaveMapping(e.target.checked)} />
+              {" "}<strong>Sauvegarder ce mapping</strong> pour le réutiliser plus tard
+            </label>
+            {saveMapping && (
+              <label style={{ display: "block", fontSize: 13, color: "#374151" }}>
+                Nom du mapping (utilisé aussi comme nom d'import)
+                <input type="text" value={bankLabel}
+                       onChange={(e) => setBankLabel(e.target.value)}
+                       placeholder="ex. Compte courant Desjardins"
+                       style={{ width: "100%", padding: 6, marginTop: 4, border: "1px solid #d1d5db", borderRadius: 4, fontSize: 13 }} />
+                <p style={{ fontSize: 11, color: "#6b7280", marginTop: 4, marginBottom: 0 }}>
+                  💡 Utilise un nom générique (ex. « Compte courant Desjardins ») pour retrouver ce mapping à chaque nouveau relevé.
+                </p>
+              </label>
+            )}
+          </div>
           <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
             L'aperçu ci-dessous se met à jour <strong>en direct</strong> quand tu changes un réglage.
             Confirme que les <strong>dates</strong> et les <strong>montants</strong> (dépôts positifs,
