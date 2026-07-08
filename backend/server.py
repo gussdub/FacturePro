@@ -1277,7 +1277,12 @@ def _require_entry_date(value) -> str:
 
 
 def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower):
-    """Score 1-3 pour un candidat invoice. Retourne (score, date_diff_days, amount_diff)."""
+    """Score 1-3 pour un candidat invoice. Retourne (score, date_diff_days, amount_diff).
+
+    Le recoupement de nom utilise `_name_match` (feature #7.3 étendue) : tokens distinctifs
+    hors stopwords bancaires, donc « Ferme Lebleu-Deschamps inc. » matche « virement interac
+    de /LEBLEU DESCHAM/ » via le token « lebleu ». La sécurité anti-faux-match reste assurée
+    par la décision au niveau `_auto_match_transactions` (top==3 ET second<3)."""
     outstanding = _get_invoice_outstanding(inv)
     amount_diff = abs(outstanding - target)
     issue = _parse_iso_date(inv.get("issue_date"))
@@ -1290,7 +1295,7 @@ def _score_invoice_candidate(tx_date, target, inv, client_name_lower, desc_lower
         date_diff = min(d_issue, d_due)
         if d_issue <= 3 or d_due <= 3:
             score += 1
-    if client_name_lower and len(client_name_lower) >= 3 and client_name_lower in desc_lower:
+    if _name_match(client_name_lower, desc_lower):
         score += 1
     return score, date_diff, amount_diff
 
