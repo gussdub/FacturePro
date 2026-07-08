@@ -3149,15 +3149,88 @@ def _autopost_payment(org_id: str, user_id: str, inv: dict,
         reference=payment.get("reference") or None)
 
 
+def _ensure_expense_account_for_category(org_id: str, user_id: str,
+                                         code: str) -> Optional[dict]:
+    """Crée à la volée le compte de charge 5xxx d'une catégorie MAPPÉE si absent du plan.
+
+    Motivation (bug prod feature #14) : une org seedée AVANT l'ajout d'une catégorie (ex.
+    télécom 5050/5051) n'a pas ce compte dans son plan. `migrate_chart_add_accounts_v1` le
+    crée, mais seulement au DÉMARRAGE du backend — si le process n'a pas redémarré depuis le
+    déploiement, ou si la dépense a été postée avant, la charge retombait silencieusement sur
+    5900 « Dépenses diverses » (constaté : Bell « Télécom — internet » posté en 5900 au lieu de
+    5051). On crée donc le compte à la demande, au moment du POST, sans dépendre du redémarrage.
+
+    Retourne le compte (créé ou déjà présent), ou None si `code` n'a pas de numéro mappé dans
+    EXPENSE_ACCOUNT_NUMBERS (« other »/inconnu → le caller retombe légitimement sur 5900).
+    Idempotent : re-find_one après insert pour absorber une race (index unique
+    (organization_id, account_number))."""
+    number = EXPENSE_ACCOUNT_NUMBERS.get(code)
+    if not number:
+        return None
+    existing = db.chart_of_accounts.find_one(
+        {"organization_id": org_id, "account_number": number}, {"_id": 0})
+    if existing is not None:
+        cur = existing.get("expense_category_code")
+        if cur == code:
+            return existing
+        if cur:
+            # Compte déjà rattaché à une AUTRE catégorie (ré-affectation manuelle anormale du plan) :
+            # ne pas voler sa catégorie NI poster une charge sous un compte mal étiqueté. On renvoie
+            # None → le caller retombe proprement sur 5900 plutôt que de fausser le grand livre.
+            return None
+        # cur vide/None (compte créé jadis par NUMÉRO via _resolve_ledger_account) : on rattache la
+        # catégorie pour les lookups futurs — MAIS seulement si aucun AUTRE compte de l'org ne la
+        # porte déjà (fenêtre TOCTOU avec une édition manuelle concurrente du plan, cf. revue
+        # adverse). Sinon on utilise ce compte-là et on ne duplique pas le mapping.
+        other = db.chart_of_accounts.find_one(
+            {"organization_id": org_id, "expense_category_code": code}, {"_id": 0})
+        if other is not None:
+            return other
+        # Update CONDITIONNEL (garde $in None/"") : si un concurrent a rattaché la catégorie
+        # entre-temps, modified_count=0 et on relit le gagnant sans écraser.
+        db.chart_of_accounts.update_one(
+            {"organization_id": org_id, "account_number": number,
+             "expense_category_code": {"$in": [None, ""]}},
+            {"$set": {"expense_category_code": code}})
+        return db.chart_of_accounts.find_one(
+            {"organization_id": org_id, "account_number": number}, {"_id": 0})
+    cat = _find_category(code)
+    name = (cat or {}).get("label_fr") or f"Compte {number}"
+    atype = _account_type_for_number(number)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": org_id,
+        "created_by_user_id": user_id,
+        "account_number": number,
+        "name": name,
+        "account_type": atype,
+        "sub_type": "operating_expense",
+        "normal_balance": _normal_balance_for_type(atype),
+        "is_active": True,
+        "is_system": True,
+        "expense_category_code": code,
+        "description": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        db.chart_of_accounts.insert_one(dict(doc))
+    except DuplicateKeyError:
+        pass  # race : un autre appel concurrent a créé le compte → on relit le gagnant
+    return db.chart_of_accounts.find_one(
+        {"organization_id": org_id, "account_number": number}, {"_id": 0})
+
+
 def _resolve_expense_account(org_id: str, user_id: str,
                              category_code: Optional[str]) -> Optional[dict]:
     """Résout le compte de charge 5xxx d'une dépense par sa catégorie ARC (§5.6).
 
     Cherche le compte du plan dont `expense_category_code == category_code`
     (mapping garanti unique par org via _validate_expense_category_code, Phase 1).
-    FALLBACK 5900 (Dépenses diverses) si la catégorie n'est pas mappée : code
-    None/vide, "other", ou catégorie inconnue → toutes les dépenses non
-    catégorisées atterrissent sur 5900. Déclenche le seed lazy (5900 et les 5xxx
+    Si la catégorie est MAPPÉE (EXPENSE_ACCOUNT_NUMBERS) mais que son compte n'existe pas
+    encore dans le plan (org seedée avant l'ajout de la catégorie, feature #14), on le CRÉE à
+    la volée via _ensure_expense_account_for_category — plutôt que de retomber sur 5900.
+    FALLBACK 5900 (Dépenses diverses) seulement si la catégorie n'est PAS mappée : code
+    None/vide, "other", ou catégorie inconnue. Déclenche le seed lazy (5900 et les 5xxx
     seedés sont alors présents). Retourne toujours un compte (jamais None sur un
     plan seedé : 5900 est un compte de base)."""
     _ensure_chart_seeded(org_id, user_id)
@@ -3168,7 +3241,11 @@ def _resolve_expense_account(org_id: str, user_id: str,
             {"_id": 0})
         if acc is not None:
             return acc
-    # Non mappé → 5900 (Dépenses diverses).
+        # Catégorie mappée mais compte absent du plan → le créer à la volée (pas de repli 5900).
+        created = _ensure_expense_account_for_category(org_id, user_id, code)
+        if created is not None:
+            return created
+    # Non mappé ("other", vide, inconnu) → 5900 (Dépenses diverses).
     return _resolve_ledger_account(org_id, user_id, "5900")
 
 
