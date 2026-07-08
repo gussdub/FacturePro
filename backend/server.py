@@ -3060,6 +3060,81 @@ def _resolve_expense_account(org_id: str, user_id: str,
     return _resolve_ledger_account(org_id, user_id, "5900")
 
 
+_MEALS_RECOVERY_RATE = 0.5  # limite ITC repas : seulement 50% de la TPS/TVQ récupérable
+
+
+def _recoverable_usage_frac(exp):
+    """Fraction d'usage AFFAIRES ouvrant droit au CTI/RTI, avec les seuils ARC (Mémorandum
+    TPS/TVH 8-1, par. 24/27) : ≤10 % → 0 ; ≥90 % → 1 ; sinon la fraction réelle. Retourne 1.0
+    pour une dépense non télécom (pas de personal_use_amount_cad). Les seuils ne visent QUE le
+    crédit de taxe — la déductibilité du revenu reste sur la fraction réelle (personal_use)."""
+    amt = float(exp.get("amount_cad", 0) or 0)
+    personal = exp.get("personal_use_amount_cad")
+    if personal is None or amt <= 0:
+        return 1.0
+    biz = max(0.0, (amt - float(personal or 0)) / amt)
+    if biz <= 0.10:
+        return 0.0
+    if biz >= 0.90:
+        return 1.0
+    return biz
+
+
+def _expense_recovery_frac(exp):
+    """SOURCE UNIQUE (feature #7.7) de la fraction de la taxe SAISIE réellement récupérable :
+    taux catégorie (50 % repas, 100 % sinon) × fraction d'usage affaires (avec seuils télécom).
+    Partagée par le grand livre (_build_expense_charge_lines), le P&L (_aggregate_pnl) et le
+    rapport TPS/TVQ (_aggregate_sales_tax) → aucune divergence possible."""
+    cat_rate = _MEALS_RECOVERY_RATE if (exp.get("category_code") == "meals_entertainment") else 1.0
+    return cat_rate * _recoverable_usage_frac(exp)
+
+
+def _expense_recoverable_tax_cad(exp):
+    """(gst, qst, hst) récupérables en CAD. Chaque taxe saisie est reconvertie en CAD pour une
+    dépense en devise (÷ taux, comme les taxes de facture), puis × recovery_frac. Le TOTAL est
+    plafonné à (amount_cad − personal) : on ne récupère jamais plus que la portion affaires
+    TTC payée (garde-fou équilibre partie double)."""
+    rate = exp.get("exchange_rate_to_cad") or 1.0
+    is_foreign = exp.get("currency") not in (None, "", "CAD") and rate > 0
+
+    def _cad(x):
+        x = float(x or 0)
+        return round((x / rate), 2) if is_foreign else round(x, 2)
+
+    frac = _expense_recovery_frac(exp)
+    gst = round(_cad(exp.get("gst_paid_cad")) * frac, 2)
+    qst = round(_cad(exp.get("qst_paid_cad")) * frac, 2)
+    hst = round(_cad(exp.get("hst_paid_cad")) * frac, 2)
+    amt = round(float(exp.get("amount_cad", 0) or 0), 2)
+    personal = min(max(round(float(exp.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amt)
+    cap = round(amt - personal, 2)
+    total = round(gst + qst + hst, 2)
+    if total > cap and total > 0:
+        ratio = cap / total
+        gst = round(gst * ratio, 2)
+        qst = round(qst * ratio, 2)
+        hst = round(hst * ratio, 2)
+        drift = round(cap - (gst + qst + hst), 2)
+        if drift != 0:
+            if gst > 0:
+                gst = round(gst + drift, 2)
+            elif qst > 0:
+                qst = round(qst + drift, 2)
+            elif hst > 0:
+                hst = round(hst + drift, 2)
+    return gst, qst, hst
+
+
+def _expense_net_business_cad(exp):
+    """Charge nette d'affaires (feature #7.7) : ce qui va au compte de charge 5xxx et au P&L.
+    = amount_cad − portion personnelle − taxes récupérables. Clamp ≥ 0. Le plafonnement des
+    taxes garantit que amount − personal − taxes ≥ 0 (donc pas de clamp destructeur d'équilibre)."""
+    amt = round(float(exp.get("amount_cad", 0) or 0), 2)
+    personal = min(max(round(float(exp.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amt)
+    gst, qst, hst = _expense_recoverable_tax_cad(exp)
+    return max(0.0, round(amt - personal - gst - qst - hst, 2))
+
+
 def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> list:
     """Lignes de l'écriture de dépense (spec §5.6).
 
