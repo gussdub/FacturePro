@@ -239,3 +239,68 @@ def test_gl_charge_lines_meals_50pct(auth_headers):
             client.delete(f"/api/expenses/{exp_id}", headers=auth_headers)
         server.db.company_settings.update_one({"organization_id": org_id},
             {"$set": {"autopost_enabled": prev.get("autopost_enabled", False)}})
+
+
+# ─── Non-régression : findings revue adversariale opus (feature #7.7) ───
+
+def test_defensive_amount_cad_negative_no_imbalance():
+    """[Finding G1 BLOCKING] amount_cad < 0 : les helpers clampent à 0 → pas de Σ Dr ≠ Cr.
+    Une saisie erronée (montant négatif) ne peut plus casser l'équilibre partie double."""
+    from backend.server import _expense_net_business_cad, _expense_recoverable_tax_cad
+    e = _exp(amount_cad=-100.00, gst_paid_cad=-5.00, qst_paid_cad=-10.00,
+             category_code="office_supplies")
+    # Après clamp : amt = 0, taxes = 0 → net = 0 (pas de fantôme au P&L, pas de rejet GL).
+    assert _expense_net_business_cad(e) == 0.0
+    gst, qst, hst = _expense_recoverable_tax_cad(e)
+    assert gst == 0.0 and qst == 0.0 and hst == 0.0
+
+
+def test_defensive_taxes_negative_clamped():
+    """[Finding G2 BLOCKING] Taxes saisies négatives clampées à 0 (une taxe payée est ≥ 0)."""
+    from backend.server import _expense_recoverable_tax_cad
+    e = _exp(amount_cad=100.00, gst_paid_cad=-5.00, qst_paid_cad=-10.00,
+             category_code="office_supplies")
+    gst, qst, hst = _expense_recoverable_tax_cad(e)
+    assert gst == 0.0 and qst == 0.0 and hst == 0.0
+
+
+def test_defensive_zero_exchange_rate_treated_as_cad():
+    """[Finding G4 IMPORTANT] rate=0 traité comme non-étranger → pas de div/0, pas de bypass."""
+    from backend.server import _expense_recoverable_tax_cad
+    e = _exp(amount_cad=100.00, currency="USD", exchange_rate_to_cad=0.0,
+             gst_paid_cad=5.00, qst_paid_cad=10.00, category_code="office_supplies")
+    # is_foreign = False (rate ≤ 0) → taxes prises verbatim, pas de div/0.
+    gst, qst, hst = _expense_recoverable_tax_cad(e)
+    assert gst == 5.00 and qst == 10.00 and hst == 0.0
+
+
+def test_telecom_threshold_boundary_exactly_10pct_zero_credit():
+    """[Finding T1] À 10 % pile → 0 CTI (règle ARC Mémo 8-1 : « plus de 10 % » strict)."""
+    from backend.server import _expense_recovery_frac
+    # amt=1000, personal=900 → biz = 0.10 exactement → 0 (règle « > 10 % » stricte).
+    e = _exp(amount_cad=1000.00, personal_use_amount_cad=900.00,
+             category_code="telecom_cell")
+    assert _expense_recovery_frac(e) == 0.0
+
+
+def test_telecom_threshold_ieee754_stability_near_90pct():
+    """[Finding T2] Non-déterminisme IEEE-754 aux voisinages 10/90 : biz arrondi à 4 décimales."""
+    from backend.server import _expense_recovery_frac
+    # amt=1000, personal=100.03 → biz ≈ 0.89997 (float) → arrondi 0.9000 → 1.0 (≥ 90 %).
+    e = _exp(amount_cad=1000.00, personal_use_amount_cad=100.03,
+             category_code="telecom_cell")
+    assert _expense_recovery_frac(e) == 1.0
+
+
+def test_sales_tax_uses_capped_helper_not_naive_sum():
+    """[Finding G3 IMPORTANT] Le rapport TPS/TVQ utilise _expense_recoverable_tax_cad (avec cap),
+    pas une somme naïve. Dépense minuscule avec taxes énormes → CTI capé au cap."""
+    from backend.server import _expense_recoverable_tax_cad, _expense_recovery_frac
+    e = _exp(amount_cad=0.02, personal_use_amount_cad=0.01,
+             gst_paid_cad=0.10, qst_paid_cad=0.10, hst_paid_cad=0.10,
+             category_code="office_supplies")
+    frac = _expense_recovery_frac(e)  # = 0.5 (biz=0.5 dans (0.1, 0.9))
+    assert frac == 0.5
+    # Le helper cape à 0.01 (amt - personal), impossible de récupérer plus.
+    gst, qst, hst = _expense_recoverable_tax_cad(e)
+    assert (gst + qst + hst) <= 0.011  # ≤ cap ± arrondi

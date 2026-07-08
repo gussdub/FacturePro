@@ -3072,15 +3072,18 @@ _MEALS_RECOVERY_RATE = 0.5  # limite ITC repas : seulement 50% de la TPS/TVQ ré
 
 def _recoverable_usage_frac(exp):
     """Fraction d'usage AFFAIRES ouvrant droit au CTI/RTI, avec les seuils ARC (Mémorandum
-    TPS/TVH 8-1, par. 24/27) : ≤10 % → 0 ; ≥90 % → 1 ; sinon la fraction réelle. Retourne 1.0
-    pour une dépense non télécom (pas de personal_use_amount_cad). Les seuils ne visent QUE le
-    crédit de taxe — la déductibilité du revenu reste sur la fraction réelle (personal_use)."""
+    TPS/TVH 8-1, par. 24/27) : usage > 10 % strict pour prorata (≤10 % → 0), ≥90 % → 100 %.
+    Retourne 1.0 pour une dépense non télécom (pas de personal_use_amount_cad). Les seuils ne
+    visent QUE le crédit de taxe — la déductibilité du revenu reste sur la fraction réelle
+    (personal_use). Revue adversariale : biz arrondi à 4 décimales avant seuils pour éviter
+    non-déterminisme IEEE-754 aux voisinages 10 %/90 % (biz=0.89997 ≠ 0.9)."""
     amt = float(exp.get("amount_cad", 0) or 0)
     personal = exp.get("personal_use_amount_cad")
     if personal is None or amt <= 0:
         return 1.0
-    biz = max(0.0, (amt - float(personal or 0)) / amt)
-    if biz <= 0.10:
+    biz = round(max(0.0, (amt - float(personal or 0)) / amt), 4)
+    # Mémo 8-1 par. 27 : « moins de 90 % mais PLUS DE 10 % ». À 10 % pile → aucun CTI.
+    if biz < 0.10 or biz == 0.10:
         return 0.0
     if biz >= 0.90:
         return 1.0
@@ -3100,19 +3103,33 @@ def _expense_recoverable_tax_cad(exp):
     """(gst, qst, hst) récupérables en CAD. Chaque taxe saisie est reconvertie en CAD pour une
     dépense en devise (÷ taux, comme les taxes de facture), puis × recovery_frac. Le TOTAL est
     plafonné à (amount_cad − personal) : on ne récupère jamais plus que la portion affaires
-    TTC payée (garde-fou équilibre partie double)."""
+    TTC payée (garde-fou équilibre partie double).
+
+    Revue adversariale (feature #7.7) : garde-fous DÉFENSIFS sur les entrées :
+    - amount_cad et taxes saisies clampés à ≥ 0 (une saisie négative rendrait Σ Dr ≠ Cr).
+    - rate ≤ 0 traité comme non-étranger (évite div/0 et le bypass silencieux de conversion).
+    - Si le drift du plafonnement ne peut être imputé à aucune taxe (toutes tombées à 0), il est
+      volontairement absorbé par le net 5xxx via _expense_net_business_cad (invariant Σ Dr = Cr
+      préservé). Le rapport TPS/TVQ appelle CE helper (jamais un calcul naïf) → cohérence GL↔rapport."""
     rate = exp.get("exchange_rate_to_cad") or 1.0
+    try:
+        rate = float(rate)
+    except (TypeError, ValueError):
+        rate = 1.0
     is_foreign = exp.get("currency") not in (None, "", "CAD") and rate > 0
 
     def _cad(x):
-        x = float(x or 0)
+        try:
+            x = max(0.0, float(x or 0))  # clamp négatif : une taxe payée est ≥ 0
+        except (TypeError, ValueError):
+            x = 0.0
         return round((x / rate), 2) if is_foreign else round(x, 2)
 
     frac = _expense_recovery_frac(exp)
     gst = round(_cad(exp.get("gst_paid_cad")) * frac, 2)
     qst = round(_cad(exp.get("qst_paid_cad")) * frac, 2)
     hst = round(_cad(exp.get("hst_paid_cad")) * frac, 2)
-    amt = round(float(exp.get("amount_cad", 0) or 0), 2)
+    amt = max(0.0, round(float(exp.get("amount_cad", 0) or 0), 2))  # clamp négatif
     personal = min(max(round(float(exp.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amt)
     cap = round(amt - personal, 2)
     total = round(gst + qst + hst, 2)
@@ -3123,33 +3140,44 @@ def _expense_recoverable_tax_cad(exp):
         hst = round(hst * ratio, 2)
         drift = round(cap - (gst + qst + hst), 2)
         if drift != 0:
-            if gst > 0:
-                gst = round(gst + drift, 2)
-            elif qst > 0:
-                qst = round(qst + drift, 2)
-            elif hst > 0:
-                hst = round(hst + drift, 2)
+            # Impute le drift à la COMPOSANTE LA PLUS GROSSE (biais TVQ minimisé) ; si toutes
+            # sont nulles (ratio × max_taxe < 0.005), on abandonne : le drift sera absorbé par
+            # _expense_net_business_cad dans le net 5xxx (équilibre partie double préservé,
+            # mais rapport TPS/TVQ = 0 dans ce cas — la dépense n'ouvre plus droit au CTI).
+            parts = sorted([("gst", gst), ("qst", qst), ("hst", hst)], key=lambda p: -p[1])
+            for name, val in parts:
+                if val > 0:
+                    if name == "gst":
+                        gst = round(gst + drift, 2)
+                    elif name == "qst":
+                        qst = round(qst + drift, 2)
+                    else:
+                        hst = round(hst + drift, 2)
+                    break
     return gst, qst, hst
 
 
 def _expense_net_business_cad(exp):
     """Charge nette d'affaires (feature #7.7) : ce qui va au compte de charge 5xxx et au P&L.
-    = amount_cad − portion personnelle − taxes récupérables. Clamp ≥ 0. Le plafonnement des
-    taxes garantit que amount − personal − taxes ≥ 0 (donc pas de clamp destructeur d'équilibre)."""
-    amt = round(float(exp.get("amount_cad", 0) or 0), 2)
+    = amount_cad − portion personnelle − taxes récupérables. Clamp ≥ 0 sur amount_cad ET sur le
+    résultat (garde-fous défensifs revue adversariale)."""
+    amt = max(0.0, round(float(exp.get("amount_cad", 0) or 0), 2))
     personal = min(max(round(float(exp.get("personal_use_amount_cad", 0) or 0), 2), 0.0), amt)
     gst, qst, hst = _expense_recoverable_tax_cad(exp)
     return max(0.0, round(amt - personal - gst - qst - hst, 2))
 
 
 def migrate_expense_net_tax_v1():
-    """Migration idempotente (feature #7.7) — recale les dérivés des dépenses vers le net de taxes :
-    1. Re-snapshot `deductible_amount` = net déductible (net_business, × déductibilité hors télécom).
-       Idempotent : ne réécrit que si l'écart > 0,01.
-    2. Re-post GL des dépenses AFFECTÉES (repas OU télécom avec personal_use) via _repost_expense_gl
-       (déjà idempotent, gaté sur autopost_enabled). Les dépenses normales ne changent pas → non re-postées.
+    """Migration idempotente (feature #7.7) — recale les dérivés des dépenses vers le net de taxes.
 
-    Ne modifie JAMAIS amount_cad ni les champs de taxe saisis. Retourne des compteurs + ids touchés."""
+    1. Re-snapshot `deductible_amount` = net déductible ; idempotent (écrit si |diff| > 0,01).
+    2. Re-post GL SEULEMENT si la charge nette change vraiment (revue adversariale) : garde-fou
+       `abs(new_ded − old_ded) > 0.01` sur les dépenses éligibles au re-post. Élargi à TOUTES les
+       dépenses avec taxes récupérables > 0 (pas juste repas/télécom), sinon les dépenses normales
+       gardent leur ancien GL TTC → discordance permanente P&L↔GL. Le passage 2+ trouve tout à jour
+       -> no-op. Gaté sur autopost_enabled par org.
+
+    Ne modifie JAMAIS amount_cad ni les champs de taxe saisis."""
     resnapshotted = 0
     reposted = 0
     resnapshotted_ids = []
@@ -3165,14 +3193,25 @@ def migrate_expense_net_tax_v1():
                 pct = cat["deductible_percentage"] if cat else 100
             new_ded = round(net * float(pct) / 100, 2)
         old_ded = round(float(exp.get("deductible_amount", 0) or 0), 2)
-        if abs(new_ded - old_ded) > 0.01:
+        ded_changed = abs(new_ded - old_ded) > 0.01
+        if ded_changed:
             db.expenses.update_one({"id": exp["id"]}, {"$set": {"deductible_amount": new_ded}})
             resnapshotted += 1
             resnapshotted_ids.append(exp["id"])
-        # Re-post GL uniquement pour les catégories dont l'écriture change (repas + télécom mixte).
+        # Re-post GL uniquement si la charge nette a VRAIMENT changé (garde d'idempotence).
+        # Une dépense avec taxes > 0 mais deductible_amount déjà correct = GL déjà correct (posté
+        # au vieux schéma) OU aucun changement effectif. Après un premier passage, tout est stable.
+        gst_v = float(exp.get("gst_paid_cad", 0) or 0)
+        qst_v = float(exp.get("qst_paid_cad", 0) or 0)
+        hst_v = float(exp.get("hst_paid_cad", 0) or 0)
+        has_taxes = (gst_v + qst_v + hst_v) > 0
         is_meals = exp.get("category_code") == "meals_entertainment"
         is_telecom_mixed = exp.get("personal_use_amount_cad") is not None
-        if is_meals or is_telecom_mixed:
+        # Éligible au re-post GL : catégorie dont l'écriture change (repas 50 % / télécom seuils)
+        # OU dépense normale avec taxes saisies (dont le GL préexistant compte le TTC en 5xxx et
+        # doit être rebalancé au net). Le garde-fou `ded_changed` évite le re-post inutile au 2e run.
+        should_repost = (is_meals or is_telecom_mixed or has_taxes) and ded_changed
+        if should_repost:
             org_id = exp.get("organization_id")
             if not org_id:
                 continue
@@ -10312,12 +10351,14 @@ def _aggregate_sales_tax(scope, start, end):
         qst_collected += qst_cad
         hst_collected += hst_cad
 
-    # [COMPTA] Feature #7.7 — le CTI/RTI récupérable utilise la SOURCE UNIQUE
-    # _expense_recovery_frac : 50 % repas + prorata télécom avec seuils 10/90 (Mémo ARC 8-1).
-    # Aligné sur le grand livre (mêmes taxes récupérables) et le P&L (charge nette).
-    gst_paid = sum(float(e.get("gst_paid_cad", 0) or 0) * _expense_recovery_frac(e) for e in expenses)
-    qst_paid = sum(float(e.get("qst_paid_cad", 0) or 0) * _expense_recovery_frac(e) for e in expenses)
-    hst_paid = sum(float(e.get("hst_paid_cad", 0) or 0) * _expense_recovery_frac(e) for e in expenses)
+    # [COMPTA] Feature #7.7 — le CTI/RTI récupérable délégué à `_expense_recoverable_tax_cad` :
+    # celui-ci applique la fraction (50 % repas + seuils télécom) ET le PLAFONNEMENT partagé avec
+    # le grand livre (cap = amount − personal, revue adversariale). Somme naïve = biais rapport↔GL
+    # quand le plafond absorbe des taxes qu'un calcul naïf compterait quand même.
+    _rec = [_expense_recoverable_tax_cad(e) for e in expenses]
+    gst_paid = sum(r[0] for r in _rec)
+    qst_paid = sum(r[1] for r in _rec)
+    hst_paid = sum(r[2] for r in _rec)
 
     def r(v):
         return round(v, 2)
