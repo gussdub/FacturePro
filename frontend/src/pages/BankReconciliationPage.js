@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-import { GitMerge, Plus, FileText, Trash2 } from "lucide-react";
+import { GitMerge, Plus, FileText, Trash2, Pencil } from "lucide-react";
 import { BACKEND_URL } from "../config";
 import BankImportWizard from "../components/BankImportWizard";
 import BankMatchingScreen from "../components/BankMatchingScreen";
@@ -10,6 +10,7 @@ export default function BankReconciliationPage() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState({ kind: "list" });
   const [deletingId, setDeletingId] = useState(null);
+  const [renamingId, setRenamingId] = useState(null);
 
   const fetchImports = async () => {
     setLoading(true);
@@ -41,6 +42,26 @@ export default function BankReconciliationPage() {
       alert(err.response?.data?.detail || "Erreur lors de la suppression de l'import.");
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  // Renomme un import (colonne « Banque »). Prompt basique — pas de vraie modale, la friction
+  // reste faible pour un simple ajustement de libellé.
+  const renameImport = async (imp, e) => {
+    e.stopPropagation();
+    const next = window.prompt("Renommer cet import :", imp.bank_label || "");
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === imp.bank_label) return;
+    setRenamingId(imp.id);
+    try {
+      await axios.patch(`${BACKEND_URL}/api/bank/imports/${imp.id}`,
+                        { bank_label: trimmed });
+      await fetchImports();
+    } catch (err) {
+      alert(err.response?.data?.detail || "Erreur lors du renommage.");
+    } finally {
+      setRenamingId(null);
     }
   };
 
@@ -108,7 +129,17 @@ export default function BankReconciliationPage() {
                       style={{ borderBottom: "1px solid #e5e7eb", cursor: "pointer" }}
                       onClick={() => setView({ kind: "matching", importId: imp.id })}>
                     <td style={{ padding: 10 }}>{(imp.imported_at || "").slice(0, 10)}</td>
-                    <td style={{ padding: 10 }}>{imp.bank_label}</td>
+                    <td style={{ padding: 10 }}>
+                      <span>{imp.bank_label}</span>
+                      <button onClick={(e) => renameImport(imp, e)} disabled={renamingId === imp.id}
+                              title="Renommer cet import"
+                              style={{ background: "none", border: "none", marginLeft: 6, padding: 2,
+                                       cursor: renamingId === imp.id ? "wait" : "pointer",
+                                       color: "#6b7280", verticalAlign: "middle",
+                                       opacity: renamingId === imp.id ? 0.5 : 1 }}>
+                        <Pencil size={13} />
+                      </button>
+                    </td>
                     <td style={{ padding: 10, textAlign: "right" }}>{imp.row_count}</td>
                     <td style={{ padding: 10, textAlign: "right" }}>{done} / {total}</td>
                     <td style={{ padding: 10, textAlign: "right" }}>{pct} %</td>

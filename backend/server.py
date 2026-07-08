@@ -7114,6 +7114,27 @@ def create_invoice_from_tx(tx_id: str, body: dict,
             "transaction": clean_doc(db.bank_transactions.find_one({"id": tx_id, **_org_scope(current_user)}, {"_id": 0}))}
 
 
+@app.patch("/api/bank/imports/{import_id}")
+def rename_bank_import(import_id: str, body: dict,
+                       current_user: CurrentUser = Depends(require_permission("bank:write"))):
+    """Renomme le libellé d'un import (colonne « Banque » de la liste). Ne change PAS le
+    mapping enregistré associé (celui-ci reste identifié par son bank_label d'origine)."""
+    label = (body or {}).get("bank_label")
+    if not isinstance(label, str):
+        raise HTTPException(422, "bank_label required (string)")
+    label = label.strip()
+    if not label:
+        raise HTTPException(422, "bank_label must not be empty")
+    if len(label) > 120:
+        raise HTTPException(422, "bank_label too long (max 120)")
+    res = db.bank_imports.update_one(
+        {"id": import_id, **_org_scope(current_user)},
+        {"$set": {"bank_label": label}})
+    if res.matched_count == 0:
+        raise HTTPException(404, "Import not found")
+    return {"id": import_id, "bank_label": label}
+
+
 @app.post("/api/bank/imports/{import_id}/close")
 def close_bank_import(import_id: str,
                        current_user: CurrentUser = Depends(require_permission("bank:write"))):
