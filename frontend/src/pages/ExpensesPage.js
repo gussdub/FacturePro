@@ -1064,7 +1064,9 @@ const ExpensesPage = () => {
               <div style={{ marginTop: 18, marginBottom: 16, padding: 16, background: '#f9fafb', borderRadius: 8, border: '1px solid #e5e7eb' }}>
                 <h4 style={{ margin: '0 0 6px', fontSize: 14, color: '#1f2937' }}>Taxes payées (CTI/RTI)</h4>
                 <p style={{ marginTop: 0, marginBottom: 12, fontSize: 12, color: '#6b7280' }}>
-                  Saisis ces montants pour les inclure dans ton rapport TPS/TVQ trimestriel.
+                  Le montant est saisi TTC (taxes incluses). Les taxes récupérables sont
+                  automatiquement sorties du coût déductible dans le P&L, T2125 et GIFI —
+                  et incluses dans ton rapport TPS/TVQ.
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, 1fr)', gap: 10 }}>
                   <div>
