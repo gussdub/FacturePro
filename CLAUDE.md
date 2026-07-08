@@ -108,6 +108,15 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — Dépenses nettes des taxes récupérables (feature #7.7)**
+  - **Problème (comptable)** : le P&L / T2125 / GIFI comptaient les dépenses au montant TTC (taxes incluses), alors qu'un inscrit TPS/TVQ doit déduire le NET — la taxe récupérable (CTI/RTI) se récupère via la déclaration de taxes, pas à l'impôt. Résultat : dépenses sur-estimées, revenu imposable sous-estimé (double récupération de la taxe). Validé ARC (Guide T4002, Mémo TPS/TVH 8-1) + Revenu Québec (IN-203).
+  - **Correctif** : helper unifié `_expense_recovery_frac` (source unique : 50 % repas + prorata télécom avec seuils ARC ≤10 %→0 / ≥90 %→100 %) → le grand livre, le P&L et le rapport TPS/TVQ dérivent tous de la MÊME charge nette (`_expense_net_business_cad`). Réconciliation GL↔P&L simplifiée (P&L net == GL net directement, plus d'« écart structurel assumé »).
+  - **Repas** : la limite ITC 50 % est désormais appliquée (le GL récupérait 100 % à tort) — écritures de repas re-postées par la migration.
+  - **Migration** idempotente au startup : re-snapshot du déductible + re-post GL des dépenses affectées (repas + télécom mixte + dépenses normales avec taxes saisies). Aucun montant ni champ de taxe saisi modifié.
+  - **Revue adversariale opus** (4 lentilles × verify — money-critical) : 7 findings confirmés (2 BLOCKING équilibre GL + 2 BLOCKING migration + 3 IMPORTANT) tous corrigés avant push : clamp défensif amount/taxes négatifs, rate=0 non-étranger, garde-fou re-post (idempotence stricte), rapport TPS/TVQ via helper capé (cohérence GL↔rapport), seuil 10 % strict (règle ARC « plus de 10 % »), stabilité IEEE-754 (round 4 décimales avant seuils), drift-lost imputé à la composante la plus grosse.
+  - **Impact voulu** : rapports P&L/T2125/GIFI plus bas (nets), revenu net plus haut, CTI repas ramené à 50 %.
+  - Tests : `test_expense_net_tax.py` (14 tests : helpers, net, équilibre GL, P&L, taxes, réconciliation, migration idempotente, 6 non-régressions revue adversariale).
+
 - **2026-07-06 — Codes fiscaux adaptés au type d'entité (feature #7.6)**
   - **Problème** : les catégories de dépenses affichaient un unique code `arc_line` — soit erroné (bank 8620, subs 8740, subcontracts 9367 n'existent pas au T2125), soit inadapté au type d'entité. Une société par actions voyait le code T2125 (autonome) alors qu'elle déclare avec des codes **GIFI** (T2 fédéral + CO-17 Québec).
   - **Correctif** : chaque catégorie porte désormais DEUX codes fiscaux — `t2125_line` (autonome) + `gifi_code` (société). Le snapshot fige les deux ; le picker affiche celui du régime en cours (« T2125 ligne 8760 » ou « GIFI 8810 ») ; le rapport T2125 reste pour l'autonome, un nouveau **rapport « Sommaire GIFI »** apparaît pour la société.
