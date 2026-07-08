@@ -3142,6 +3142,53 @@ def _expense_net_business_cad(exp):
     return max(0.0, round(amt - personal - gst - qst - hst, 2))
 
 
+def migrate_expense_net_tax_v1():
+    """Migration idempotente (feature #7.7) — recale les dérivés des dépenses vers le net de taxes :
+    1. Re-snapshot `deductible_amount` = net déductible (net_business, × déductibilité hors télécom).
+       Idempotent : ne réécrit que si l'écart > 0,01.
+    2. Re-post GL des dépenses AFFECTÉES (repas OU télécom avec personal_use) via _repost_expense_gl
+       (déjà idempotent, gaté sur autopost_enabled). Les dépenses normales ne changent pas → non re-postées.
+
+    Ne modifie JAMAIS amount_cad ni les champs de taxe saisis. Retourne des compteurs + ids touchés."""
+    resnapshotted = 0
+    reposted = 0
+    resnapshotted_ids = []
+    settings_cache = {}
+    for exp in db.expenses.find({"amount_cad": {"$exists": True}}, {"_id": 0}):
+        net = _expense_net_business_cad(exp)
+        if exp.get("personal_use_amount_cad") is not None:
+            new_ded = net
+        else:
+            pct = exp.get("deductible_percentage")
+            if pct is None:
+                cat = _find_category(exp.get("category_code") or "")
+                pct = cat["deductible_percentage"] if cat else 100
+            new_ded = round(net * float(pct) / 100, 2)
+        old_ded = round(float(exp.get("deductible_amount", 0) or 0), 2)
+        if abs(new_ded - old_ded) > 0.01:
+            db.expenses.update_one({"id": exp["id"]}, {"$set": {"deductible_amount": new_ded}})
+            resnapshotted += 1
+            resnapshotted_ids.append(exp["id"])
+        # Re-post GL uniquement pour les catégories dont l'écriture change (repas + télécom mixte).
+        is_meals = exp.get("category_code") == "meals_entertainment"
+        is_telecom_mixed = exp.get("personal_use_amount_cad") is not None
+        if is_meals or is_telecom_mixed:
+            org_id = exp.get("organization_id")
+            if not org_id:
+                continue
+            if org_id not in settings_cache:
+                settings_cache[org_id] = db.company_settings.find_one(
+                    {"organization_id": org_id}, {"_id": 0}) or {}
+            if settings_cache[org_id].get("autopost_enabled"):
+                try:
+                    _repost_expense_gl(org_id, exp.get("created_by_user_id") or exp.get("user_id"),
+                                       exp["id"], exp)
+                    reposted += 1
+                except Exception:
+                    pass
+    return {"resnapshotted": resnapshotted, "reposted": reposted, "resnapshotted_ids": resnapshotted_ids}
+
+
 def _build_expense_charge_lines(org_id: str, user_id: str, expense: dict) -> list:
     """Lignes de l'écriture de charge d'une dépense (feature #7.7 — dérivé des helpers unifiés).
 
@@ -11102,6 +11149,12 @@ def seed_data():
         # Feature #7.6 — ré-annote les dépenses avec t2125_line + gifi_code, corrige arc_line.
         try:
             migrate_expense_tax_codes_v1()
+        except Exception:
+            pass
+
+        # Feature #7.7 — recale les dépenses vers le net de taxes (déductible + re-post repas).
+        try:
+            migrate_expense_net_tax_v1()
         except Exception:
             pass
 

@@ -87,6 +87,39 @@ def _line_account_number(server_mod, line):
     return acc.get("account_number") if acc else None
 
 
+def test_migration_reposts_meals_gl_idempotent(auth_headers):
+    """Une écriture de repas legacy (taxe récupérée 100%) est re-postée à 50% ; 2e passage no-op."""
+    from backend import server
+    org = server.db.users.find_one({"email": "gussdub@gmail.com"})
+    org_id = org.get("organization_id")
+    if not org_id:
+        pytest.skip("org_id indisponible")
+    prev = (server.db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}).get("autopost_enabled", False)
+    server.db.company_settings.update_one({"organization_id": org_id},
+        {"$set": {"autopost_enabled": True}}, upsert=True)
+    exp_id = None
+    try:
+        exp_id = client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "meals_entertainment",
+            "description": "Migr diner", "expense_date": "2099-10-01",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98}).json()["id"]
+        # Simuler l'ancien snapshot déductible TTC (57.49 = 50% de 114.98)
+        server.db.expenses.update_one({"id": exp_id}, {"$set": {"deductible_amount": 57.49}})
+        stats = server.migrate_expense_net_tax_v1()
+        assert stats["resnapshotted"] >= 1 or stats["reposted"] >= 1
+        exp = server.db.expenses.find_one({"id": exp_id}, {"_id": 0})
+        # 107.49 × 50% = 53.745 → banker's rounding produit 53.74 (accepter 53.74 ou 53.75).
+        assert abs(exp["deductible_amount"] - 53.745) <= 0.01, exp["deductible_amount"]
+        # Idempotence : 2e passage ne re-snapshotte plus cette dépense
+        stats2 = server.migrate_expense_net_tax_v1()
+        assert exp_id not in stats2.get("resnapshotted_ids", [])
+    finally:
+        if exp_id:
+            client.delete(f"/api/expenses/{exp_id}", headers=auth_headers)
+        server.db.company_settings.update_one({"organization_id": org_id},
+            {"$set": {"autopost_enabled": prev}})
+
+
 def test_reconciliation_balanced_after_net(auth_headers):
     """Après le fix, P&L net == GL net → expenses_diff ≈ 0 (org autopost activé)."""
     from backend import server
