@@ -11388,41 +11388,38 @@ def seed_data():
         db.bank_match_aliases.create_index([("organization_id", 1)])
         print("Database indexes created")
 
+        # [ROBUSTESSE] Chaque migration est ISOLÉE dans son propre try/except : le bloc de
+        # démarrage entier est enveloppé d'un unique try (voir plus bas `except ... Startup error`)
+        # qui avale silencieusement — donc SANS isolation, une migration qui lève sautait TOUTES
+        # les suivantes à CHAQUE boot. Bug constaté : une migration amont échouait → 5050/5051 (créés
+        # par migrate_chart_add_accounts_v1) n'étaient jamais ajoutés aux plans existants → charges
+        # télécom repliées sur 5900. On log le nom (stdout Render, aucun secret) pour diagnostic.
+        def _run_migration(fn, label):
+            try:
+                fn()
+            except Exception as _e:  # noqa: BLE001 — une migration ratée ne doit pas bloquer les autres
+                print(f"Migration {label} failed (non-fatal): {_e}")
+
         # Migration tax_registrations (Section 2 du spec) — idempotente
-        migrate_pst_to_qst()
-
+        _run_migration(migrate_pst_to_qst, "pst_to_qst")
         # Migration feature #11 — organizations multi-tenant (idempotente)
-        migrate_organizations_v1()
-
+        _run_migration(migrate_organizations_v1, "organizations_v1")
         # Migration feature #12 — grand livre (idempotente)
-        migrate_general_ledger_v1()
-
+        _run_migration(migrate_general_ledger_v1, "general_ledger_v1")
         # Migration feature #12 Phase 2 — auto-posting (idempotente)
-        migrate_general_ledger_autopost_v1(db)
-
+        _run_migration(lambda: migrate_general_ledger_autopost_v1(db), "general_ledger_autopost_v1")
         # Migration feature #13 — carnet de route / kilométrage (idempotente)
-        migrate_mileage_logbook_v1()
-
-        # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un
-        # actionnaire ajoutés aux plans comptables existants (idempotente, additive)
-        migrate_chart_add_accounts_v1()
-
-        # Migration feature #7 (fix audit) — normalise les dépenses créées depuis une
-        # transaction bancaire au schéma canonique (expense_date, catégorie à plat, taxes)
-        # sinon elles étaient exclues du P&L / T2125 / rapport taxes / grand livre (idempotente)
-        migrate_bank_created_expenses_v1()
-
+        _run_migration(migrate_mileage_logbook_v1, "mileage_logbook_v1")
+        # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
+        # ajoutés aux plans comptables existants (idempotente, additive)
+        _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")
+        # Migration feature #7 (fix audit) — normalise les dépenses créées depuis une transaction
+        # bancaire au schéma canonique, sinon exclues du P&L / T2125 / taxes / grand livre (idempotente)
+        _run_migration(migrate_bank_created_expenses_v1, "bank_created_expenses_v1")
         # Feature #7.6 — ré-annote les dépenses avec t2125_line + gifi_code, corrige arc_line.
-        try:
-            migrate_expense_tax_codes_v1()
-        except Exception:
-            pass
-
+        _run_migration(migrate_expense_tax_codes_v1, "expense_tax_codes_v1")
         # Feature #7.7 — recale les dépenses vers le net de taxes (déductible + re-post repas).
-        try:
-            migrate_expense_net_tax_v1()
-        except Exception:
-            pass
+        _run_migration(migrate_expense_net_tax_v1, "expense_net_tax_v1")
 
         # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
         res = db.files.update_many(
