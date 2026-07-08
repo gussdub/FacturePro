@@ -10263,19 +10263,12 @@ def _aggregate_sales_tax(scope, start, end):
         qst_collected += qst_cad
         hst_collected += hst_cad
 
-    # [COMPTA] Feature #14 — pour une dépense télécom à usage mixte, le CTI/RTI n'est
-    # récupérable que sur la portion AFFAIRES (aligné sur le grand livre, qui ne crédite
-    # 1200/1210/1220 que de cette fraction). La portion personnelle n'ouvre pas droit au
-    # crédit de taxe : la déclarer serait une sur-réclamation à l'ARC / Revenu Québec.
-    def _itc_frac(e):
-        amt = float(e.get("amount_cad", 0) or 0)
-        personal = e.get("personal_use_amount_cad")
-        if personal is None or amt <= 0:
-            return 1.0
-        return max(0.0, (amt - float(personal or 0)) / amt)
-    gst_paid = sum(float(e.get("gst_paid_cad", 0) or 0) * _itc_frac(e) for e in expenses)
-    qst_paid = sum(float(e.get("qst_paid_cad", 0) or 0) * _itc_frac(e) for e in expenses)
-    hst_paid = sum(float(e.get("hst_paid_cad", 0) or 0) * _itc_frac(e) for e in expenses)
+    # [COMPTA] Feature #7.7 — le CTI/RTI récupérable utilise la SOURCE UNIQUE
+    # _expense_recovery_frac : 50 % repas + prorata télécom avec seuils 10/90 (Mémo ARC 8-1).
+    # Aligné sur le grand livre (mêmes taxes récupérables) et le P&L (charge nette).
+    gst_paid = sum(float(e.get("gst_paid_cad", 0) or 0) * _expense_recovery_frac(e) for e in expenses)
+    qst_paid = sum(float(e.get("qst_paid_cad", 0) or 0) * _expense_recovery_frac(e) for e in expenses)
+    hst_paid = sum(float(e.get("hst_paid_cad", 0) or 0) * _expense_recovery_frac(e) for e in expenses)
 
     def r(v):
         return round(v, 2)

@@ -87,6 +87,34 @@ def _line_account_number(server_mod, line):
     return acc.get("account_number") if acc else None
 
 
+def test_sales_tax_meals_50_and_telecom_threshold(auth_headers):
+    """CTI = 50% de la taxe repas ; télécom 8% affaires → CTI 0 (seuil ≤10%)."""
+    ids = []
+    try:
+        ids.append(client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "meals_entertainment",
+            "description": "Diner", "expense_date": "2099-08-01",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98}).json()["id"])
+        # Télécom 8% affaires : perso 92% de 114.98 = 105.78
+        ids.append(client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "telecom_cell",
+            "description": "Cell", "expense_date": "2099-08-02",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98}).json()["id"])
+        from backend import server
+        server.db.expenses.update_one({"id": ids[1]}, {"$set": {"personal_use_amount_cad": 105.78}})
+        r = client.get("/api/reports/sales-tax?start=2099-08-01&end=2099-08-31",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        summary = r.json()["summary"]
+        # Repas seul contribue au CTI : 50% de 5.00 = 2.50 (GST) ; télécom 8% → 0.
+        assert abs(summary["gst"]["paid"] - 2.50) < 0.02, summary["gst"]
+        assert abs(summary["qst"]["paid"] - 4.99) < 0.02, summary["qst"]  # 50% de 9.98
+    finally:
+        from backend import server
+        for i in ids:
+            server.db.expenses.delete_one({"id": i})
+
+
 def test_pnl_net_of_tax(auth_headers):
     """Le P&L compte la charge NETTE : office 114.98 → gross 100.00 ; repas → 107.49 / déd. 53.75."""
     ids = []
