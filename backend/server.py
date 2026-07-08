@@ -11355,37 +11355,57 @@ def seed_data():
         client.admin.command('ping')
         print("MongoDB connected successfully")
 
-        # Create indexes for faster queries
-        db.users.create_index("email", unique=True)
-        db.users.create_index("id", unique=True)
-        db.user_passwords.create_index("user_id", unique=True)
-        db.clients.create_index([("user_id", 1)])
-        db.products.create_index([("user_id", 1), ("is_active", 1)])
-        db.invoices.create_index([("user_id", 1)])
-        db.quotes.create_index([("user_id", 1)])
-        db.employees.create_index([("user_id", 1), ("is_active", 1)])
-        db.expenses.create_index([("user_id", 1)])
-        db.company_settings.create_index("user_id", unique=True)
-        db.files.create_index("id", unique=True)
-        db.payment_transactions.create_index("session_id", unique=True)
-        db.payment_transactions.create_index([("user_id", 1)])
-        db.trial_notifications.create_index([("user_id", 1), ("type", 1)], unique=True)
-        # Cache d'extraction PDF bancaire (feature #7.1) : clé UNIQUE org+hash (réservation
-        # atomique anti-double-extraction) + TTL auto-purge. Remplace un éventuel index
-        # non-unique laissé par une version antérieure (dev).
-        try:
-            db.bank_pdf_extractions.create_index(
-                [("organization_id", 1), ("file_hash", 1)], unique=True)
-        except OperationFailure:
+        # Create indexes for faster queries.
+        # [ROBUSTESSE — bug prod critique] Chaque création d'index est ISOLÉE. Un conflit de
+        # spécification (`IndexKeySpecsConflict`, code 86 : un index homonyme avec des options
+        # différentes existe déjà — ex. un `user_id_1` NON-unique créé par une version antérieure
+        # vs. la version `unique=True` demandée ici) lève une `OperationFailure` NON attrapée qui,
+        # sans cette isolation, remontait au `except` global et SAUTAIT TOUTES LES MIGRATIONS à
+        # CHAQUE démarrage (5050/5051 jamais créés, 7.6/7.7 jamais rejouées…). On réconcilie le
+        # conflit de spec (drop de l'homonyme + recréation) et, en dernier recours, on log et on
+        # continue — jamais bloquer le boot ni les migrations.
+        def _gen_index_name(keys):
+            # Reproduit le nom auto-généré par MongoDB : "field_dir" joints par "_"
+            # (ex. "user_id" → "user_id_1" ; [("user_id",1),("type",1)] → "user_id_1_type_1").
+            pairs = [(keys, 1)] if isinstance(keys, str) else list(keys)
+            return "_".join(f"{field}_{direction}" for field, direction in pairs)
+
+        def _safe_index(coll, keys, label, **opts):
             try:
-                db.bank_pdf_extractions.drop_index([("organization_id", 1), ("file_hash", 1)])
-            except OperationFailure:
-                pass
-            db.bank_pdf_extractions.create_index(
-                [("organization_id", 1), ("file_hash", 1)], unique=True)
-        db.bank_pdf_extractions.create_index("created_at", expireAfterSeconds=_BANK_PDF_CACHE_TTL_SECONDS)
+                coll.create_index(keys, **opts)
+            except OperationFailure as _e:
+                if getattr(_e, "code", None) == 86:  # IndexKeySpecsConflict : drop + recreate
+                    try:
+                        coll.drop_index(opts.get("name") or _gen_index_name(keys))
+                        coll.create_index(keys, **opts)
+                        print(f"Index {label} reconciled (dropped conflicting spec + recreated)")
+                        return
+                    except OperationFailure as _e2:
+                        print(f"Index {label} reconcile failed (code {getattr(_e2, 'code', '?')})")
+                        return
+                print(f"Index {label} skipped (code {getattr(_e, 'code', '?')})")
+
+        _safe_index(db.users, "email", "users.email", unique=True)
+        _safe_index(db.users, "id", "users.id", unique=True)
+        _safe_index(db.user_passwords, "user_id", "user_passwords.user_id", unique=True)
+        _safe_index(db.clients, [("user_id", 1)], "clients.user_id")
+        _safe_index(db.products, [("user_id", 1), ("is_active", 1)], "products.user_id_active")
+        _safe_index(db.invoices, [("user_id", 1)], "invoices.user_id")
+        _safe_index(db.quotes, [("user_id", 1)], "quotes.user_id")
+        _safe_index(db.employees, [("user_id", 1), ("is_active", 1)], "employees.user_id_active")
+        _safe_index(db.expenses, [("user_id", 1)], "expenses.user_id")
+        _safe_index(db.company_settings, "user_id", "company_settings.user_id", unique=True)
+        _safe_index(db.files, "id", "files.id", unique=True)
+        _safe_index(db.payment_transactions, "session_id", "payment_transactions.session_id", unique=True)
+        _safe_index(db.payment_transactions, [("user_id", 1)], "payment_transactions.user_id")
+        _safe_index(db.trial_notifications, [("user_id", 1), ("type", 1)], "trial_notifications.user_type", unique=True)
+        # Cache d'extraction PDF bancaire (feature #7.1) : clé UNIQUE org+hash + TTL auto-purge.
+        _safe_index(db.bank_pdf_extractions, [("organization_id", 1), ("file_hash", 1)],
+                    "bank_pdf_extractions.org_hash", unique=True)
+        _safe_index(db.bank_pdf_extractions, "created_at", "bank_pdf_extractions.ttl",
+                    expireAfterSeconds=_BANK_PDF_CACHE_TTL_SECONDS)
         # Mémoire de rapprochements manuels (feature #7.3)
-        db.bank_match_aliases.create_index([("organization_id", 1)])
+        _safe_index(db.bank_match_aliases, [("organization_id", 1)], "bank_match_aliases.org")
         print("Database indexes created")
 
         # [ROBUSTESSE] Chaque migration est ISOLÉE dans son propre try/except : le bloc de
