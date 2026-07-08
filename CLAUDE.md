@@ -108,6 +108,15 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — Rapprochement bancaire : split d'un dépôt sur N factures (feature #7.8)**
+  - **Problème** : un dépôt Interac unique (ex. 14 808,78 $) couvrant plusieurs factures d'un même client ne pouvait être rapproché — le modal manuel ne montrait que les non-payées, une seule à la fois, et n'acceptait pas la sélection multiple.
+  - **Correctif** : nouveau helper backend `_apply_invoice_split_match` (contrat v1 : somme des soldes EXACTEMENT = tx.amount, ± 0,01 ; sinon 422) ; endpoint `POST /api/bank/transactions/{tx_id}/match` accepte `target_ids: [...]` pour ≥ 2 factures ; `match_kind="invoice_split"` distinct ; unmatch défait tous les payments du split + recompute chaque statut ; cascade DELETE d'une des N factures nettoie proprement les payments des autres. Frontend `BankManualSearchModal` : checkboxes multi-select, barre somme live, bouton "Rapprocher ces N factures" enabled à l'exact ; N=1 accepte aussi le paiement partiel (libellé "paiement partiel" quand écart).
+  - **Revue adversariale opus** (workflow 32 agents, 5 lentilles × 3 juges) : 8 findings dont 4 BLOCKING. Deux régressifs corrigés avant push :
+    - **Cascade `$set: payments: [...]` écrasait un payment concurrent** → remplacé par `$pull` par `bank_transaction_id` (préserve les paiements manuels arrivés entre find_one et update).
+    - **Régression frontend paiement partiel N=1** (bouton grisé si sum≠txAmt) → autorisé pour N=1, libellé change en "Rapprocher (paiement partiel)".
+  - **Dette technique documentée** (`docs/superpowers/tech-debt/bank-match-atomicity.md`) : 5 findings pré-existants dans `_apply_match` single, aggravés mais NON créés par le split : rollback partiel non-atomique, TOCTOU sur `tx.status` (double-clic/deux onglets), overshoot sur splits croisés, race read/write outstanding, unmatch partial failure. Fix propre = transaction MongoDB + CAS sur `tx.status`, à traiter dans un PR dédié qui refactore aussi le chemin single.
+  - Tests : `test_bank_invoice_split.py` (11 tests : happy path 2 & 3 factures, mismatch, duplicates, paid rejected, single target, unknown id, cascade release, non-split release, régression `$pull` préserve payment concurrent).
+
 - **2026-07-08 — Dépenses nettes des taxes récupérables (feature #7.7)**
   - **Problème (comptable)** : le P&L / T2125 / GIFI comptaient les dépenses au montant TTC (taxes incluses), alors qu'un inscrit TPS/TVQ doit déduire le NET — la taxe récupérable (CTI/RTI) se récupère via la déclaration de taxes, pas à l'impôt. Résultat : dépenses sur-estimées, revenu imposable sous-estimé (double récupération de la taxe). Validé ARC (Guide T4002, Mémo TPS/TVH 8-1) + Revenu Québec (IN-203).
   - **Correctif** : helper unifié `_expense_recovery_frac` (source unique : 50 % repas + prorata télécom avec seuils ARC ≤10 %→0 / ≥90 %→100 %) → le grand livre, le P&L et le rapport TPS/TVQ dérivent tous de la MÊME charge nette (`_expense_net_business_cad`). Réconciliation GL↔P&L simplifiée (P&L net == GL net directement, plus d'« écart structurel assumé »).

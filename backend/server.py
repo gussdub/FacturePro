@@ -1104,12 +1104,37 @@ def _release_bank_transaction(tx_id, scope):
     déclenche le DELETE. Sans ça, un non-owner supprimant une facture laisse la
     bank_transaction bloquée en `status=matched` pointant sur une facture morte
     (référence orpheline + violation de l'invariant "matched ⇒ target vivante").
+
+    Cas split (invoice_split) : quand une des N factures d'un split est supprimée, on doit
+    aussi retirer les payments des AUTRES factures pour éviter les paiements orphelins pointant
+    vers cette tx maintenant unmatched (l'utilisateur pourrait la re-match ailleurs → double
+    comptabilisation silencieuse).
     """
+    tx = db.bank_transactions.find_one({"id": tx_id, **scope}, {"_id": 0})
+    if tx and tx.get("match_kind") == "invoice_split":
+        for iid in (tx.get("invoice_ids") or []):
+            # $pull atomique par bank_transaction_id : ne touche QUE les payments du split, laisse
+            # intacts les paiements ajoutés concurremment sur la facture (fix revue adverse : un
+            # $set: payments: [...] écraserait un payment manuel arrivé entre find_one et update).
+            db.invoices.update_one(
+                {"id": iid, **scope},
+                {"$pull": {"payments": {"bank_transaction_id": tx_id}}})
+            updated = db.invoices.find_one({"id": iid, **scope}, {"_id": 0})
+            if not updated:
+                continue
+            # Normalise status paid/partial → sent avant recompute (voir delete_invoice_payment) :
+            # sinon _recompute_invoice_status conserve "paid" quand total_paid tombe à 0.
+            if updated.get("status") in ("paid", "partial"):
+                updated["status"] = "sent"
+            new_status = _recompute_invoice_status(updated)
+            db.invoices.update_one({"id": iid, **scope}, {"$set": {"status": new_status}})
     db.bank_transactions.update_one(
         {"id": tx_id, **scope},
         {"$set": {
             "status": "unmatched", "match_kind": None,
-            "match_id": None, "invoice_id": None, "matched_at": None,
+            "match_id": None, "match_ids": None,
+            "invoice_id": None, "invoice_ids": None,
+            "matched_at": None,
         }},
     )
 
@@ -1236,6 +1261,81 @@ def _apply_match(tx, kind, target_id, scope):
         {"id": tx["id"], **scope},
         {"$set": {"status": "matched", "match_kind": match_kind,
                   "match_id": match_id, "invoice_id": invoice_id,
+                  "matched_at": now}},
+    )
+    return db.bank_transactions.find_one({"id": tx["id"], **scope}, {"_id": 0})
+
+
+def _apply_invoice_split_match(tx, target_ids, scope):
+    """Rapproche une transaction avec PLUSIEURS factures (dépôt qui couvre 2+ factures d'un même
+    client). Contrainte v1 : la somme des soldes des factures doit égaler exactement le montant
+    de la transaction (± 0,01). Chaque facture reçoit un `payment` égal à son solde entier ; son
+    statut est recalculé. La transaction porte `match_kind="invoice_split"` + `match_ids=[...]`.
+
+    Garde-fous :
+    - liste non-vide (≥ 2 pour être vraiment un split — sinon `_apply_match` classique)
+    - pas de doublons
+    - chaque facture existe dans le scope, n'est PAS déjà `paid`
+    - Σ outstanding == abs(tx.amount_cad) ± 0,01
+    - Σ outstanding > 0 (évite un split sur uniquement des factures fantômes)
+    """
+    if tx.get("status") != "unmatched":
+        raise HTTPException(409, "Transaction already matched or ignored")
+    if not isinstance(target_ids, list) or len(target_ids) < 2:
+        raise HTTPException(422, "target_ids doit être une liste ≥ 2 (sinon utilise target_id)")
+    if len(set(target_ids)) != len(target_ids):
+        raise HTTPException(422, "target_ids ne peut pas contenir de doublons")
+    tx_amount = round(abs(float(tx.get("amount_cad", 0) or 0)), 2)
+    if tx_amount <= 0:
+        raise HTTPException(422, "Transaction amount must be > 0 for split")
+
+    invoices = []
+    total = 0.0
+    for iid in target_ids:
+        inv = db.invoices.find_one({"id": iid, **scope}, {"_id": 0})
+        if not inv:
+            raise HTTPException(404, f"Invoice {iid} not found")
+        if inv.get("status") == "paid":
+            raise HTTPException(409, f"Invoice {iid} already fully paid")
+        out = _get_invoice_outstanding(inv)
+        if out <= 0:
+            raise HTTPException(409, f"Invoice {iid} outstanding must be > 0 (got {out})")
+        invoices.append((inv, out))
+        total += out
+    total = round(total, 2)
+    if abs(total - tx_amount) > 0.01:
+        raise HTTPException(
+            422,
+            f"Somme des soldes ({total:.2f}) ≠ montant transaction ({tx_amount:.2f})")
+
+    now = datetime.now(timezone.utc).isoformat()
+    payment_ids = []
+    for inv, out in invoices:
+        payment = {
+            "id": str(uuid.uuid4()),
+            "amount_cad": round(out, 2),
+            "method": "transfer",
+            "date": tx.get("date") or now[:10],
+            "reference": (tx.get("description") or "")[:200],
+            "bank_transaction_id": tx["id"],
+            "created_at": now,
+        }
+        db.invoices.update_one(
+            {"id": inv["id"], **scope},
+            {"$push": {"payments": payment}})
+        updated = db.invoices.find_one({"id": inv["id"], **scope}, {"_id": 0})
+        new_status = _recompute_invoice_status(updated)
+        db.invoices.update_one({"id": inv["id"], **scope},
+                               {"$set": {"status": new_status}})
+        payment_ids.append(payment["id"])
+
+    db.bank_transactions.update_one(
+        {"id": tx["id"], **scope},
+        {"$set": {"status": "matched", "match_kind": "invoice_split",
+                  "match_id": None,          # legacy champ simple, N/A ici
+                  "match_ids": payment_ids,  # nouveau : liste des payments créés
+                  "invoice_ids": target_ids, # traçabilité pour cascade DELETE
+                  "invoice_id": None,
                   "matched_at": now}},
     )
     return db.bank_transactions.find_one({"id": tx["id"], **scope}, {"_id": 0})
@@ -6821,6 +6921,11 @@ def match_bank_transaction(tx_id: str, body: dict,
     tx = _get_tx_or_404(tx_id, _org_scope(current_user))
     kind = body.get("kind")
     target_id = body.get("target_id")
+    target_ids = body.get("target_ids")
+    # Split invoice_payment : liste de factures dont la somme des soldes == montant tx.
+    if kind == "invoice_payment" and isinstance(target_ids, list) and len(target_ids) >= 2:
+        result = _apply_invoice_split_match(tx, target_ids, _org_scope(current_user))
+        return clean_doc(result)
     if not target_id:
         raise HTTPException(422, "target_id required")
     result = _apply_match(tx, kind, target_id, _org_scope(current_user))
@@ -6856,6 +6961,23 @@ def unmatch_bank_transaction(tx_id: str,
             new_status = _recompute_invoice_status(updated)
             db.invoices.update_one({"id": invoice["id"], **_org_scope(current_user)},
                                    {"$set": {"status": new_status}})
+    elif tx.get("match_kind") == "invoice_split":
+        # Défaire un split : supprimer TOUS les payments créés (identifiés par bank_transaction_id
+        # = tx.id). $pull atomique — évite d'écraser un payment concurrent ajouté entre-temps.
+        invoice_ids = tx.get("invoice_ids") or []
+        for iid in invoice_ids:
+            scope = _org_scope(current_user)
+            db.invoices.update_one(
+                {"id": iid, **scope},
+                {"$pull": {"payments": {"bank_transaction_id": tx["id"]}}})
+            updated = db.invoices.find_one({"id": iid, **scope}, {"_id": 0})
+            if not updated:
+                continue
+            # Normalise paid/partial → sent avant recompute (voir delete_invoice_payment).
+            if updated.get("status") in ("paid", "partial"):
+                updated["status"] = "sent"
+            new_status = _recompute_invoice_status(updated)
+            db.invoices.update_one({"id": iid, **scope}, {"$set": {"status": new_status}})
     elif tx.get("match_kind") == "expense":
         exp = db.expenses.find_one(
             {"id": tx.get("match_id"), **_org_scope(current_user)}, {"_id": 0})
