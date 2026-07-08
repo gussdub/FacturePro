@@ -2218,12 +2218,12 @@ class TestAutopostReconciliation:
         finally:
             _cleanup(uid, org_id)
 
-    def test_expense_diff_is_recoverable_taxes(self, client):
-        # gl_net = pnl_gross − recoverable_taxes ; diff ≈ 0 ; l'écart structurel
-        # est bien les taxes récupérables (§9.1).
+    def test_expense_pnl_net_matches_gl_net(self, client):
+        # Feature #7.7 — le P&L compte désormais la charge NETTE (comme le GL) :
+        # pnl_gross == gl_net directement ; diff ≈ 0 ; recoverable_taxes est INFORMATIF.
         uid, org_id, h = _setup_org(client, "t13exp")
         try:
-            # dépense TTC 115 avec TPS 5 + TVQ 9.98 → net GL 100.02, taxes 14.98.
+            # dépense TTC 115 avec TPS 5 + TVQ 9.98 → net GL et P&L 100.02, taxes 14.98.
             _create_expense(client, h, amount=115.0, gst=5.0, qst=9.98)
             # 2e dépense sans taxe → net == brut.
             _create_expense(client, h, amount=50.0, gst=0.0, qst=0.0,
@@ -2235,15 +2235,12 @@ class TestAutopostReconciliation:
             r = _recon(client, h)
             assert r.status_code == 200, r.text
             exp = r.json()["expenses"]
-            # relation structurelle exacte (au cent près).
-            assert abs(exp["gl_net"]
-                       - (exp["pnl_gross"] - exp["recoverable_taxes"])) < 0.02, exp
-            # diff = pnl_gross − (gl_net + recoverable_taxes) ≈ 0.
+            # nouvelle relation structurelle : pnl_gross == gl_net directement.
+            assert abs(exp["pnl_gross"] - exp["gl_net"]) < 0.02, exp
+            # diff = pnl_gross − gl_net ≈ 0.
             assert abs(exp["diff"]) < 0.02, exp
-            # l'écart structurel = les taxes récupérables (14.98 attendu).
+            # taxes récupérables restent exposées comme information (14.98 attendu).
             assert abs(exp["recoverable_taxes"] - 14.98) < 0.02, exp
-            # gl_net < pnl_gross (charge nette de taxes).
-            assert exp["gl_net"] < exp["pnl_gross"]
 
             # cohérence P&L : pnl_gross == total_expenses.gross (feature #5).
             rp = client.get(

@@ -87,6 +87,34 @@ def _line_account_number(server_mod, line):
     return acc.get("account_number") if acc else None
 
 
+def test_reconciliation_balanced_after_net(auth_headers):
+    """Après le fix, P&L net == GL net → expenses_diff ≈ 0 (org autopost activé)."""
+    from backend import server
+    org = server.db.users.find_one({"email": "gussdub@gmail.com"})
+    org_id = org.get("organization_id")
+    if not org_id:
+        pytest.skip("org_id indisponible")
+    prev = (server.db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}).get("autopost_enabled", False)
+    server.db.company_settings.update_one({"organization_id": org_id},
+        {"$set": {"autopost_enabled": True}}, upsert=True)
+    exp_id = None
+    try:
+        exp_id = client.post("/api/expenses", headers=auth_headers, json={
+            "amount": 114.98, "currency": "CAD", "category_code": "meals_entertainment",
+            "description": "Recon diner", "expense_date": "2099-09-15",
+            "gst_paid_cad": 5.0, "qst_paid_cad": 9.98}).json()["id"]
+        r = client.get("/api/ledger/reconciliation?start=2099-09-01&end=2099-09-30",
+                       headers=auth_headers)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert abs(data["expenses"]["diff"]) < 0.02, data["expenses"]
+    finally:
+        if exp_id:
+            client.delete(f"/api/expenses/{exp_id}", headers=auth_headers)
+        server.db.company_settings.update_one({"organization_id": org_id},
+            {"$set": {"autopost_enabled": prev}})
+
+
 def test_sales_tax_meals_50_and_telecom_threshold(auth_headers):
     """CTI = 50% de la taxe repas ; télécom 8% affaires → CTI 0 (seuil ≤10%)."""
     ids = []

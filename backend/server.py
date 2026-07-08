@@ -5759,9 +5759,11 @@ def ledger_reconciliation(
         line_sums, "debit", _tax_recoverable_numbers(org_id))
 
     revenue_diff = round(revenue_pnl - revenue_gl, 2)
-    # diff dépenses = brut P&L − (charge nette GL + taxes récupérables) ≈ 0.
-    expenses_diff = round(
-        expenses_pnl_gross - (expenses_gl_net + recoverable_taxes), 2)
+    # [COMPTA] Feature #7.7 — le P&L compte désormais la charge NETTE des taxes récupérables
+    # (comme le grand livre) : expenses_pnl_gross == expenses_gl_net directement. Les taxes
+    # récupérables (recoverable_taxes) restent exposées comme LIGNE INFORMATIVE (12xx), plus
+    # dans l'équation d'équilibre.
+    expenses_diff = round(expenses_pnl_gross - expenses_gl_net, 2)
 
     balanced = (abs(revenue_diff) < _RECON_THRESHOLD
                 and abs(expenses_diff) < _RECON_THRESHOLD)
