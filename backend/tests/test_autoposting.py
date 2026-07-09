@@ -234,9 +234,14 @@ class TestAutopostMigration:
                 server_module.db.journal_entries.drop_index("uniq_live_auto_source")
             except pymongo.errors.OperationFailure:
                 pass
+            # NON-unique volontairement : l'ancien filtre (`reverses_entry_id:None` SANS la garde
+            # `reversed_by_entry_id:None`) matche les auto contre-passées d'une dépense supprimée
+            # (post→reversal, où reverses_entry_id reste None mais reversed_by_entry_id est posé) ;
+            # un index UNIQUE échouerait donc son build sur une base réelle contenant de tels cycles
+            # (données légitimes, pas un doublon). La réconciliation testée porte sur le FILTRE, pas
+            # sur l'unicité — un index non-unique à filtre obsolète déclenche le même drop+recreate.
             server_module.db.journal_entries.create_index(
                 [("organization_id", 1), ("source_type", 1), ("source_id", 1)],
-                unique=True,
                 partialFilterExpression={
                     "entry_type": "auto", "reverses_entry_id": None},
                 name="uniq_live_auto_source",
