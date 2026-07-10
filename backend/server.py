@@ -5317,52 +5317,169 @@ def _ledger_pdf_unmapped_section(unmapped_accounts):
     return ("Comptes non mappés (diagnostic — écritures orphelines)", rows)
 
 
+def _ledger_pdf_generated_line():
+    """Ligne « Généré le … » en HEURE DU QUÉBEC (America/Toronto, Est — HNE/HAE selon la
+    saison), avec repli UTC si la base de fuseaux est indisponible. Utilisée dans l'entête de
+    tous les PDF du grand livre."""
+    try:
+        from zoneinfo import ZoneInfo
+        now_qc = datetime.now(ZoneInfo("America/Toronto"))
+        return (f"Généré le {now_qc.strftime('%Y-%m-%d à %H:%M')} (heure du Québec) "
+                "— État non audité, usage interne")
+    except Exception:
+        return (f"Généré le {datetime.now(timezone.utc).strftime('%Y-%m-%d à %H:%M')} UTC "
+                "— État non audité, usage interne")
+
+
+def _ledger_pdf_load_logo(org_id):
+    """Charge le logo de l'entreprise (db.files via settings.logo_url) comme flowable RLImage
+    borné à 1 pouce. Même source que le PDF de facture. Retourne None si absent/illisible
+    (jamais bloquant : un PDF sans logo reste valide)."""
+    try:
+        from reportlab.platypus import Image as RLImage
+        from reportlab.lib.units import inch
+        settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+        logo_url = settings.get("logo_url") or ""
+        if logo_url.startswith("/api/files/"):
+            file_id = logo_url.rsplit("/", 1)[-1]
+            record = db.files.find_one({"id": file_id, "is_deleted": False})
+            if record and "data" in record:
+                return RLImage(io.BytesIO(bytes(record["data"])),
+                               width=1.0 * inch, height=1.0 * inch)
+    except Exception:
+        return None
+    return None
+
+
+def _ledger_pdf_styles():
+    """Feuille de styles partagée des PDF du grand livre (couleurs + paragraphes)."""
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.colors import HexColor
+    base = getSampleStyleSheet()
+    teal = HexColor("#008F7A"); dark = HexColor("#1f2937"); gray = HexColor("#6b7280")
+    return {
+        "teal": teal, "dark": dark, "gray": gray,
+        "title": ParagraphStyle("T", parent=base["Heading1"], fontSize=18, textColor=teal, spaceAfter=4),
+        "h2": ParagraphStyle("H2", parent=base["Heading2"], fontSize=12, textColor=dark, spaceBefore=10, spaceAfter=4),
+        "small": ParagraphStyle("S", parent=base["Normal"], fontSize=9, textColor=gray, leading=11),
+    }
+
+
+def _ledger_pdf_header_flowables(title, subtitle, org_id, S):
+    """Entête commun à tous les PDF du grand livre : logo (si présent) à gauche + bloc titre /
+    raison sociale / heure du Québec à droite. Strings user-supplied échappées (anti-injection).
+    Retourne une liste de flowables (le logo est optionnel)."""
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.units import inch
+    from html import escape as html_escape
+    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+    company_name = html_escape(settings.get("company_name") or "(sans nom)")
+    text_block = [
+        Paragraph(html_escape(title), S["title"]),
+        Paragraph(f"<b>{company_name}</b> &nbsp;·&nbsp; {html_escape(subtitle)}", S["small"]),
+        Paragraph(_ledger_pdf_generated_line(), S["small"]),
+    ]
+    logo = _ledger_pdf_load_logo(org_id)
+    if logo is not None:
+        header = Table([[logo, text_block]], colWidths=[1.15 * inch, 5.85 * inch])
+        header.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        return [header, Spacer(1, 0.2 * inch)]
+    return text_block + [Spacer(1, 0.2 * inch)]
+
+
+def _render_trial_balance_pdf(title, subtitle, tb, org_id, unmapped_section=None):
+    """PDF de la balance de vérification en 3 COLONNES (Compte | Débit | Crédit) + ligne Total,
+    À L'IDENTIQUE de l'écran. Chaque montant est placé dans SA colonne (débit XOR crédit) au lieu
+    de l'ancien rendu 1 colonne avec suffixe (Dr)/(Cr). Entête partagé (logo + heure du Québec).
+    Rendu strict des chiffres du JSON (`_trial_balance_rows`) — aucun recalcul."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+    from html import escape as html_escape
+    S = _ledger_pdf_styles()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+                            leftMargin=0.6 * inch, rightMargin=0.6 * inch)
+    elements = _ledger_pdf_header_flowables(title, subtitle, org_id, S)
+
+    data = [["Compte", "Débit", "Crédit"]]
+    for a in tb["accounts"]:
+        deb = _ledger_pdf_money(a["debit_balance"]) if a["debit_balance"] > 0 else ""
+        cred = _ledger_pdf_money(a["credit_balance"]) if a["credit_balance"] > 0 else ""
+        data.append([html_escape(f"{a['account_number']} — {a['name']}"), deb, cred])
+    data.append(["Total", _ledger_pdf_money(tb["total_debit"]), _ledger_pdf_money(tb["total_credit"])])
+    n = len(data)
+    t = Table(data, colWidths=[4.4 * inch, 1.3 * inch, 1.3 * inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("TEXTCOLOR", (0, 0), (-1, -1), S["dark"]),
+        ("ALIGN", (1, 0), (2, -1), "RIGHT"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        # Entête de colonnes (comme l'écran : fond gris, gras)
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 0), (-1, 0), HexColor("#f3f4f6")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, S["gray"]),
+        # Séparateurs de lignes de comptes
+        ("LINEBELOW", (0, 1), (-1, n - 2), 0.25, HexColor("#e5e7eb")),
+        # Ligne Total : gras + filet épais au-dessus
+        ("FONTNAME", (0, n - 1), (-1, n - 1), "Helvetica-Bold"),
+        ("LINEABOVE", (0, n - 1), (-1, n - 1), 0.75, S["dark"]),
+    ]))
+    elements.append(t)
+
+    if unmapped_section:
+        section_title, rows = unmapped_section
+        elements.append(Paragraph(html_escape(section_title), S["h2"]))
+        udata = [[html_escape(str(label)), amount_str] for (label, amount_str, _) in rows] or [["(aucun)", ""]]
+        ut = Table(udata, colWidths=[5.0 * inch, 2.0 * inch])
+        ut.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("TEXTCOLOR", (0, 0), (-1, -1), S["dark"]),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.25, HexColor("#e5e7eb")),
+        ]))
+        elements.append(ut)
+
+    doc.build(elements)
+    buf.seek(0)
+    return buf.read()
+
+
 def _render_ledger_table_pdf(title, subtitle, sections, org_id):
-    """Génère un PDF FR-CA générique (balance de vérification ou bilan).
+    """Génère un PDF FR-CA générique (bilan, etc.).
     sections = liste de (titre_section, [(label, montant_str, is_total_bool), ...]).
 
     [COMPTA] Rendu strict de ce que produisent les endpoints JSON (mêmes chiffres
     dérivés des écritures posted, partie double) : ce helper ne recalcule aucun
     solde, il met en page. L'équilibre (`balanced`) est déjà porté par le
     sous-titre. Toutes les strings user-supplied (raison sociale, noms de comptes)
-    sont échappées via html.escape avant ReportLab (anti-injection markup)."""
+    sont échappées via html.escape avant ReportLab (anti-injection markup).
+    Entête partagé (logo entreprise + heure du Québec) via _ledger_pdf_header_flowables."""
     from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.lib.colors import HexColor
     from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+        SimpleDocTemplate, Paragraph, Table, TableStyle,
     )
     from html import escape as html_escape
 
-    teal = HexColor("#008F7A")
-    dark = HexColor("#1f2937")
-    gray = HexColor("#6b7280")
-
-    settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
-    company_name = html_escape(settings.get("company_name") or "(sans nom)")
+    S = _ledger_pdf_styles()
+    dark = S["dark"]
+    h2_style = S["h2"]
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=letter,
                             topMargin=0.6 * inch, bottomMargin=0.6 * inch,
                             leftMargin=0.6 * inch, rightMargin=0.6 * inch)
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle("T", parent=styles["Heading1"], fontSize=18,
-                                 textColor=teal, spaceAfter=4)
-    h2_style = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12,
-                              textColor=dark, spaceBefore=10, spaceAfter=4)
-    small_style = ParagraphStyle("S", parent=styles["Normal"], fontSize=9,
-                                 textColor=gray, leading=11)
 
-    elements = [
-        Paragraph(html_escape(title), title_style),
-        Paragraph(f"<b>{company_name}</b> &nbsp;·&nbsp; {html_escape(subtitle)}",
-                  small_style),
-        Paragraph(
-            f"Généré le {datetime.now(timezone.utc).strftime('%Y-%m-%d à %H:%M UTC')} "
-            "— État non audité, usage interne", small_style),
-        Spacer(1, 0.2 * inch),
-    ]
+    elements = _ledger_pdf_header_flowables(title, subtitle, org_id, S)
 
     for section_title, rows in sections:
         if section_title:
@@ -5404,24 +5521,14 @@ def trial_balance_pdf(
     if not as_of:
         as_of = datetime.now(timezone.utc).date().isoformat()
     tb = _trial_balance_rows(current_user.organization_id, as_of)
-    rows = []
-    for a in tb["accounts"]:
-        amount = a["debit_balance"] if a["debit_balance"] > 0 else -a["credit_balance"]
-        side = "Dr" if a["debit_balance"] > 0 else "Cr"
-        rows.append((f"{a['account_number']} — {a['name']} ({side})",
-                     _ledger_pdf_money(abs(amount)), False))
-    rows.append(("Total débits", _ledger_pdf_money(tb["total_debit"]), True))
-    rows.append(("Total crédits", _ledger_pdf_money(tb["total_credit"]), True))
     equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
-    # [COMPTA] (fix reviewer #4) Si des orphelins expliquent un déséquilibre,
-    # on les rend VERBATIM depuis le JSON sous la balance principale.
-    sections = [(None, rows)]
+    # [COMPTA] (fix reviewer #4) Si des orphelins expliquent un déséquilibre, on les rend
+    # VERBATIM depuis le JSON sous la balance principale (section « Comptes non mappés »).
     unmapped_section = _ledger_pdf_unmapped_section(tb.get("unmapped_accounts"))
-    if unmapped_section:
-        sections.append(unmapped_section)
-    pdf = _render_ledger_table_pdf(
+    # Rendu 3 colonnes (Compte | Débit | Crédit) + ligne Total, identique à l'écran.
+    pdf = _render_trial_balance_pdf(
         "Balance de vérification", f"Au {as_of} — Balance {equilibre}",
-        sections, current_user.organization_id)
+        tb, current_user.organization_id, unmapped_section=unmapped_section)
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="balance-verification-{as_of}.pdf"',
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",

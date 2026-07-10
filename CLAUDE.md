@@ -108,6 +108,11 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — PDF balance de vérification : 3 colonnes + logo + heure Québec (feature #7.10)**
+  - **Avant** : le PDF rendait la balance en 1 colonne (label « 1000 — Encaisse (Dr) » + montant), avec « Total débits »/« Total crédits » en lignes séparées, sans logo, horodaté en UTC — décalé de l'écran (tableau 3 colonnes Compte | Débit | Crédit).
+  - **Après** : nouveau `_render_trial_balance_pdf` rend un tableau 3 colonnes **identique à l'écran** (Compte | Débit | Crédit, montant dans sa colonne, ligne Total avec les 2 totaux, en-tête gris). Entête partagé `_ledger_pdf_header_flowables` : **logo entreprise** (même source que le PDF de facture, `db.files` via `settings.logo_url`, borné 1", jamais bloquant) + **heure du Québec** (`America/Toronto`, HNE/HAE, repli UTC via `_ledger_pdf_generated_line`). Le bilan (`_render_ledger_table_pdf` refactoré) hérite aussi du logo + heure QC.
+  - Montants au format FR-CA (`5 927,40 $`) via `_ledger_pdf_money` — format comptable québécois (séparateur milliers + virgule décimale). Rendu vérifié visuellement (PDF inspecté). 108 tests GL verts.
+
 - **2026-07-08 — Fix GL : charges télécom postées en 5900 au lieu de 5050/5051 (feature #7.9)**
   - **Bug** : une org seedée AVANT la feature #14 (comptes télécom 5050/5051) n'a pas ces comptes dans son plan. La migration `migrate_chart_add_accounts_v1` les crée mais SEULEMENT au démarrage backend. Résultat : une dépense « Télécom — internet » (catégorie `telecom_internet` → devrait aller au compte 5051) retombait silencieusement sur **5900 « Dépenses diverses »** au grand livre, via le fallback de `_resolve_expense_account`. Constaté en prod : Bell Canada (téléphone/internet) posté en 5900. Diagnostic par workflow multi-agent + reproduction locale (le repost au PUT est inconditionnel et correct ; la vraie cause était le compte cible manquant → fallback 5900).
   - **Correctif** : nouveau helper `_ensure_expense_account_for_category` — crée à la volée le compte 5xxx d'une catégorie MAPPÉE (via `EXPENSE_ACCOUNT_NUMBERS`) si absent du plan, au moment du POST, sans dépendre d'un redémarrage. `_resolve_expense_account` ne retombe sur 5900 QUE pour les catégories non mappées (`other`/vide/inconnu). Idempotent (DuplicateKeyError → re-find), org-scopé.
