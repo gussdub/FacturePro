@@ -5086,7 +5086,7 @@ def trial_balance(
     _apply_ledger_no_store(response)
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
     if not as_of:
-        as_of = datetime.now(timezone.utc).date().isoformat()
+        as_of = _today_local_isodate()
     return _trial_balance_rows(current_user.organization_id, as_of)
 
 
@@ -5117,7 +5117,7 @@ def balance_sheet(
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
     org_id = current_user.organization_id
     if not as_of:
-        as_of = datetime.now(timezone.utc).date().isoformat()
+        as_of = _today_local_isodate()
     as_of_date = _date.fromisoformat(as_of)
 
     settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
@@ -5315,6 +5315,19 @@ def _ledger_pdf_unmapped_section(unmapped_accounts):
         side = _ledger_pdf_money(d) if d else _ledger_pdf_money(-c)
         rows.append((f"Compte inconnu {u.get('account_id')}", side, False))
     return ("Comptes non mappés (diagnostic — écritures orphelines)", rows)
+
+
+def _today_local_isodate():
+    """Date « aujourd'hui » en HEURE DU QUÉBEC (America/Toronto) au format ISO (YYYY-MM-DD).
+
+    Corrige un bug de fuseau : `datetime.now(timezone.utc).date()` renvoie DEMAIN le soir au
+    Québec (UTC est en avance de 4-5 h), ce qui datait les rapports (balance, bilan) et leurs
+    noms de fichiers PDF du lendemain. Repli UTC si la base de fuseaux est indisponible."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/Toronto")).date().isoformat()
+    except Exception:
+        return datetime.now(timezone.utc).date().isoformat()
 
 
 def _ledger_pdf_generated_line():
@@ -5519,7 +5532,7 @@ def trial_balance_pdf(
     financier jamais mis en cache."""
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
     if not as_of:
-        as_of = datetime.now(timezone.utc).date().isoformat()
+        as_of = _today_local_isodate()
     tb = _trial_balance_rows(current_user.organization_id, as_of)
     equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
     # [COMPTA] (fix reviewer #4) Si des orphelins expliquent un déséquilibre, on les rend
@@ -5546,7 +5559,7 @@ def balance_sheet_pdf(
     cache."""
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
     if not as_of:
-        as_of = datetime.now(timezone.utc).date().isoformat()
+        as_of = _today_local_isodate()
     # balance_sheet() exige un paramètre Response (positionnel) : on lui passe un
     # Response jetable, seul le corps JSON nous intéresse ici.
     bs = balance_sheet(response=Response(), as_of=as_of, current_user=current_user)
