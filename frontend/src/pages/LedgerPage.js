@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import {
   formatCoverage, sourceDocRoute, sourceDocLabel, isAutoEntry, backfillTotal,
 } from '../utils/ledgerAutopost';
+import { todayQuebecISO } from '../utils/dateQuebec';
 
 const TABS = [
   { key: 'accounts', label: 'Plan comptable' },
@@ -157,7 +158,7 @@ export function JournalTab() {
   const [entries, setEntries] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [showModal, setShowModal] = useState(false);
-  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [entryDate, setEntryDate] = useState(todayQuebecISO());
   const [description, setDescription] = useState('');
   const [lines, setLines] = useState([
     { account_id: '', debit: '', credit: '' },
@@ -777,7 +778,7 @@ function OpeningTab() {
 
 function ContributionTab() {
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayQuebecISO());
   const [error, setError] = useState(null);
   const [ok, setOk] = useState(false);
 
@@ -864,7 +865,7 @@ function UnmappedAccountsNotice({ unmapped }) {
 }
 
 function TrialBalanceTab() {
-  const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = useState(todayQuebecISO());
   const [data, setData] = useState(null);
   const load = () => axios.get(`${BACKEND_URL}/api/ledger/trial-balance?as_of=${asOf}`)
     .then(r => setData(r.data)).catch(() => {});
@@ -916,7 +917,7 @@ function TrialBalanceTab() {
 }
 
 function BalanceSheetTab() {
-  const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
+  const [asOf, setAsOf] = useState(todayQuebecISO());
   const [data, setData] = useState(null);
   const load = () => axios.get(`${BACKEND_URL}/api/ledger/balance-sheet?as_of=${asOf}`)
     .then(r => setData(r.data)).catch(() => {});

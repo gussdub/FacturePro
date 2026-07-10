@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency, CURRENCY_LABELS } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
+import { todayQuebecISO } from '../utils/dateQuebec';
 import { ScanLine, Paperclip, Edit, AlertTriangle, Car } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 import { useAuth } from '../context/AuthContext';
@@ -159,7 +160,7 @@ const ExpensesPage = () => {
       category_custom_label: exp.category_custom_label || '',
       taxes_auto_computed: exp.taxes_auto_computed || false,
       vendor: exp.vendor || '',
-      expense_date: exp.expense_date || new Date().toISOString().slice(0, 10),
+      expense_date: exp.expense_date || todayQuebecISO(),
       amount: exp.amount ?? '',
       gst_paid_cad: exp.gst_paid_cad ?? 0,
       qst_paid_cad: exp.qst_paid_cad ?? 0,
@@ -417,7 +418,7 @@ const ExpensesPage = () => {
     return {
       vendor: ex.vendor || '',
       description: ex.vendor || '',
-      expense_date: ex.expense_date || new Date().toISOString().slice(0, 10),
+      expense_date: ex.expense_date || todayQuebecISO(),
       amount: ex.total_amount ?? ex.total_cad ?? '',
       category_code: ex.category_code || 'other',
       gst_paid_cad: ex.gst_paid_cad ?? 0,

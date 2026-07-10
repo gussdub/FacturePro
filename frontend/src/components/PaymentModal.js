@@ -3,6 +3,7 @@ import axios from 'axios';
 import { X, Trash2, Plus } from 'lucide-react';
 import { BACKEND_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
+import { todayQuebecISO } from '../utils/dateQuebec';
 
 const METHOD_OPTIONS = [
   { value: 'cash', label: 'Comptant' },
@@ -24,7 +25,7 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
   const [form, setForm] = useState({
     amount_cad: '',
     method: 'cheque',
-    date: new Date().toISOString().slice(0, 10),
+    date: todayQuebecISO(),
     reference: '',
   });
   const [err, setErr] = useState(null);
@@ -41,7 +42,7 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
     setForm({
       amount_cad: '',
       method: 'cheque',
-      date: new Date().toISOString().slice(0, 10),
+      date: todayQuebecISO(),
       reference: '',
     });
     setErr(null);
