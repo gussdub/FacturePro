@@ -5207,42 +5207,22 @@ def balance_sheet(
     }
 
 
-@app.get("/api/ledger/general-ledger")
-def general_ledger(
-    response: Response,
-    account_id: str,
-    start: str = None, end: str = None,
-    current_user: CurrentUser = Depends(require_permission("accounting:read")),
-):
-    """Grand livre par compte (§6.5) : détail des mouvements d'un compte avec
-    solde progressif (running_balance).
+def _gl_account_detail(org_id: str, acc: dict, start: str = None, end: str = None) -> dict:
+    """Détail d'un compte pour le grand livre (§6.5) : solde d'ouverture (cumul AVANT `start`),
+    mouvements postés dans [start, end] avec solde progressif, solde de clôture.
 
-    [COMPTA] Le solde progressif est orienté par le solde normal du compte
-    (débiteur pour actif/charges, créditeur pour passif/capitaux/produits) et
-    n'agrège QUE les écritures status='posted' — origines contre-passées ET
-    leurs miroirs restent posted (net zéro), aucune n'est jamais retirée
-    (cf. _account_balance §5.2/§5.3). `opening_balance` = solde du compte AVANT
-    `start` (borne day_before = start - 1j) ; les mouvements de la fenêtre
-    [start, end] sont ensuite cumulés ligne par ligne ; `closing_balance` =
-    solde progressif final. Compte introuvable → 404. [COMPTA] no-store : chiffre
-    financier jamais mis en cache."""
+    [COMPTA] Solde orienté par le solde normal (débiteur actif/charges, créditeur
+    passif/capitaux/produits). N'agrège QUE `status='posted'` — origines contre-passées ET miroirs
+    restent posted (net zéro), jamais retirés (cf. _account_balance §5.2/§5.3). `opening_balance` =
+    solde AVANT `start` (jour précédent inclus). Réutilisé par l'endpoint JSON par compte ET le
+    rapport général (PDF/CSV) — source unique de vérité du calcul."""
     from datetime import date as _date, timedelta as _td
-    _apply_ledger_no_store(response)
-    org_id = current_user.organization_id
-    _ensure_chart_seeded(org_id, current_user.id)
-    acc = db.chart_of_accounts.find_one({
-        "id": account_id, "organization_id": org_id}, {"_id": 0})
-    if not acc:
-        raise HTTPException(404, "Compte introuvable")
+    account_id = acc["id"]
     normal = acc["normal_balance"]
-
-    # Solde d'ouverture = solde du compte avant `start` (jour précédent inclus)
     opening_balance = 0.0
     if start:
         day_before = (_date.fromisoformat(start) - _td(days=1)).isoformat()
-        opening_balance = _account_balance(org_id, account_id, normal,
-                                           as_of_date=day_before)
-
+        opening_balance = _account_balance(org_id, account_id, normal, as_of_date=day_before)
     match = {"organization_id": org_id, "status": "posted",
              "lines.account_id": account_id}
     if start or end:
@@ -5254,7 +5234,6 @@ def general_ledger(
         match["entry_date"] = df
     entries = list(db.journal_entries.find(match, {"_id": 0})
                    .sort([("entry_date", 1), ("entry_number", 1)]))
-
     running = opening_balance
     lines = []
     for entry in entries:
@@ -5263,10 +5242,7 @@ def general_ledger(
                 continue
             debit = float(ln.get("debit", 0) or 0)
             credit = float(ln.get("credit", 0) or 0)
-            if normal == "debit":
-                running += debit - credit
-            else:
-                running += credit - debit
+            running += (debit - credit) if normal == "debit" else (credit - debit)
             lines.append({
                 "entry_id": entry["id"],
                 "entry_number": entry["entry_number"],
@@ -5287,6 +5263,81 @@ def general_ledger(
         "lines": lines,
         "closing_balance": round(running, 2),
     }
+
+
+def _general_ledger_report(org_id: str, user_id: str, account_id: str = None,
+                           start: str = None, end: str = None,
+                           include_empty: bool = False) -> dict:
+    """Rapport de grand livre : UN compte (account_id fourni) ou TOUS les comptes (« général »,
+    account_id None). En mode général, exclut par défaut les comptes sans mouvement ET à solde
+    d'ouverture/clôture nul (include_empty=True pour tout inclure). Comptes triés par numéro.
+    Compte filtré introuvable → 404."""
+    _ensure_chart_seeded(org_id, user_id)
+    if account_id:
+        acc = db.chart_of_accounts.find_one(
+            {"id": account_id, "organization_id": org_id}, {"_id": 0})
+        if not acc:
+            raise HTTPException(404, "Compte introuvable")
+        return {"scope": "single", "start": start, "end": end,
+                "accounts": [_gl_account_detail(org_id, acc, start, end)]}
+    accounts = list(db.chart_of_accounts.find({"organization_id": org_id}, {"_id": 0}))
+    accounts.sort(key=lambda a: a.get("account_number", ""))
+    details = []
+
+    def _keep(d):
+        return (include_empty or d["lines"]
+                or abs(d["opening_balance"]) >= 0.005 or abs(d["closing_balance"]) >= 0.005)
+
+    for acc in accounts:
+        d = _gl_account_detail(org_id, acc, start, end)
+        if _keep(d):
+            details.append(d)
+
+    # [COMPTA] Diagnostic orphelins (cohérence avec la balance de vérification, cf.
+    # _trial_balance_rows) : une ligne postée peut référer un account_id absent du plan (orphelin
+    # de migration / édition hors API). Sans ça, ses mouvements n'apparaîtraient NULLE PART dans le
+    # grand livre général et le total ne réconcilierait plus avec la balance. On les surface sous un
+    # libellé « Compte non mappé » (normal_balance débit par convention d'affichage).
+    known_ids = {a["id"] for a in accounts}
+    entry_match = {"organization_id": org_id, "status": "posted"}
+    if end:
+        entry_match["entry_date"] = {"$lte": end}
+    orphan_ids = set()
+    for entry in db.journal_entries.find(entry_match, {"_id": 0, "lines": 1}):
+        for ln in entry.get("lines", []):
+            aid = ln.get("account_id")
+            if aid and aid not in known_ids:
+                orphan_ids.add(aid)
+    for aid in sorted(orphan_ids):
+        synth = {"id": aid, "account_number": "—", "name": f"Compte non mappé ({aid})",
+                 "account_type": "unknown", "normal_balance": "debit"}
+        d = _gl_account_detail(org_id, synth, start, end)
+        if _keep(d):
+            details.append(d)
+
+    return {"scope": "general", "start": start, "end": end, "accounts": details}
+
+
+@app.get("/api/ledger/general-ledger")
+def general_ledger(
+    response: Response,
+    account_id: str,
+    start: str = None, end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """Grand livre par compte (§6.5) : détail des mouvements d'un compte avec solde progressif.
+    Délègue à `_gl_account_detail` (source unique de vérité). Compte introuvable → 404.
+    [COMPTA] no-store : chiffre financier jamais mis en cache."""
+    _apply_ledger_no_store(response)
+    start = _validate_iso_date_param(start, "du")
+    end = _validate_iso_date_param(end, "au")
+    org_id = current_user.organization_id
+    _ensure_chart_seeded(org_id, current_user.id)
+    acc = db.chart_of_accounts.find_one({
+        "id": account_id, "organization_id": org_id}, {"_id": 0})
+    if not acc:
+        raise HTTPException(404, "Compte introuvable")
+    return _gl_account_detail(org_id, acc, start, end)
 
 
 # ─── PDF Grand Livre (§7.3) : balance de vérification + bilan, FR-CA ───
@@ -5641,6 +5692,166 @@ def _autopost_coverage(organization_id: str, current_user: CurrentUser) -> dict:
         "expenses_posted": exp_posted,
         "expenses_total": exp_total,
     }
+
+
+def _validate_iso_date_param(value, field):
+    """Valide qu'un query-param date est ISO (AAAA-MM-JJ) ou vide. Normalise "" → None et lève
+    HTTPException(400) sur format invalide — évite un ValueError non géré (500) en aval
+    (_date.fromisoformat) ET toute interpolation d'une valeur non contrôlée dans le nom de
+    fichier Content-Disposition."""
+    if value in (None, ""):
+        return None
+    from datetime import date as _date
+    try:
+        _date.fromisoformat(value)
+    except (ValueError, TypeError):
+        raise HTTPException(400, f"Date « {field} » invalide (format attendu AAAA-MM-JJ)")
+    return value
+
+
+def _gl_period_label(start, end):
+    if start and end:
+        return f"Du {start} au {end}"
+    if start:
+        return f"À partir du {start}"
+    if end:
+        return f"Jusqu'au {end}"
+    return "Tout l'historique"
+
+
+def _render_general_ledger_pdf(report, org_id, start, end):
+    """PDF du grand livre : une section par compte (solde d'ouverture → mouvements avec solde
+    progressif → solde de clôture), 6 colonnes (Date | N° | Description | Débit | Crédit | Solde).
+    Entête partagé (logo + heure du Québec). Rendu strict de `_general_ledger_report`."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from html import escape as html_escape
+    S = _ledger_pdf_styles()
+    desc_style = ParagraphStyle("GLDesc", parent=S["small"], fontSize=8,
+                                textColor=S["dark"], leading=10)
+    accounts = report.get("accounts", [])
+    if report.get("scope") == "single" and accounts:
+        a = accounts[0]["account"]
+        subtitle = (f"Compte {html_escape(a['account_number'])} — {html_escape(a['name'])}"
+                    f" · {_gl_period_label(start, end)}")
+    else:
+        subtitle = f"Tous les comptes · {_gl_period_label(start, end)}"
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+                            leftMargin=0.5 * inch, rightMargin=0.5 * inch)
+    elements = _ledger_pdf_header_flowables("Grand livre", subtitle, org_id, S)
+    if not accounts:
+        elements.append(Paragraph("Aucun mouvement pour les critères sélectionnés.", S["small"]))
+    grid = HexColor("#e5e7eb")
+    for det in accounts:
+        a = det["account"]
+        elements.append(Paragraph(
+            f"{html_escape(a['account_number'])} — {html_escape(a['name'])}", S["h2"]))
+        data = [["Date", "N°", "Description", "Débit", "Crédit", "Solde"]]
+        data.append(["", "", Paragraph("<i>Solde d'ouverture</i>", desc_style),
+                     "", "", _ledger_pdf_money(det["opening_balance"])])
+        for ln in det["lines"]:
+            data.append([
+                ln["entry_date"], html_escape(ln["entry_number"]),
+                Paragraph(html_escape(ln["description"] or ""), desc_style),
+                _ledger_pdf_money(ln["debit"]) if ln["debit"] else "",
+                _ledger_pdf_money(ln["credit"]) if ln["credit"] else "",
+                _ledger_pdf_money(ln["running_balance"]),
+            ])
+        data.append(["", "", Paragraph("<b>Solde de clôture</b>", desc_style),
+                     "", "", _ledger_pdf_money(det["closing_balance"])])
+        n = len(data)
+        t = Table(data, repeatRows=1,
+                  colWidths=[0.8 * inch, 0.75 * inch, 3.0 * inch, 0.95 * inch, 0.95 * inch, 1.05 * inch])
+        t.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("TEXTCOLOR", (0, 0), (-1, -1), S["dark"]),
+            ("ALIGN", (3, 0), (5, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 0), (-1, 0), HexColor("#f3f4f6")),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.5, S["gray"]),
+            ("LINEBELOW", (0, 1), (-1, n - 2), 0.25, grid),
+            ("FONTNAME", (0, n - 1), (-1, n - 1), "Helvetica-Bold"),
+            ("LINEABOVE", (0, n - 1), (-1, n - 1), 0.5, S["dark"]),
+        ]))
+        elements.append(t)
+        elements.append(Spacer(1, 0.15 * inch))
+    doc.build(elements)
+    buf.seek(0)
+    return buf.read()
+
+
+def _render_general_ledger_csv(report):
+    """CSV du grand livre (BOM utf-8 pour Excel FR). Montants en décimal point (`.`), 2 décimales,
+    pour rester parsables comme nombres. Une ligne d'ouverture et de clôture par compte."""
+    import csv as _csv
+    out = io.StringIO()
+    w = _csv.writer(out)
+    w.writerow(["Compte n°", "Compte", "Date", "N°", "Description", "Débit", "Crédit", "Solde"])
+
+    def m(x):
+        return f"{float(x or 0):.2f}"
+
+    # _sanitize_cell : neutralise l'injection de formule Excel (=,+,-,@,tab) sur les champs
+    # user-controlled (nom de compte, description) — même durcissement que le CSV T2125.
+    for det in report.get("accounts", []):
+        a = det["account"]
+        name = _sanitize_cell(a["name"])
+        num = a["account_number"]
+        w.writerow([num, name, "", "", "Solde d'ouverture", "", "", m(det["opening_balance"])])
+        for ln in det["lines"]:
+            w.writerow([num, name, ln["entry_date"], ln["entry_number"],
+                        _sanitize_cell(ln["description"] or ""),
+                        m(ln["debit"]), m(ln["credit"]), m(ln["running_balance"])])
+        w.writerow([num, name, "", "", "Solde de clôture", "", "", m(det["closing_balance"])])
+    return out.getvalue().encode("utf-8-sig")
+
+
+@app.get("/api/ledger/general-ledger/pdf")
+def general_ledger_pdf(
+    account_id: str = None, start: str = None, end: str = None, include_empty: bool = False,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """PDF du grand livre : un compte (account_id) ou général (tous, account_id vide). [COMPTA]
+    no-store."""
+    start = _validate_iso_date_param(start, "du")
+    end = _validate_iso_date_param(end, "au")
+    report = _general_ledger_report(current_user.organization_id, current_user.id,
+                                    account_id or None, start, end, include_empty)
+    pdf = _render_general_ledger_pdf(report, current_user.organization_id, start, end)
+    label = (report["accounts"][0]["account"]["account_number"]
+             if report["scope"] == "single" and report["accounts"] else "general")
+    fname = f"grand-livre-{label}-{end or _today_local_isodate()}.pdf"
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
+@app.get("/api/ledger/general-ledger/csv")
+def general_ledger_csv(
+    account_id: str = None, start: str = None, end: str = None, include_empty: bool = False,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """CSV du grand livre (Excel) : un compte ou général. [COMPTA] no-store."""
+    start = _validate_iso_date_param(start, "du")
+    end = _validate_iso_date_param(end, "au")
+    report = _general_ledger_report(current_user.organization_id, current_user.id,
+                                    account_id or None, start, end, include_empty)
+    data = _render_general_ledger_csv(report)
+    label = (report["accounts"][0]["account"]["account_number"]
+             if report["scope"] == "single" and report["accounts"] else "general")
+    fname = f"grand-livre-{label}-{end or _today_local_isodate()}.csv"
+    return Response(content=data, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
 
 
 @app.get("/api/ledger/autopost/status")

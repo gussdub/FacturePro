@@ -108,6 +108,12 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — Export du grand livre par compte / général, PDF + CSV, filtres de dates (feature #7.11)**
+  - Onglet **Grand livre** enrichi : dropdown compte + option « Tous les comptes (général) », filtres **Du/Au**, case « inclure les comptes sans mouvement » (mode général), boutons **Exporter PDF** + **CSV**. L'écran reste par compte ; le général est export-only.
+  - Backend : `_gl_account_detail` (extrait de l'endpoint `general-ledger`, source unique de vérité — solde d'ouverture cumulatif AVANT `start`, solde progressif orienté par `normal_balance`, clôture), `_general_ledger_report` (un compte ou tous, exclusion des comptes sans mouvement sauf `include_empty`, **diagnostic orphelins** pour réconcilier avec la balance), `_render_general_ledger_pdf` (6 colonnes, logo + heure Québec) + `_render_general_ledger_csv` (BOM Excel). Endpoints `GET /api/ledger/general-ledger/{pdf,csv}` (accounting:read, no-store).
+  - **Revue adversariale opus** (21 agents, 3 lentilles × 3 juges) : 0 BLOCKING, 5 findings tous corrigés — CSV formula injection (`_sanitize_cell` sur nom+description), date invalide → **400** (helper `_validate_iso_date_param`, corrige aussi l'injection filename Content-Disposition), orphelins surfacés en mode général, gestion d'erreur du téléchargement frontend (`doExport` try/catch).
+  - Tests : `test_general_ledger_report.py` (14 : report par compte, ouverture cumulative, exclusion/include_empty, CSV sanitize, orphelin, endpoints PDF/CSV, 404, 400 date invalide). 122 tests GL verts. CI build vert.
+
 - **2026-07-08 — PDF balance de vérification : 3 colonnes + logo + heure Québec (feature #7.10)**
   - **Avant** : le PDF rendait la balance en 1 colonne (label « 1000 — Encaisse (Dr) » + montant), avec « Total débits »/« Total crédits » en lignes séparées, sans logo, horodaté en UTC — décalé de l'écran (tableau 3 colonnes Compte | Débit | Crédit).
   - **Après** : nouveau `_render_trial_balance_pdf` rend un tableau 3 colonnes **identique à l'écran** (Compte | Débit | Crédit, montant dans sa colonne, ligne Total avec les 2 totaux, en-tête gris). Entête partagé `_ledger_pdf_header_flowables` : **logo entreprise** (même source que le PDF de facture, `db.files` via `settings.logo_url`, borné 1", jamais bloquant) + **heure du Québec** (`America/Toronto`, HNE/HAE, repli UTC via `_ledger_pdf_generated_line`). Le bilan (`_render_ledger_table_pdf` refactoré) hérite aussi du logo + heure QC.

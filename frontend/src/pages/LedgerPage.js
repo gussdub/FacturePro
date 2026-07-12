@@ -836,6 +836,16 @@ async function downloadPdf(url, filename) {
   window.URL.revokeObjectURL(blobUrl);
 }
 
+// Téléchargement générique (PDF/CSV) via axios (envoie le header d'auth), puis blob local.
+async function downloadFile(url, filename, mime) {
+  const resp = await axios.get(url, { responseType: 'blob' });
+  const blobUrl = window.URL.createObjectURL(new Blob([resp.data], { type: mime }));
+  const a = document.createElement('a');
+  a.href = blobUrl; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}
+
 // [COMPTA] Diagnostic orphelins — mêmes lignes que le PDF (unmapped_accounts).
 // Une ligne d'écriture posted qui référence un account_id absent du plan comptable
 // n'apparaît dans aucune colonne/section de compte, mais EST comptée dans les totaux
@@ -1001,28 +1011,103 @@ function BalanceSheetTab() {
   );
 }
 
+const GL_ALL = '__ALL__';
+
 function LedgerDetailTab() {
   const [accounts, setAccounts] = useState([]);
   const [accountId, setAccountId] = useState('');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState('');
+  const [includeEmpty, setIncludeEmpty] = useState(false);
   const [data, setData] = useState(null);
+
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/ledger/accounts?active=true`)
       .then(r => setAccounts(r.data)).catch(() => {});
   }, []);
   useEffect(() => {
-    if (!accountId) { setData(null); return; }
-    axios.get(`${BACKEND_URL}/api/ledger/general-ledger?account_id=${accountId}`)
+    // Affichage écran = UN seul compte ; le mode « général » se consulte via l'export.
+    if (!accountId || accountId === GL_ALL) { setData(null); return; }
+    const p = new URLSearchParams({ account_id: accountId });
+    if (start) p.set('start', start);
+    if (end) p.set('end', end);
+    axios.get(`${BACKEND_URL}/api/ledger/general-ledger?${p.toString()}`)
       .then(r => setData(r.data)).catch(() => {});
-  }, [accountId]);
+  }, [accountId, start, end]);
+
+  const isGeneral = accountId === GL_ALL;
+  const canExport = accountId !== '';
+  const exportUrl = (fmt) => {
+    const p = new URLSearchParams();
+    if (accountId && accountId !== GL_ALL) p.set('account_id', accountId);
+    if (start) p.set('start', start);
+    if (end) p.set('end', end);
+    if (isGeneral && includeEmpty) p.set('include_empty', 'true');
+    return `${BACKEND_URL}/api/ledger/general-ledger/${fmt}?${p.toString()}`;
+  };
+  const fileLabel = isGeneral
+    ? 'general'
+    : (accounts.find(a => a.id === accountId)?.account_number || 'compte');
+  const fileDate = end || start || 'export';
+  const inputStyle = { padding: 8, border: '1px solid #d1d5db', borderRadius: 6 };
+  const labelStyle = { display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 };
+  const btn = (bg) => ({ background: canExport ? bg : '#9ca3af', color: '#fff', border: 'none',
+    padding: '8px 14px', borderRadius: 6, cursor: canExport ? 'pointer' : 'not-allowed', fontWeight: 600 });
+  const doExport = async (fmt, mime) => {
+    try {
+      await downloadFile(exportUrl(fmt), `grand-livre-${fileLabel}-${fileDate}.${fmt}`, mime);
+    } catch (e) {
+      alert(e?.response?.status === 404
+        ? 'Compte introuvable (peut-être supprimé). Rafraîchis la page.'
+        : "Erreur lors de l'export. Réessaie.");
+    }
+  };
+
   return (
     <div>
-      <select value={accountId} onChange={e => setAccountId(e.target.value)}
-              style={{ padding: 8, marginBottom: 16, border: '1px solid #d1d5db', borderRadius: 6 }}>
-        <option value="">— choisir un compte —</option>
-        {accounts.map(a => (
-          <option key={a.id} value={a.id}>{a.account_number} — {a.name}</option>
-        ))}
-      </select>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
+        <div>
+          <label style={labelStyle}>Compte</label>
+          <select value={accountId} onChange={e => setAccountId(e.target.value)} style={inputStyle}>
+            <option value="">— choisir un compte —</option>
+            <option value={GL_ALL}>— Tous les comptes (général) —</option>
+            {accounts.map(a => (
+              <option key={a.id} value={a.id}>{a.account_number} — {a.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Du</label>
+          <input type="date" value={start} onChange={e => setStart(e.target.value)} style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>Au</label>
+          <input type="date" value={end} onChange={e => setEnd(e.target.value)} style={inputStyle} />
+        </div>
+        {isGeneral && (
+          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, paddingBottom: 8 }}>
+            <input type="checkbox" checked={includeEmpty}
+                   onChange={e => setIncludeEmpty(e.target.checked)} />
+            Inclure les comptes sans mouvement
+          </label>
+        )}
+        <button disabled={!canExport} style={btn('#00A08C')}
+                onClick={() => doExport('pdf', 'application/pdf')}>
+          Exporter PDF
+        </button>
+        <button disabled={!canExport} style={btn('#1f2937')}
+                onClick={() => doExport('csv', 'text/csv')}>
+          Exporter CSV
+        </button>
+      </div>
+
+      {isGeneral && (
+        <p style={{ color: '#6b7280', fontSize: 14 }}>
+          Mode « Tous les comptes » : clique <b>Exporter PDF</b> ou <b>CSV</b> pour obtenir le grand livre
+          général (une section par compte). Coche « inclure les comptes sans mouvement » pour un rapport exhaustif.
+        </p>
+      )}
+
       {data && (
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead><tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
