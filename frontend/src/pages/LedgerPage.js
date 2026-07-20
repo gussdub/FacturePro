@@ -172,13 +172,29 @@ export function JournalTab() {
     { account_id: '', debit: '', credit: '' },
   ]);
   const [error, setError] = useState(null);
+  const [jStart, setJStart] = useState('');
+  const [jEnd, setJEnd] = useState('');
 
   const load = () => {
-    axios.get(`${BACKEND_URL}/api/ledger/entries`).then(r => setEntries(r.data)).catch(() => {});
+    const p = new URLSearchParams();
+    if (jStart) p.set('start', jStart);
+    if (jEnd) p.set('end', jEnd);
+    const qs = p.toString();
+    axios.get(`${BACKEND_URL}/api/ledger/entries${qs ? '?' + qs : ''}`)
+      .then(r => setEntries(r.data)).catch(() => {});
     axios.get(`${BACKEND_URL}/api/ledger/accounts?active=true`)
       .then(r => setAccounts(r.data)).catch(() => {});
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [jStart, jEnd]);
+
+  const journalExport = (fmt, mime) => {
+    const p = new URLSearchParams();
+    if (jStart) p.set('start', jStart);
+    if (jEnd) p.set('end', jEnd);
+    downloadFile(`${BACKEND_URL}/api/ledger/journal/${fmt}?${p.toString()}`,
+                 `journal-general-${jEnd || jStart || 'export'}.${fmt}`, mime)
+      .catch(() => alert("Erreur lors de l'export."));
+  };
 
   // Le compteur live doit refléter EXACTEMENT ce qui sera envoyé au backend :
   // submit() ne garde que les lignes ayant un compte sélectionné. Compter les
@@ -257,6 +273,21 @@ export function JournalTab() {
           borderRadius: 6, cursor: 'pointer', marginBottom: 16, fontWeight: 600 }}>
           + Nouvelle écriture</button>
       )}
+      {/* Filtre de dates + export du journal général (rapport des transactions) */}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
+        <div><label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Du</label>
+          <input type="date" value={jStart} onChange={e => setJStart(e.target.value)}
+                 style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} /></div>
+        <div><label style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 }}>Au</label>
+          <input type="date" value={jEnd} onChange={e => setJEnd(e.target.value)}
+                 style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} /></div>
+        <button onClick={() => journalExport('pdf', 'application/pdf')} style={{
+          background: '#00A08C', color: '#fff', border: 'none', padding: '8px 14px',
+          borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>Exporter PDF</button>
+        <button onClick={() => journalExport('csv', 'text/csv')} style={{
+          background: '#1f2937', color: '#fff', border: 'none', padding: '8px 14px',
+          borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>Exporter CSV</button>
+      </div>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
         <thead>
           <tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
@@ -882,48 +913,91 @@ function UnmappedAccountsNotice({ unmapped }) {
 }
 
 function TrialBalanceTab() {
+  const [start, setStart] = useState('');
   const [asOf, setAsOf] = useState(todayLocal());
   const [data, setData] = useState(null);
-  const load = () => axios.get(`${BACKEND_URL}/api/ledger/trial-balance?as_of=${asOf}`)
-    .then(r => setData(r.data)).catch(() => {});
-  useEffect(() => { load(); }, [asOf]);
+  useEffect(() => {
+    const p = new URLSearchParams({ as_of: asOf });
+    if (start) p.set('start', start);
+    axios.get(`${BACKEND_URL}/api/ledger/trial-balance?${p.toString()}`)
+      .then(r => setData(r.data)).catch(() => {});
+  }, [asOf, start]);
+  const period = !!(data && data.period);
+  const money = (x) => (x ? x.toFixed(2) + ' $' : '');
+  const th = { padding: 8, textAlign: 'right' };
+  const td = { padding: 8, textAlign: 'right' };
+  const pdfUrl = () => {
+    const p = new URLSearchParams({ as_of: asOf });
+    if (start) p.set('start', start);
+    return `${BACKEND_URL}/api/ledger/trial-balance/pdf?${p.toString()}`;
+  };
+  const pdfName = start ? `balance-verification-${start}-au-${asOf}.pdf`
+                        : `balance-verification-${asOf}.pdf`;
+  const lbl = { display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 };
+  const inp = { padding: 6, border: '1px solid #d1d5db', borderRadius: 6 };
   return (
     <div>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
-        <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)}
-               style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} />
-        <button onClick={() => downloadPdf(
-          `${BACKEND_URL}/api/ledger/trial-balance/pdf?as_of=${asOf}`,
-          `balance-verification-${asOf}.pdf`)} style={{
-          background: '#00A08C', color: '#fff', border: 'none', padding: '6px 14px',
-          borderRadius: 6, cursor: 'pointer' }}>Télécharger PDF</button>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div><label style={lbl}>Du (optionnel)</label>
+          <input type="date" value={start} onChange={e => setStart(e.target.value)} style={inp} /></div>
+        <div><label style={lbl}>Au</label>
+          <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)} style={inp} /></div>
+        <button onClick={() => downloadPdf(pdfUrl(), pdfName).catch(() => alert('Erreur lors du téléchargement.'))} style={{
+          background: '#00A08C', color: '#fff', border: 'none', padding: '8px 14px',
+          borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>Télécharger PDF</button>
         {data && (
-          <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 13,
+          <span style={{ padding: '4px 12px', borderRadius: 999, fontSize: 13, marginBottom: 4,
             background: data.balanced ? '#ecfdf5' : '#fef2f2',
             color: data.balanced ? '#059669' : '#dc2626' }}>
             {data.balanced ? 'Équilibrée' : 'Déséquilibrée'}</span>
         )}
       </div>
-      {data && (
+      {start && (
+        <p style={{ color: '#6b7280', fontSize: 13, marginTop: 0 }}>
+          Mode période : Solde d'ouverture (avant le « Du ») + Mouvement (Du → Au) + Solde de clôture.
+        </p>
+      )}
+      {data && !period && (
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead><tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
-            <th style={{ padding: 8 }}>Compte</th>
-            <th style={{ padding: 8, textAlign: 'right' }}>Débit</th>
-            <th style={{ padding: 8, textAlign: 'right' }}>Crédit</th></tr></thead>
+            <th style={{ padding: 8 }}>Compte</th><th style={th}>Débit</th><th style={th}>Crédit</th>
+          </tr></thead>
           <tbody>
             {data.accounts.map(a => (
               <tr key={a.account_number} style={{ borderBottom: '1px solid #f3f4f6' }}>
                 <td style={{ padding: 8 }}>{a.account_number} — {a.name}</td>
-                <td style={{ padding: 8, textAlign: 'right' }}>
-                  {a.debit_balance ? a.debit_balance.toFixed(2) + ' $' : ''}</td>
-                <td style={{ padding: 8, textAlign: 'right' }}>
-                  {a.credit_balance ? a.credit_balance.toFixed(2) + ' $' : ''}</td>
+                <td style={td}>{money(a.debit_balance)}</td>
+                <td style={td}>{money(a.credit_balance)}</td>
               </tr>
             ))}
             <tr style={{ fontWeight: 700, borderTop: '2px solid #1f2937' }}>
               <td style={{ padding: 8 }}>Total</td>
-              <td style={{ padding: 8, textAlign: 'right' }}>{data.total_debit.toFixed(2)} $</td>
-              <td style={{ padding: 8, textAlign: 'right' }}>{data.total_credit.toFixed(2)} $</td>
+              <td style={td}>{data.total_debit.toFixed(2)} $</td>
+              <td style={td}>{data.total_credit.toFixed(2)} $</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      {data && period && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+          <thead><tr style={{ borderBottom: '2px solid #e5e7eb', textAlign: 'left' }}>
+            <th style={{ padding: 8 }}>Compte</th><th style={th}>Ouverture</th>
+            <th style={th}>Débit</th><th style={th}>Crédit</th><th style={th}>Clôture</th>
+          </tr></thead>
+          <tbody>
+            {data.accounts.map(a => (
+              <tr key={a.account_number} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                <td style={{ padding: 8 }}>{a.account_number} — {a.name}</td>
+                <td style={td}>{money(a.opening)}</td>
+                <td style={td}>{money(a.period_debit)}</td>
+                <td style={td}>{money(a.period_credit)}</td>
+                <td style={td}>{money(a.closing)}</td>
+              </tr>
+            ))}
+            <tr style={{ fontWeight: 700, borderTop: '2px solid #1f2937' }}>
+              <td style={{ padding: 8 }}>Total mouvements</td><td></td>
+              <td style={td}>{data.total_period_debit.toFixed(2)} $</td>
+              <td style={td}>{data.total_period_credit.toFixed(2)} $</td><td></td>
             </tr>
           </tbody>
         </table>
@@ -959,7 +1033,8 @@ function BalanceSheetTab() {
         <input type="date" value={asOf} onChange={e => setAsOf(e.target.value)}
                style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 6 }} />
         <button onClick={() => downloadPdf(
-          `${BACKEND_URL}/api/ledger/balance-sheet/pdf?as_of=${asOf}`, `bilan-${asOf}.pdf`)}
+          `${BACKEND_URL}/api/ledger/balance-sheet/pdf?as_of=${asOf}`, `bilan-${asOf}.pdf`)
+          .catch(() => alert('Erreur lors du téléchargement.'))}
           style={{ background: '#00A08C', color: '#fff', border: 'none', padding: '6px 14px',
             borderRadius: 6, cursor: 'pointer' }}>Télécharger PDF</button>
         {data && (

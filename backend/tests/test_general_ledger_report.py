@@ -177,3 +177,77 @@ class TestEndpoints:
                     "/api/ledger/general-ledger/csv?end=2026-13-99"):
             r = client.get(url, headers=auth_headers)
             assert r.status_code == 400, f"{url} -> {r.status_code}"
+
+
+class TestTrialBalancePeriod:
+    def test_opening_movement_closing(self, org):
+        from backend.server import _trial_balance_period
+        org_id, _ = org
+        tb = _trial_balance_period(org_id, "2026-02-01", "2026-12-31")
+        assert tb["period"] is True and tb["balanced"] is True
+        assert tb["total_period_debit"] == 50.0 and tb["total_period_credit"] == 50.0
+        a5040 = next(a for a in tb["accounts"] if a["account_number"] == "5040")
+        assert a5040["opening"] == 100.0          # JE-1 (janvier) reporté
+        assert a5040["period_debit"] == 50.0      # JE-2 (mars) dans la fenêtre
+        assert a5040["closing"] == 150.0
+        a1000 = next(a for a in tb["accounts"] if a["account_number"] == "1000")
+        assert a1000["opening"] == -100.0 and a1000["period_credit"] == 50.0
+        assert a1000["closing"] == -150.0
+
+    def test_endpoint_period_shape(self, auth_headers):
+        r = client.get("/api/ledger/trial-balance?start=2099-01-01&as_of=2099-12-31",
+                       headers=auth_headers)
+        assert r.status_code == 200 and r.json().get("period") is True
+
+    def test_endpoint_photo_no_start(self, auth_headers):
+        r = client.get("/api/ledger/trial-balance?as_of=2099-12-31", headers=auth_headers)
+        assert r.status_code == 200 and not r.json().get("period")
+
+    def test_pdf_period(self, auth_headers):
+        r = client.get("/api/ledger/trial-balance/pdf?start=2099-01-01&as_of=2099-12-31",
+                       headers=auth_headers)
+        assert r.status_code == 200 and r.content[:4] == b"%PDF"
+
+    def test_range_start_after_end_400(self, auth_headers):
+        # Revue adverse : du > au → 400 (sinon balance incohérente muette)
+        for url in ("/api/ledger/trial-balance?start=2099-12-31&as_of=2099-01-01",
+                    "/api/ledger/trial-balance/pdf?start=2099-12-31&as_of=2099-01-01",
+                    "/api/ledger/journal/pdf?start=2099-12-31&end=2099-01-01",
+                    "/api/ledger/general-ledger/csv?start=2099-12-31&end=2099-01-01"):
+            r = client.get(url, headers=auth_headers)
+            assert r.status_code == 400, f"{url} -> {r.status_code}"
+
+
+class TestJournalReport:
+    def test_entries_and_csv(self, org):
+        from backend.server import _journal_report_entries, _render_journal_report_csv
+        org_id, _ = org
+        entries = _journal_report_entries(org_id, None, None)
+        assert len(entries) == 2
+        text = _render_journal_report_csv(entries).decode("utf-8-sig")
+        assert text.startswith("Date,N°,Description,Statut,Compte n°,Compte,Débit,Crédit")
+
+    def test_csv_sanitizes_description(self):
+        from backend.server import _render_journal_report_csv
+        entries = [{"entry_date": "2026-01-01", "entry_number": "JE-1", "status": "posted",
+                    "description": "=evil()", "lines": [
+                        {"account_number": "5040", "account_name": "=x", "debit": 5.0, "credit": 0.0}]}]
+        text = _render_journal_report_csv(entries).decode("utf-8-sig")
+        import csv as _csv
+        import io as _io
+        for r in list(_csv.reader(_io.StringIO(text)))[1:]:
+            assert not r[2].startswith(("=", "+", "-", "@"))  # description
+            assert not r[5].startswith(("=", "+", "-", "@"))  # nom de compte
+
+    def test_pdf_endpoint(self, auth_headers):
+        r = client.get("/api/ledger/journal/pdf?start=2099-01-01&end=2099-12-31",
+                       headers=auth_headers)
+        assert r.status_code == 200 and r.content[:4] == b"%PDF"
+
+    def test_csv_endpoint_bom(self, auth_headers):
+        r = client.get("/api/ledger/journal/csv", headers=auth_headers)
+        assert r.status_code == 200 and r.content[:3] == b"\xef\xbb\xbf"
+
+    def test_invalid_date_400(self, auth_headers):
+        r = client.get("/api/ledger/journal/pdf?start=bad", headers=auth_headers)
+        assert r.status_code == 400

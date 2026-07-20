@@ -5070,23 +5070,83 @@ def owner_contribution(
         status="posted", entry_type="manual")
 
 
+def _trial_balance_period(organization_id: str, start: str, end: str) -> dict:
+    """Balance de vérification de PÉRIODE (§7.1 étendu) : par compte, Solde d'ouverture (cumul
+    AVANT `start`) + Mouvement de la période [start, end] (Débit/Crédit bruts) + Solde de clôture
+    (cumul à `end`). Réconcilie : ouverture ± mouvement orienté == clôture. Comptes inactifs
+    (ouverture, mouvement ET clôture nuls) exclus. `balanced` = Σ débits période == Σ crédits
+    période (dérivé de TOUTES les lignes posted, orphelins inclus → toujours 0 si partie double
+    respectée). Orphelins (account_id hors plan) exposés dans `unmapped_accounts`."""
+    from datetime import date as _date, timedelta as _td
+    accounts = list(db.chart_of_accounts.find({"organization_id": organization_id}, {"_id": 0}))
+    known_ids = {a["id"] for a in accounts}
+    match = {"organization_id": organization_id, "status": "posted"}
+    df = {}
+    if start:
+        df["$gte"] = start
+    if end:
+        df["$lte"] = end
+    if df:
+        match["entry_date"] = df
+    mov = {}          # account_id mappé -> [debit, credit] bruts de la période
+    unmapped = {}     # account_id orphelin -> [debit, credit]
+    tot_pd = tot_pc = 0.0
+    for entry in db.journal_entries.find(match, {"_id": 0, "lines": 1}):
+        for ln in entry.get("lines", []):
+            d = float(ln.get("debit", 0) or 0)
+            c = float(ln.get("credit", 0) or 0)
+            tot_pd += d
+            tot_pc += c
+            aid = ln.get("account_id")
+            bucket = mov if aid in known_ids else unmapped
+            agg = bucket.setdefault(aid, [0.0, 0.0])
+            agg[0] += d
+            agg[1] += c
+    day_before = (_date.fromisoformat(start) - _td(days=1)).isoformat() if start else None
+    rows = []
+    for a in accounts:
+        normal = a["normal_balance"]
+        opening = (_account_balance(organization_id, a["id"], normal, as_of_date=day_before)
+                   if start else 0.0)
+        pd_, pc_ = mov.get(a["id"], [0.0, 0.0])
+        closing = _account_balance(organization_id, a["id"], normal, as_of_date=end)
+        if (abs(opening) < 0.005 and abs(pd_) < 0.005 and abs(pc_) < 0.005
+                and abs(closing) < 0.005):
+            continue
+        rows.append({
+            "account_number": a["account_number"], "name": a["name"],
+            "opening": round(opening, 2), "period_debit": round(pd_, 2),
+            "period_credit": round(pc_, 2), "closing": round(closing, 2),
+        })
+    rows.sort(key=lambda r: r["account_number"])
+    unmapped_accounts = [
+        {"account_id": aid, "debit": round(v[0], 2), "credit": round(v[1], 2)}
+        for aid, v in sorted(unmapped.items())]
+    return {
+        "period": True, "start": start, "end": end, "accounts": rows,
+        "total_period_debit": round(tot_pd, 2), "total_period_credit": round(tot_pc, 2),
+        "balanced": abs(tot_pd - tot_pc) <= 0.01,
+        "unmapped_accounts": unmapped_accounts,
+    }
+
+
 @app.get("/api/ledger/trial-balance")
 def trial_balance(
     response: Response,
-    as_of: str = None,
+    as_of: str = None, start: str = None,
     current_user: CurrentUser = Depends(require_permission("accounting:read")),
 ):
-    """Balance de vérification (§7.1) : net par compte, ventilé Dr/Cr selon le
-    solde normal, comptes à solde 0 exclus, invariant `balanced` (ΣDr == ΣCr).
-    Les totaux/`balanced` sont dérivés des écritures posted (source de vérité
-    partie double) : un compte orphelin apparaît dans `unmapped_accounts` au lieu
-    d'être avalé silencieusement (fix reviewer #1).
-    `as_of` (ISO YYYY-MM-DD, inclusif) borne le calcul à cette date ; défaut =
-    aujourd'hui (UTC). [COMPTA] no-store : chiffre financier jamais mis en cache."""
+    """Balance de vérification (§7.1) : net par compte, ventilé Dr/Cr selon le solde normal.
+    Sans `start` : photo cumulative à `as_of` (comportement d'origine, invariant ΣDr==ΣCr).
+    Avec `start` : balance de PÉRIODE (Ouverture avant start + Mouvement [start, as_of] + Clôture)
+    via `_trial_balance_period`. `as_of` défaut = aujourd'hui (Québec). [COMPTA] no-store."""
     _apply_ledger_no_store(response)
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
-    if not as_of:
-        as_of = _today_local_isodate()
+    start = _validate_iso_date_param(start, "du")
+    as_of = _validate_iso_date_param(as_of, "au") or _today_local_isodate()
+    _validate_date_range(start, as_of)
+    if start:
+        return _trial_balance_period(current_user.organization_id, start, as_of)
     return _trial_balance_rows(current_user.organization_id, as_of)
 
 
@@ -5331,6 +5391,7 @@ def general_ledger(
     _apply_ledger_no_store(response)
     start = _validate_iso_date_param(start, "du")
     end = _validate_iso_date_param(end, "au")
+    _validate_date_range(start, end)
     org_id = current_user.organization_id
     _ensure_chart_seeded(org_id, current_user.id)
     acc = db.chart_of_accounts.find_one({
@@ -5472,27 +5533,46 @@ def _render_trial_balance_pdf(title, subtitle, tb, org_id, unmapped_section=None
                             leftMargin=0.6 * inch, rightMargin=0.6 * inch)
     elements = _ledger_pdf_header_flowables(title, subtitle, org_id, S)
 
-    data = [["Compte", "Débit", "Crédit"]]
-    for a in tb["accounts"]:
-        deb = _ledger_pdf_money(a["debit_balance"]) if a["debit_balance"] > 0 else ""
-        cred = _ledger_pdf_money(a["credit_balance"]) if a["credit_balance"] > 0 else ""
-        data.append([html_escape(f"{a['account_number']} — {a['name']}"), deb, cred])
-    data.append(["Total", _ledger_pdf_money(tb["total_debit"]), _ledger_pdf_money(tb["total_credit"])])
+    if tb.get("period"):
+        # Mode période : Compte | Ouverture | Débit | Crédit | Clôture
+        data = [["Compte", "Ouverture", "Débit", "Crédit", "Clôture"]]
+        for a in tb["accounts"]:
+            data.append([
+                html_escape(f"{a['account_number']} — {a['name']}"),
+                _ledger_pdf_money(a["opening"]) if a["opening"] else "",
+                _ledger_pdf_money(a["period_debit"]) if a["period_debit"] else "",
+                _ledger_pdf_money(a["period_credit"]) if a["period_credit"] else "",
+                _ledger_pdf_money(a["closing"]) if a["closing"] else "",
+            ])
+        data.append(["Total mouvements", "",
+                     _ledger_pdf_money(tb["total_period_debit"]),
+                     _ledger_pdf_money(tb["total_period_credit"]), ""])
+        colw = [2.9 * inch, 1.15 * inch, 1.15 * inch, 1.15 * inch, 1.15 * inch]
+        total_align_cols = (2, 3)
+    else:
+        # Mode photo : Compte | Débit | Crédit
+        data = [["Compte", "Débit", "Crédit"]]
+        for a in tb["accounts"]:
+            deb = _ledger_pdf_money(a["debit_balance"]) if a["debit_balance"] > 0 else ""
+            cred = _ledger_pdf_money(a["credit_balance"]) if a["credit_balance"] > 0 else ""
+            data.append([html_escape(f"{a['account_number']} — {a['name']}"), deb, cred])
+        data.append(["Total", _ledger_pdf_money(tb["total_debit"]),
+                     _ledger_pdf_money(tb["total_credit"])])
+        colw = [4.4 * inch, 1.3 * inch, 1.3 * inch]
+        total_align_cols = (1, 2)
     n = len(data)
-    t = Table(data, colWidths=[4.4 * inch, 1.3 * inch, 1.3 * inch])
+    ncol = len(data[0])
+    t = Table(data, colWidths=colw)
     t.setStyle(TableStyle([
         ("FONTSIZE", (0, 0), (-1, -1), 10),
         ("TEXTCOLOR", (0, 0), (-1, -1), S["dark"]),
-        ("ALIGN", (1, 0), (2, -1), "RIGHT"),
+        ("ALIGN", (1, 0), (ncol - 1, -1), "RIGHT"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        # Entête de colonnes (comme l'écran : fond gris, gras)
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("BACKGROUND", (0, 0), (-1, 0), HexColor("#f3f4f6")),
         ("LINEBELOW", (0, 0), (-1, 0), 0.5, S["gray"]),
-        # Séparateurs de lignes de comptes
         ("LINEBELOW", (0, 1), (-1, n - 2), 0.25, HexColor("#e5e7eb")),
-        # Ligne Total : gras + filet épais au-dessus
         ("FONTNAME", (0, n - 1), (-1, n - 1), "Helvetica-Bold"),
         ("LINEABOVE", (0, n - 1), (-1, n - 1), 0.75, S["dark"]),
     ]))
@@ -5575,26 +5655,34 @@ def _render_ledger_table_pdf(title, subtitle, sections, org_id):
 
 @app.get("/api/ledger/trial-balance/pdf")
 def trial_balance_pdf(
-    as_of: str = None,
+    as_of: str = None, start: str = None,
     current_user: CurrentUser = Depends(require_permission("accounting:read")),
 ):
-    """PDF de la balance de vérification (§7.1/§7.3). Mêmes chiffres que
-    l'endpoint JSON (dérivés des écritures posted). [COMPTA] no-store : chiffre
-    financier jamais mis en cache."""
+    """PDF de la balance de vérification (§7.1/§7.3). Sans `start` : photo cumulative à `as_of`
+    (3 colonnes). Avec `start` : balance de période (5 colonnes Ouverture/Débit/Crédit/Clôture).
+    Mêmes chiffres que l'endpoint JSON. [COMPTA] no-store."""
     _ensure_chart_seeded(current_user.organization_id, current_user.id)
-    if not as_of:
-        as_of = _today_local_isodate()
-    tb = _trial_balance_rows(current_user.organization_id, as_of)
-    equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
-    # [COMPTA] (fix reviewer #4) Si des orphelins expliquent un déséquilibre, on les rend
-    # VERBATIM depuis le JSON sous la balance principale (section « Comptes non mappés »).
+    start = _validate_iso_date_param(start, "du")
+    as_of = _validate_iso_date_param(as_of, "au") or _today_local_isodate()
+    _validate_date_range(start, as_of)
+    unmapped_section = None
+    if start:
+        tb = _trial_balance_period(current_user.organization_id, start, as_of)
+        equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
+        subtitle = f"Du {start} au {as_of} — Mouvements {equilibre}"
+    else:
+        tb = _trial_balance_rows(current_user.organization_id, as_of)
+        equilibre = "équilibrée" if tb["balanced"] else "DÉSÉQUILIBRÉE"
+        subtitle = f"Au {as_of} — Balance {equilibre}"
+    # [COMPTA] (fix reviewer #4) Orphelins rendus VERBATIM sous la balance (section non mappés).
     unmapped_section = _ledger_pdf_unmapped_section(tb.get("unmapped_accounts"))
-    # Rendu 3 colonnes (Compte | Débit | Crédit) + ligne Total, identique à l'écran.
     pdf = _render_trial_balance_pdf(
-        "Balance de vérification", f"Au {as_of} — Balance {equilibre}",
+        "Balance de vérification", subtitle,
         tb, current_user.organization_id, unmapped_section=unmapped_section)
+    fname = (f"balance-verification-{start}-au-{as_of}.pdf" if start
+             else f"balance-verification-{as_of}.pdf")
     return Response(content=pdf, media_type="application/pdf", headers={
-        "Content-Disposition": f'attachment; filename="balance-verification-{as_of}.pdf"',
+        "Content-Disposition": f'attachment; filename="{fname}"',
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     })
 
@@ -5707,6 +5795,14 @@ def _validate_iso_date_param(value, field):
     except (ValueError, TypeError):
         raise HTTPException(400, f"Date « {field} » invalide (format attendu AAAA-MM-JJ)")
     return value
+
+
+def _validate_date_range(start, end):
+    """Lève HTTPException(400) si `start` ET `end` sont présents et `start` > `end`. Comparaison
+    lexicographique valide car les deux sont en ISO canonique (AAAA-MM-JJ). Évite une balance de
+    période incohérente (ouverture au-delà de la clôture, mouvement nul) rendue sans avertissement."""
+    if start and end and start > end:
+        raise HTTPException(400, "Plage de dates invalide : « du » doit précéder « au ».")
 
 
 def _gl_period_label(start, end):
@@ -5822,6 +5918,7 @@ def general_ledger_pdf(
     no-store."""
     start = _validate_iso_date_param(start, "du")
     end = _validate_iso_date_param(end, "au")
+    _validate_date_range(start, end)
     report = _general_ledger_report(current_user.organization_id, current_user.id,
                                     account_id or None, start, end, include_empty)
     pdf = _render_general_ledger_pdf(report, current_user.organization_id, start, end)
@@ -5842,12 +5939,151 @@ def general_ledger_csv(
     """CSV du grand livre (Excel) : un compte ou général. [COMPTA] no-store."""
     start = _validate_iso_date_param(start, "du")
     end = _validate_iso_date_param(end, "au")
+    _validate_date_range(start, end)
     report = _general_ledger_report(current_user.organization_id, current_user.id,
                                     account_id or None, start, end, include_empty)
     data = _render_general_ledger_csv(report)
     label = (report["accounts"][0]["account"]["account_number"]
              if report["scope"] == "single" and report["accounts"] else "general")
     fname = f"grand-livre-{label}-{end or _today_local_isodate()}.csv"
+    return Response(content=data, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
+def _journal_report_entries(org_id, start, end):
+    """Écritures du journal (toutes statuts) sur [start, end], triées date puis numéro.
+    Base du « journal général » exportable."""
+    match = {"organization_id": org_id}
+    df = {}
+    if start:
+        df["$gte"] = start
+    if end:
+        df["$lte"] = end
+    if df:
+        match["entry_date"] = df
+    return list(db.journal_entries.find(match, {"_id": 0})
+                .sort([("entry_date", 1), ("entry_number", 1)]))
+
+
+def _render_journal_report_pdf(entries, org_id, start, end):
+    """PDF du journal général : chaque écriture (date, n°, description) suivie de ses lignes
+    (compte, débit, crédit). Total général en pied. Entête partagé (logo + heure Québec)."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+    from html import escape as html_escape
+    S = _ledger_pdf_styles()
+    body = ParagraphStyle("JR", parent=S["small"], fontSize=8, textColor=S["dark"], leading=10)
+    subtitle = f"{_gl_period_label(start, end)} · {len(entries)} écriture(s)"
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+                            leftMargin=0.5 * inch, rightMargin=0.5 * inch)
+    elements = _ledger_pdf_header_flowables("Journal général", subtitle, org_id, S)
+    data = [["Date", "N°", "Compte / Description", "Débit", "Crédit"]]
+    total_d = total_c = 0.0
+    header_rows = []   # index des lignes « en-tête d'écriture » (pour le style)
+    for entry in entries:
+        status = entry.get("status", "")
+        prefix = "" if status == "posted" else f"[{status}] "
+        header_rows.append(len(data))
+        data.append([entry.get("entry_date", ""), html_escape(entry.get("entry_number", "")),
+                     Paragraph(f"<b>{html_escape(prefix + (entry.get('description') or ''))}</b>", body),
+                     "", ""])
+        for ln in entry.get("lines", []):
+            d = float(ln.get("debit", 0) or 0)
+            c = float(ln.get("credit", 0) or 0)
+            total_d += d
+            total_c += c
+            acc = f"{ln.get('account_number', '')} — {ln.get('account_name', '')}"
+            data.append(["", "", Paragraph("&nbsp;&nbsp;&nbsp;" + html_escape(acc), body),
+                         _ledger_pdf_money(d) if d else "", _ledger_pdf_money(c) if c else ""])
+    data.append(["", "", "Total général", _ledger_pdf_money(total_d), _ledger_pdf_money(total_c)])
+    n = len(data)
+    t = Table(data, repeatRows=1,
+              colWidths=[0.8 * inch, 0.75 * inch, 3.9 * inch, 0.95 * inch, 1.1 * inch])
+    style = [
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, -1), S["dark"]),
+        ("ALIGN", (3, 0), (4, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 0), (-1, 0), HexColor("#f3f4f6")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, S["gray"]),
+        ("FONTNAME", (0, n - 1), (-1, n - 1), "Helvetica-Bold"),
+        ("LINEABOVE", (0, n - 1), (-1, n - 1), 0.75, S["dark"]),
+    ]
+    for hr in header_rows:
+        style.append(("LINEABOVE", (0, hr), (-1, hr), 0.25, HexColor("#e5e7eb")))
+    t.setStyle(TableStyle(style))
+    elements.append(t)
+    if not entries:
+        elements.append(Paragraph("Aucune écriture pour la période sélectionnée.", S["small"]))
+    doc.build(elements)
+    buf.seek(0)
+    return buf.read()
+
+
+def _render_journal_report_csv(entries):
+    """CSV du journal général (BOM Excel) : une ligne par ligne d'écriture, champs d'entête
+    répétés. Description + nom de compte passés par _sanitize_cell (anti-formule Excel)."""
+    import csv as _csv
+    out = io.StringIO()
+    w = _csv.writer(out)
+    w.writerow(["Date", "N°", "Description", "Statut", "Compte n°", "Compte", "Débit", "Crédit"])
+
+    def m(x):
+        return f"{float(x or 0):.2f}"
+
+    for entry in entries:
+        desc = _sanitize_cell(entry.get("description") or "")
+        for ln in entry.get("lines", []):
+            w.writerow([
+                entry.get("entry_date", ""), entry.get("entry_number", ""), desc,
+                entry.get("status", ""), ln.get("account_number", ""),
+                _sanitize_cell(ln.get("account_name") or ""),
+                m(ln.get("debit")), m(ln.get("credit")),
+            ])
+    return out.getvalue().encode("utf-8-sig")
+
+
+@app.get("/api/ledger/journal/pdf")
+def journal_report_pdf(
+    start: str = None, end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """PDF du journal général (toutes les écritures sur la période). [COMPTA] no-store."""
+    start = _validate_iso_date_param(start, "du")
+    end = _validate_iso_date_param(end, "au")
+    _validate_date_range(start, end)
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    entries = _journal_report_entries(current_user.organization_id, start, end)
+    pdf = _render_journal_report_pdf(entries, current_user.organization_id, start, end)
+    fname = f"journal-general-{end or start or _today_local_isodate()}.pdf"
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
+@app.get("/api/ledger/journal/csv")
+def journal_report_csv(
+    start: str = None, end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """CSV du journal général (Excel). [COMPTA] no-store."""
+    start = _validate_iso_date_param(start, "du")
+    end = _validate_iso_date_param(end, "au")
+    _validate_date_range(start, end)
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    entries = _journal_report_entries(current_user.organization_id, start, end)
+    data = _render_journal_report_csv(entries)
+    fname = f"journal-general-{end or start or _today_local_isodate()}.csv"
     return Response(content=data, media_type="text/csv; charset=utf-8", headers={
         "Content-Disposition": f'attachment; filename="{fname}"',
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",

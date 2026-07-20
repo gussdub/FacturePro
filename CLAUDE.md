@@ -108,6 +108,13 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — Filtres de dates : balance de vérification de période + journal général (feature #7.12)**
+  - **Balance de vérification** : nouveau mode **période** quand une date « Du » est fournie → tableau **Ouverture (avant Du) / Débit / Crédit (mouvement) / Clôture (à Au)** par compte (réconcilie : ouverture ± mouvement orienté = clôture), à l'écran + PDF (5 colonnes). Sans « Du » = photo cumulative (inchangé). `_trial_balance_period` ; endpoint `?start=&as_of=`.
+  - **Bilan** : reste une photo à la date « Au » (choix utilisateur ; aucun calcul modifié).
+  - **Rapport des transactions = journal général** : `_journal_report_entries` + rendus PDF (écriture + ses lignes + total général) / CSV (BOM, _sanitize_cell). Endpoints `GET /api/ledger/journal/{pdf,csv}?start=&end=`. Onglet Journal : filtres Du/Au (rechargent la liste) + boutons Exporter PDF/CSV.
+  - **Revue adversariale opus** (21 agents) : 0 BLOCKING/IMPORTANT, 3 MINOR corrigés — validation `du > au` → **400** (`_validate_date_range`, appliqué aussi aux endpoints grand livre F7.11), gestion d'erreur `downloadPdf` (balance + bilan) alignée sur l'export journal.
+  - Tests : période (ouverture/mouvement/clôture réconciliés), journal (CSV sanitize, endpoints, 400 dates invalides + plage inversée). 132 tests GL verts. CI build vert.
+
 - **2026-07-08 — Export du grand livre par compte / général, PDF + CSV, filtres de dates (feature #7.11)**
   - Onglet **Grand livre** enrichi : dropdown compte + option « Tous les comptes (général) », filtres **Du/Au**, case « inclure les comptes sans mouvement » (mode général), boutons **Exporter PDF** + **CSV**. L'écran reste par compte ; le général est export-only.
   - Backend : `_gl_account_detail` (extrait de l'endpoint `general-ledger`, source unique de vérité — solde d'ouverture cumulatif AVANT `start`, solde progressif orienté par `normal_balance`, clôture), `_general_ledger_report` (un compte ou tous, exclusion des comptes sans mouvement sauf `include_empty`, **diagnostic orphelins** pour réconcilier avec la balance), `_render_general_ledger_pdf` (6 colonnes, logo + heure Québec) + `_render_general_ledger_csv` (BOM Excel). Endpoints `GET /api/ledger/general-ledger/{pdf,csv}` (accounting:read, no-store).
