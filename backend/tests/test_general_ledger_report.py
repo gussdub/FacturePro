@@ -218,6 +218,78 @@ class TestTrialBalancePeriod:
             assert r.status_code == 400, f"{url} -> {r.status_code}"
 
 
+@pytest.fixture()
+def two_orgs():
+    """Deux orgs isolées (A, B), chacune avec un plan comptable + une écriture postée distincte
+    (montants et descriptions marqués ORGA/ORGB). Sert à prouver l'isolation multi-tenant des
+    rapports F7.11/F7.12."""
+    orgs = {}
+    for tag, amt in (("A", 111.0), ("B", 222.0)):
+        oid = f"TESTORG-ISO-{tag}-{_uuid.uuid4()}"
+        accts = _build_default_accounts(oid, "u1")
+        db.chart_of_accounts.insert_many([dict(a) for a in accts])
+        by = {a["account_number"]: a for a in accts}
+        db.journal_entries.insert_one({
+            "id": str(_uuid.uuid4()), "organization_id": oid, "entry_number": f"JE-{tag}1",
+            "entry_date": "2026-05-15", "status": "posted", "entry_type": "manual",
+            "description": f"ORG{tag}-SECRET", "reverses_entry_id": None, "reversed_by_entry_id": None,
+            "lines": [
+                {"account_id": by["5040"]["id"], "account_number": "5040", "debit": amt, "credit": 0.0},
+                {"account_id": by["1000"]["id"], "account_number": "1000", "debit": 0.0, "credit": amt},
+            ]})
+        orgs[tag] = (oid, by, amt)
+    yield orgs
+    for tag, (oid, _, _) in orgs.items():
+        db.chart_of_accounts.delete_many({"organization_id": oid})
+        db.journal_entries.delete_many({"organization_id": oid})
+
+
+class TestCrossOrgIsolation:
+    """Gap identifié par le graphe (graphify) : les endpoints de rapport F7.11/F7.12 scopent par
+    organization_id sans passer par le choke point _org_scope — ces tests garantissent qu'une org
+    ne voit JAMAIS les données d'une autre via le journal, la balance de période ou le grand livre."""
+
+    def test_journal_report_scoped(self, two_orgs):
+        from backend.server import _journal_report_entries
+        a_oid = two_orgs["A"][0]
+        entries = _journal_report_entries(a_oid, None, None)
+        descs = [e.get("description", "") for e in entries]
+        assert descs and all("ORGA" in d for d in descs)
+        assert not any("ORGB" in d for d in descs)  # aucune écriture de B
+
+    def test_trial_balance_period_scoped(self, two_orgs):
+        from backend.server import _trial_balance_period
+        a_oid, _, a_amt = two_orgs["A"]
+        tb = _trial_balance_period(a_oid, "2026-01-01", "2026-12-31")
+        assert tb["total_period_debit"] == a_amt      # 111 (A seul), pas 333 (A+B)
+        assert tb["unmapped_accounts"] == []          # aucune ligne d'un autre org
+
+    def test_general_ledger_general_scoped(self, two_orgs):
+        a_oid, _, a_amt = two_orgs["A"]
+        rep = _general_ledger_report(a_oid, "u1", None, None, None, False)
+        acc = next((d for d in rep["accounts"] if d["account"]["account_number"] == "5040"), None)
+        assert acc is not None and acc["closing_balance"] == a_amt
+
+    def test_helper_rejects_foreign_account_id(self, two_orgs):
+        """Même en passant explicitement l'account_id de B, l'org A ne peut pas le lire → 404."""
+        from fastapi import HTTPException
+        a_oid = two_orgs["A"][0]
+        b_5040_id = two_orgs["B"][1]["5040"]["id"]
+        with pytest.raises(HTTPException) as exc:
+            _general_ledger_report(a_oid, "u1", b_5040_id, None, None, False)
+        assert exc.value.status_code == 404
+
+    def test_endpoint_cannot_read_foreign_account(self, auth_headers, two_orgs):
+        """Bout-en-bout : l'utilisateur authentifié (son org) ne peut pas lire un compte d'une
+        AUTRE org via les endpoints — teste le câblage current_user.organization_id."""
+        b_5040_id = two_orgs["B"][1]["5040"]["id"]
+        for url in (f"/api/ledger/general-ledger?account_id={b_5040_id}",
+                    f"/api/ledger/general-ledger/pdf?account_id={b_5040_id}",
+                    f"/api/ledger/general-ledger/csv?account_id={b_5040_id}"):
+            r = client.get(url, headers=auth_headers)
+            assert r.status_code == 404, f"{url} -> {r.status_code} (fuite cross-org !)"
+
+
 class TestJournalReport:
     def test_entries_and_csv(self, org):
         from backend.server import _journal_report_entries, _render_journal_report_csv
