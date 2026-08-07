@@ -108,6 +108,10 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — Fix mobile : les reçus ne s'ouvraient pas sur iPhone (feature #7.13)**
+  - `viewReceipt` (ExpensesPage) faisait `window.open(blobUrl, "_blank")` APRÈS un `await axios.get()` → Safari iOS bloque l'ouverture (hors geste utilisateur) : sur iPhone la fenêtre ne s'ouvrait jamais.
+  - Fix : affichage du reçu dans une **modale in-app** (mobile-safe, pas de popup) — `<img>` pour les images (cas courant), `<iframe>` pour les PDF, + lien « Ouvrir en plein écran » (vrai geste utilisateur → non bloqué iOS). Object URL révoqué à la fermeture. Endpoint `/api/receipts/{id}` renvoie déjà le bon `mime_type`. CI build vert.
+
 - **2026-07-08 — Filtres de dates : balance de vérification de période + journal général (feature #7.12)**
   - **Balance de vérification** : nouveau mode **période** quand une date « Du » est fournie → tableau **Ouverture (avant Du) / Débit / Crédit (mouvement) / Clôture (à Au)** par compte (réconcilie : ouverture ± mouvement orienté = clôture), à l'écran + PDF (5 colonnes). Sans « Du » = photo cumulative (inchangé). `_trial_balance_period` ; endpoint `?start=&as_of=`.
   - **Bilan** : reste une photo à la date « Au » (choix utilisateur ; aucun calcul modifié).

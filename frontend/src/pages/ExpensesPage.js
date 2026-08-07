@@ -51,6 +51,7 @@ const ExpensesPage = () => {
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [previewReceipt, setPreviewReceipt] = useState(null);
+  const [viewingReceipt, setViewingReceipt] = useState(null); // {url,type} — reçu affiché en modale (mobile-safe)
   const [formData, setFormData] = useState({
     employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '',
     currency: 'CAD', exchange_rate_to_cad: 1.0,
@@ -210,13 +211,19 @@ const ExpensesPage = () => {
     try {
       const r = await axios.get(`${BACKEND_URL}/api/receipts/${fileId}`,
                                   { responseType: 'blob' });
+      // Affichage en MODALE in-app (mobile-safe). `window.open()` appelé APRÈS un `await` est
+      // bloqué par Safari iOS (plus dans le geste utilisateur) → sur iPhone la fenêtre ne
+      // s'ouvrait jamais. La modale affiche l'image/PDF directement, sans popup.
       const url = URL.createObjectURL(r.data);
-      window.open(url, "_blank");
-      // Pas de revokeObjectURL — la nouvelle fenêtre utilise l'URL
+      setViewingReceipt({ url, type: r.data.type || '' });
     } catch (err) {
       setScanError("Reçu introuvable.");
     }
   };
+  const closeReceipt = () => setViewingReceipt(prev => {
+    if (prev?.url) URL.revokeObjectURL(prev.url);
+    return null;
+  });
 
   const getEmployeeName = (id) => {
     if (!id) return null;
@@ -1453,6 +1460,38 @@ const ExpensesPage = () => {
           {logbookTab === 'favorites' && <MileageFavoritesTab />}
           {logbookTab === 'vehicles' && <MileageVehiclesTab />}
           {logbookTab === 'logbook' && <MileageLogbookTab />}
+        </div>
+      )}
+
+      {viewingReceipt && (
+        <div onClick={closeReceipt}
+             style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center', zIndex: 1400, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+               style={{ background: '#fff', borderRadius: 10, width: '100%', maxWidth: 900,
+                        maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          padding: '10px 14px', borderBottom: '1px solid #e5e7eb' }}>
+              <strong style={{ fontSize: 15 }}>Reçu</strong>
+              <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                <a href={viewingReceipt.url} target="_blank" rel="noopener noreferrer"
+                   style={{ fontSize: 13, color: '#00A08C', fontWeight: 600 }}>Ouvrir en plein écran</a>
+                <button onClick={closeReceipt}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer',
+                                 fontSize: 24, color: '#6b7280', lineHeight: 1 }}>×</button>
+              </div>
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', background: '#f3f4f6', display: 'flex',
+                          alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
+              {viewingReceipt.type.startsWith('image/') ? (
+                <img src={viewingReceipt.url} alt="Reçu"
+                     style={{ maxWidth: '100%', maxHeight: '86vh', objectFit: 'contain' }} />
+              ) : (
+                <iframe title="Reçu" src={viewingReceipt.url}
+                        style={{ width: '100%', height: '82vh', border: 'none' }} />
+              )}
+            </div>
+          </div>
         </div>
       )}
 
