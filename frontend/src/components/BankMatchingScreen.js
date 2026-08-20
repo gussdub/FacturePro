@@ -18,6 +18,9 @@ export default function BankMatchingScreen({ importId, onBack }) {
   const [err, setErr] = useState(null);
   const [openManual, setOpenManual] = useState(null);
   const [openCreate, setOpenCreate] = useState(null);
+  const [showComparison, setShowComparison] = useState(false);
+  const [comparison, setComparison] = useState(null);
+  const [cmpBusy, setCmpBusy] = useState(false);
 
   const fetchData = async () => {
     try {
@@ -91,6 +94,57 @@ export default function BankMatchingScreen({ importId, onBack }) {
     } finally { setBusy(false); setRematching(false); }
   };
 
+  // Rapport de comparaison relevé ↔ dépenses (feature #7.14) : classe chaque retrait
+  // (concordante / écart de conversion / absente) SANS rien créer automatiquement.
+  const loadComparison = async () => {
+    setCmpBusy(true); setErr(null);
+    try {
+      const r = await axios.get(`${BACKEND_URL}/api/bank/imports/${importId}/comparison`);
+      setComparison(r.data); setShowComparison(true);
+    } catch { setErr("Erreur lors de la comparaison"); }
+    finally { setCmpBusy(false); }
+  };
+  const refreshComparison = async () => {
+    const r = await axios.get(`${BACKEND_URL}/api/bank/imports/${importId}/comparison`);
+    setComparison(r.data);
+  };
+  // « Adopter le montant de la banque » : rapproche la dépense à la transaction → _apply_match
+  // remplace le CAD estimé par le vrai montant débité + recalcule le taux + re-poste le GL.
+  const adoptBank = async (line) => {
+    setCmpBusy(true);
+    try {
+      await axios.post(`${BACKEND_URL}/api/bank/transactions/${line.tx_id}/match`,
+                       { kind: "expense", target_id: line.expense.id });
+    } catch (e) {
+      alert(e.response?.data?.detail || "Erreur lors de l'adoption du montant.");
+    } finally {
+      // Toujours resynchroniser (succès ET 409 « déjà rapprochée ») → le rapport ne reste
+      // jamais périmé avec un bouton Adopter fantôme.
+      try { await fetchData(); await refreshComparison(); } catch { /* rapport gardé tel quel */ }
+      setCmpBusy(false);
+    }
+  };
+  // « Créer » : ouvre la modale de création existante (optionnel, à la main — jamais en lot).
+  // Construit un tx minimal depuis la ligne du rapport si la transaction n'est pas dans la page
+  // chargée (import > 500 lignes) → le bouton n'est plus un no-op silencieux.
+  const createFromLine = (line) => {
+    const tx = (data.transactions || []).find(t => t.id === line.tx_id)
+      || { id: line.tx_id, date: line.date, description: line.description,
+           amount_cad: -Math.abs(line.bank_amount || 0) };
+    setShowComparison(false); setOpenCreate(tx);
+  };
+  const cmpDownload = async (ext, mime) => {
+    try {
+      const r = await axios.get(`${BACKEND_URL}/api/bank/imports/${importId}/comparison/${ext}`,
+                                { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: mime }));
+      const a = document.createElement("a"); a.href = url;
+      a.download = `comparaison-${(imp.bank_label || "releve")}.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch { alert("Erreur lors de l'export."); }
+  };
+
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <style>{"@keyframes bmspin{to{transform:rotate(360deg)}}@keyframes bmbar{0%{margin-left:-40%}100%{margin-left:100%}}"}</style>
@@ -138,6 +192,14 @@ export default function BankMatchingScreen({ importId, onBack }) {
           )}
         </div>
       )}
+      <div style={{ marginBottom: 14 }}>
+        <button onClick={loadComparison} disabled={cmpBusy}
+                title="Comparer les retraits du relevé à tes dépenses déjà saisies (sans rien créer)"
+                style={{ background: "#00A08C", color: "#fff", border: "none", padding: "6px 14px",
+                         borderRadius: 6, cursor: cmpBusy ? "wait" : "pointer", fontSize: 13, fontWeight: 600 }}>
+          {cmpBusy && !showComparison ? "Comparaison…" : "Comparer aux dépenses (relevé ↔ dépenses)"}
+        </button>
+      </div>
       <div style={{ marginBottom: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {[
           ["all", "Tout"],
@@ -180,9 +242,91 @@ export default function BankMatchingScreen({ importId, onBack }) {
         <BankCreateInvoiceModal tx={openCreate} onClose={() => setOpenCreate(null)}
           onCreated={() => { setOpenCreate(null); fetchData(); }} />
       ))}
+      {showComparison && comparison && (
+        <div onClick={() => setShowComparison(false)}
+             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex",
+                      alignItems: "center", justifyContent: "center", zIndex: 1400, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+               style={{ background: "#fff", borderRadius: 10, width: "100%", maxWidth: 920,
+                        maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                          padding: "12px 16px", borderBottom: "1px solid #e5e7eb" }}>
+              <strong style={{ fontSize: 16 }}>Comparaison relevé ↔ dépenses</strong>
+              <button onClick={() => setShowComparison(false)}
+                      style={{ background: "none", border: "none", cursor: "pointer",
+                               fontSize: 22, color: "#6b7280", lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ padding: "10px 16px", display: "flex", gap: 16, flexWrap: "wrap",
+                          fontSize: 13, borderBottom: "1px solid #f3f4f6", alignItems: "center" }}>
+              <span style={{ color: "#059669", fontWeight: 600 }}>✓ {comparison.summary.concordante} concordante(s)</span>
+              <span style={{ color: "#b45309", fontWeight: 600 }}>⚠ {comparison.summary.ecart} écart(s)</span>
+              <span style={{ color: "#dc2626", fontWeight: 600 }}>＋ {comparison.summary.absente} absente(s)</span>
+              <span style={{ color: "#6b7280" }}>Écart de change total : {fmt(comparison.summary.total_fx_ecart)} $</span>
+              <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <button onClick={() => cmpDownload("pdf", "application/pdf")} style={cmpBtn("#00A08C")}>PDF</button>
+                <button onClick={() => cmpDownload("csv", "text/csv")} style={cmpBtn("#1f2937")}>CSV</button>
+              </span>
+            </div>
+            <div style={{ overflow: "auto", padding: "8px 16px" }}>
+              {comparison.lines.length === 0 && (
+                <p style={{ color: "#6b7280" }}>Aucun retrait à comparer dans ce relevé.</p>
+              )}
+              {comparison.lines.map((ln) => {
+                const meta = {
+                  concordante: { c: "#059669", t: "Concordante", bg: "#ecfdf5" },
+                  ecart: { c: "#b45309", t: "Écart", bg: "#fffbeb" },
+                  absente: { c: "#dc2626", t: "Absente", bg: "#fef2f2" },
+                }[ln.status] || { c: "#6b7280", t: ln.status, bg: "#f9fafb" };
+                return (
+                  <div key={ln.tx_id} style={{ borderLeft: `4px solid ${meta.c}`, background: meta.bg,
+                        padding: "8px 12px", marginBottom: 6, borderRadius: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ color: meta.c, fontWeight: 700, fontSize: 12 }}>{meta.t}</span>
+                        <span style={{ color: "#6b7280", fontSize: 12, marginLeft: 8 }}>{ln.date}</span>
+                        <div style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {ln.description}
+                        </div>
+                        {ln.expense && (
+                          <div style={{ fontSize: 12, color: "#6b7280" }}>
+                            Dépense : {ln.expense.vendor || ln.expense.description} — {fmt(ln.expense.amount_cad)} $ {ln.expense.currency}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: "right", minWidth: 110 }}>
+                        <div style={{ fontWeight: 600 }}>Banque {fmt(ln.bank_amount)} $</div>
+                        {ln.status === "ecart" && (
+                          <div style={{ fontSize: 12, color: "#b45309" }}>écart {fmt(ln.ecart)} $</div>
+                        )}
+                      </div>
+                      <div style={{ minWidth: 140, textAlign: "right" }}>
+                        {ln.can_adopt && (
+                          <button onClick={() => adoptBank(ln)} disabled={cmpBusy || isClosed}
+                                  style={cmpBtn("#b45309")}>Adopter le montant banque</button>
+                        )}
+                        {ln.status === "ecart" && !ln.can_adopt && (
+                          <span style={{ fontSize: 11, color: "#b45309" }}>
+                            {ln.already_matched ? "déjà rapprochée" : "à vérifier (dépense CAD)"}
+                          </span>
+                        )}
+                        {ln.status === "absente" && !isClosed && (
+                          <button onClick={() => createFromLine(ln)} style={cmpBtn("#dc2626")}>Créer</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const cmpBtn = (bg) => ({ background: bg, color: "#fff", border: "none", padding: "5px 10px",
+                          borderRadius: 5, cursor: "pointer", fontSize: 12, fontWeight: 600 });
 
 function TxRow({ tx, busy, readOnly, onIgnore, onUnignore, onUnmatch, onOpenManual, onOpenCreate, onRefresh }) {
   const isDebit = tx.amount_cad != null && tx.amount_cad < 0;

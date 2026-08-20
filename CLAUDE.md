@@ -108,6 +108,14 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-07-08 — Rapport de comparaison relevé ↔ dépenses (feature #7.14)**
+  - Besoin : le rapprochement ne doit PAS pousser à tout recréer (l'utilisateur a déjà saisi ses dépenses → doublons). Il doit COMPARER : `_reconciliation_comparison(import_id, scope)` classe chaque retrait — **concordante** (dépense existe, CAD identique), **écart** (existe mais CAD diffère — conversion USD), **absente** (aucune). Appariement par NOM (`_name_match`) + date ≤10j ; montant = écart rapporté, pas un filtre. Endpoints `GET /api/bank/imports/{id}/comparison{,/pdf,/csv}` (bank:read, no-store). Frontend `BankMatchingScreen` : bouton « Comparer aux dépenses » → modale (3 compteurs + écart change total, boutons per-ligne **Adopter le montant banque** [→ `_apply_match` corrige le CAD réel] / **Créer** [modale, jamais en lot], export PDF/CSV). **Rien créé automatiquement.**
+  - **Revue adversariale opus** (24 agents) : 1 BLOCKING + 3 IMPORTANT + 1 MINOR, tous corrigés :
+    - BLOCKING : « adopter » sur une dépense CAD était un no-op qui enfouissait l'écart en vert → `can_adopt` (offert uniquement en devise étrangère) ; écart résiduel d'une déjà-rapprochée reste classé « écart » (jamais masqué).
+    - IMPORTANT : `_significant_tokens` dépouille désormais les **accents** (é→e) — « Épicerie Métro » recoupe « EPICERIE METRO » (corrige aussi l'auto-match F7.3, évitait des faux « absente » → doublons) ; une dépense n'est **appariée qu'à UNE** transaction du run (2 débits même fournisseur → 2ᵉ = absente) ; bouton « Créer » construit le tx depuis la ligne (plus de no-op sur import > 500 lignes).
+    - MINOR : `adoptBank` resynchronise le rapport même sur 409.
+  - Tests : `test_bank_comparison.py` (14 : 3 états, écart signé, can_adopt devise/CAD, consommation dépense, accents, crédit exclu, déjà-rapproché, exports, 404). 151 tests bank in-process verts. CI build vert.
+
 - **2026-07-08 — Fix mobile : les reçus ne s'ouvraient pas sur iPhone (feature #7.13)**
   - `viewReceipt` (ExpensesPage) faisait `window.open(blobUrl, "_blank")` APRÈS un `await axios.get()` → Safari iOS bloque l'ouverture (hors geste utilisateur) : sur iPhone la fenêtre ne s'ouvrait jamais.
   - Fix : affichage du reçu dans une **modale in-app** (mobile-safe, pas de popup) — `<img>` pour les images (cas courant), `<iframe>` pour les PDF, + lien « Ouvrir en plein écran » (vrai geste utilisateur → non bloqué iOS). Object URL révoqué à la fermeture. Endpoint `/api/receipts/{id}` renvoie déjà le bon `mime_type`. CI build vert.

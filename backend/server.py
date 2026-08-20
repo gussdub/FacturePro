@@ -1418,7 +1418,13 @@ def _significant_tokens(s):
     # Tokens distinctifs pour ancrer un nom de fournisseur : >=3 car, ALPHABÉTIQUES (pas
     # purement numériques — une année/un numéro/un montant ne caractérise pas un fournisseur),
     # hors mots génériques/bancaires. Ainsi « genspark » ancre, mais « 2026 »/« 877 » non.
-    return {t for t in re.split(r"[^a-z0-9]+", (s or "").lower())
+    # Les ACCENTS sont dépliés (é→e, ô→o…) AVANT le split : les relevés bancaires dépouillent
+    # toujours les accents, sinon « Épicerie Métro » (→ picerie/tro) ne recouperait jamais
+    # « EPICERIE METRO » (→ epicerie/metro) → faux « absente » → doublon.
+    import unicodedata
+    s = "".join(c for c in unicodedata.normalize("NFKD", (s or "").lower())
+                if not unicodedata.combining(c))
+    return {t for t in re.split(r"[^a-z0-9]+", s)
             if len(t) >= 3 and not t.isdigit() and t not in _MATCH_STOPWORDS}
 
 
@@ -7544,6 +7550,271 @@ def get_bank_import(import_id: str, page: int = 1, per_page: int = 100,
         "page": page,
         "per_page": per_page,
     }
+
+
+# ─── Rapprochement : rapport de comparaison relevé ↔ dépenses (feature #7.14) ───
+
+def _cmp_expense_brief(exp):
+    """Résumé d'une dépense pour le rapport de comparaison."""
+    if not exp:
+        return None
+    return {
+        "id": exp.get("id"),
+        "vendor": exp.get("vendor"),
+        "description": exp.get("description"),
+        "amount_cad": round(float(exp.get("amount_cad", 0) or 0), 2),
+        "currency": (exp.get("currency") or "CAD"),
+        "expense_date": exp.get("expense_date") or exp.get("date"),
+    }
+
+
+def _reconciliation_comparison(import_id, scope):
+    """Compare les RETRAITS (débits) d'un relevé importé aux dépenses existantes.
+
+    Classe chaque débit sans RIEN modifier (rapport en lecture seule) :
+    - « concordante » : une dépense existe, montant CAD identique (± 0,01) — ou déjà rapprochée ;
+    - « ecart » : une dépense existe (même fournisseur + date proche) mais le CAD DIFFÈRE
+      (conversion USD, frais de change/banque) → l'utilisateur pourra « adopter le montant banque » ;
+    - « absente » : aucune dépense ne correspond → l'utilisateur pourra « créer » (optionnel).
+
+    Appariement par NOM (vendor/description direct OU alias appris) + date proche (≤ 10 j). Le montant
+    n'est PAS un filtre : c'est justement l'écart qu'on veut faire ressortir. Les CRÉDITS (dépôts →
+    factures) sont hors de ce rapport. Aucune création/modification : ce sont des ACTIONS séparées."""
+    txs = list(db.bank_transactions.find(
+        {"import_id": import_id, **scope}, {"_id": 0}).sort("row_index", 1))
+    open_expenses = list(db.expenses.find(
+        {**scope, "bank_transaction_id": None}, {"_id": 0}))
+    aliases = list(db.bank_match_aliases.find(scope, {"_id": 0}))
+    lines = []
+    n_concord = n_ecart = n_absent = 0
+    total_ecart = 0.0
+    used = set()  # dépenses déjà appariées dans CE run : une dépense ≠ 2 transactions du relevé
+    for tx in txs:
+        if tx.get("parse_error") or tx.get("status") == "ignored":
+            continue
+        amt = tx.get("amount_cad")
+        if amt is None or float(amt) >= 0:
+            continue  # crédits = dépôts → factures, hors scope
+        bank_amount = round(abs(float(amt)), 2)
+        tx_date = _parse_iso_date(tx.get("date"))
+        desc_lower = (tx.get("description") or "").lower()
+        tx_tokens = _significant_tokens(tx.get("description"))
+        base = {"tx_id": tx["id"], "date": tx.get("date"),
+                "description": tx.get("description"), "bank_amount": bank_amount}
+
+        # Déjà rapprochée à une dépense → concordante (réconciliée, CAD déjà adopté le cas échéant).
+        if tx.get("status") == "matched" and tx.get("match_kind") == "expense":
+            exp = db.expenses.find_one({"id": tx.get("match_id"), **scope}, {"_id": 0})
+            exp_cad = round(float((exp or {}).get("amount_cad", 0) or 0), 2)
+            ecart = round(bank_amount - exp_cad, 2) if exp else 0.0
+            # Déjà rapprochée mais écart RÉSIDUEL (ex. dépense CAD non ajustée) → on ne cache jamais
+            # l'écart : statut « ecart » (le rapport doit toujours faire ressortir une divergence).
+            status = "concordante" if abs(ecart) <= 0.01 else "ecart"
+            lines.append({**base, "status": status, "already_matched": True,
+                          "expense": _cmp_expense_brief(exp), "ecart": ecart, "can_adopt": False})
+            if status == "ecart":
+                n_ecart += 1
+                total_ecart += ecart
+            else:
+                n_concord += 1
+            continue
+
+        # Meilleure dépense NON rapprochée ET NON déjà consommée dans ce run, par NOM + date
+        # (le montant sert au tri, PAS de filtre — c'est justement l'écart qu'on veut montrer).
+        best, best_key = None, None
+        for exp in open_expenses:
+            if exp.get("id") in used:
+                continue  # une dépense ne peut être appariée qu'à UNE transaction du relevé
+            name = exp.get("vendor") or exp.get("description") or ""
+            nm = _name_match(name, desc_lower) or _alias_bridges(
+                tx_tokens, _significant_tokens(name), aliases)
+            if not nm:
+                continue
+            edate = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
+            ddiff = abs((tx_date - edate).days) if (tx_date and edate) else 999
+            if ddiff > 10:
+                continue
+            adiff = abs(round(float(exp.get("amount_cad", 0) or 0), 2) - bank_amount)
+            key = (adiff, ddiff)
+            if best is None or key < best_key:
+                best, best_key = exp, key
+
+        if best is None:
+            lines.append({**base, "status": "absente", "expense": None,
+                          "ecart": None, "can_adopt": False})
+            n_absent += 1
+        else:
+            used.add(best.get("id"))
+            exp_cad = round(float(best.get("amount_cad", 0) or 0), 2)
+            ecart = round(bank_amount - exp_cad, 2)
+            status = "concordante" if abs(ecart) <= 0.01 else "ecart"
+            cur = (best.get("currency") or "CAD").strip().upper()
+            # « Adopter le montant banque » n'agit QUE sur une dépense en DEVISE ÉTRANGÈRE
+            # (_apply_match). Sur une dépense CAD avec écart, adopter serait un no-op trompeur →
+            # on ne l'offre pas ; l'écart reste affiché (saisie à vérifier/corriger manuellement).
+            can_adopt = status == "ecart" and cur not in ("", "CAD")
+            lines.append({**base, "status": status, "expense": _cmp_expense_brief(best),
+                          "ecart": ecart, "can_adopt": can_adopt})
+            if status == "ecart":
+                n_ecart += 1
+                total_ecart += ecart
+            else:
+                n_concord += 1
+
+    return {
+        "import_id": import_id,
+        "summary": {"concordante": n_concord, "ecart": n_ecart, "absente": n_absent,
+                    "total_fx_ecart": round(total_ecart, 2),
+                    "total_debits": n_concord + n_ecart + n_absent},
+        "lines": lines,
+    }
+
+
+def _bank_read_scope(current_user):
+    """Scope de lecture bancaire : org courante OU docs legacy (pre-migration multi-tenant)."""
+    return {"$or": [
+        {"organization_id": current_user.organization_id},
+        {"user_id": current_user.id, "organization_id": {"$exists": False}},
+    ]}
+
+
+_CMP_STATUS_FR = {"concordante": "Concordante", "ecart": "Écart", "absente": "Absente"}
+
+
+@app.get("/api/bank/imports/{import_id}/comparison")
+def bank_import_comparison(
+    import_id: str, response: Response,
+    current_user: CurrentUser = Depends(require_permission("bank:read")),
+):
+    """Rapport de comparaison relevé ↔ dépenses (feature #7.14). Lecture seule. no-store."""
+    _apply_ledger_no_store(response)
+    scope = _bank_read_scope(current_user)
+    if not db.bank_imports.find_one({"id": import_id, **scope}, {"_id": 0}):
+        raise HTTPException(404, "Import not found")
+    return _reconciliation_comparison(import_id, scope)
+
+
+def _render_comparison_pdf(report, org_id, import_label):
+    """PDF du rapport de comparaison (entête partagé logo + heure Québec)."""
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib.units import inch
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+    from html import escape as html_escape
+    S = _ledger_pdf_styles()
+    body = ParagraphStyle("CMP", parent=S["small"], fontSize=8, textColor=S["dark"], leading=10)
+    s = report["summary"]
+    subtitle = (f"{import_label} · {s['concordante']} concordante(s) · {s['ecart']} écart(s) · "
+                f"{s['absente']} absente(s) · écart de change total {_ledger_pdf_money(s['total_fx_ecart'])}")
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(letter), topMargin=0.5 * inch,
+                            bottomMargin=0.5 * inch, leftMargin=0.5 * inch, rightMargin=0.5 * inch)
+    elements = _ledger_pdf_header_flowables("Rapport de rapprochement", subtitle, org_id, S)
+    data = [["État", "Date", "Description (relevé)", "Montant banque", "Dépense", "CAD dépense", "Écart"]]
+    for ln in report["lines"]:
+        exp = ln.get("expense") or {}
+        exp_name = exp.get("vendor") or exp.get("description") or ""
+        data.append([
+            _CMP_STATUS_FR.get(ln["status"], ln["status"]),
+            ln.get("date", ""),
+            Paragraph(html_escape(ln.get("description") or ""), body),
+            _ledger_pdf_money(ln["bank_amount"]),
+            Paragraph(html_escape(exp_name), body),
+            _ledger_pdf_money(exp["amount_cad"]) if exp else "",
+            _ledger_pdf_money(ln["ecart"]) if ln.get("ecart") is not None else "",
+        ])
+    t = Table(data, repeatRows=1,
+              colWidths=[0.9 * inch, 0.85 * inch, 3.0 * inch, 1.15 * inch, 2.2 * inch, 1.1 * inch, 0.9 * inch])
+    style = [
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("TEXTCOLOR", (0, 0), (-1, -1), S["dark"]),
+        ("ALIGN", (3, 0), (3, -1), "RIGHT"),
+        ("ALIGN", (5, 0), (6, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 0), (-1, 0), HexColor("#f3f4f6")),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.25, HexColor("#e5e7eb")),
+    ]
+    # Couleur de l'état par ligne
+    for i, ln in enumerate(report["lines"], start=1):
+        col = {"concordante": HexColor("#059669"), "ecart": HexColor("#b45309"),
+               "absente": HexColor("#dc2626")}.get(ln["status"])
+        if col:
+            style.append(("TEXTCOLOR", (0, i), (0, i), col))
+            style.append(("FONTNAME", (0, i), (0, i), "Helvetica-Bold"))
+    t.setStyle(TableStyle(style))
+    elements.append(t)
+    if not report["lines"]:
+        elements.append(Paragraph("Aucun retrait à comparer dans ce relevé.", S["small"]))
+    doc.build(elements)
+    buf.seek(0)
+    return buf.read()
+
+
+def _render_comparison_csv(report):
+    """CSV du rapport de comparaison (BOM Excel, _sanitize_cell sur les champs texte)."""
+    import csv as _csv
+    out = io.StringIO()
+    w = _csv.writer(out)
+    w.writerow(["État", "Date", "Description relevé", "Montant banque", "Dépense",
+                "CAD dépense", "Devise", "Écart"])
+
+    def m(x):
+        return "" if x is None else f"{float(x or 0):.2f}"
+
+    for ln in report["lines"]:
+        exp = ln.get("expense") or {}
+        w.writerow([
+            _CMP_STATUS_FR.get(ln["status"], ln["status"]),
+            ln.get("date", ""),
+            _sanitize_cell(ln.get("description") or ""),
+            m(ln["bank_amount"]),
+            _sanitize_cell((exp.get("vendor") or exp.get("description") or "") if exp else ""),
+            m(exp.get("amount_cad")) if exp else "",
+            (exp.get("currency") or "") if exp else "",
+            m(ln.get("ecart")),
+        ])
+    return out.getvalue().encode("utf-8-sig")
+
+
+@app.get("/api/bank/imports/{import_id}/comparison/pdf")
+def bank_import_comparison_pdf(
+    import_id: str,
+    current_user: CurrentUser = Depends(require_permission("bank:read")),
+):
+    """PDF du rapport de comparaison. no-store."""
+    scope = _bank_read_scope(current_user)
+    imp = db.bank_imports.find_one({"id": import_id, **scope}, {"_id": 0})
+    if not imp:
+        raise HTTPException(404, "Import not found")
+    report = _reconciliation_comparison(import_id, scope)
+    label = imp.get("bank_label") or "Relevé"
+    pdf = _render_comparison_pdf(report, current_user.organization_id, label)
+    fname = f"comparaison-{import_id}.pdf"
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
+@app.get("/api/bank/imports/{import_id}/comparison/csv")
+def bank_import_comparison_csv(
+    import_id: str,
+    current_user: CurrentUser = Depends(require_permission("bank:read")),
+):
+    """CSV du rapport de comparaison. no-store."""
+    scope = _bank_read_scope(current_user)
+    if not db.bank_imports.find_one({"id": import_id, **scope}, {"_id": 0}):
+        raise HTTPException(404, "Import not found")
+    report = _reconciliation_comparison(import_id, scope)
+    data = _render_comparison_csv(report)
+    fname = f"comparaison-{import_id}.csv"
+    return Response(content=data, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
 
 
 # ─── Bank Transaction Action Endpoints (T8) ───
