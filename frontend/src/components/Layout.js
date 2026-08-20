@@ -27,6 +27,15 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Ferme la barre latérale off-canvas après une navigation (mobile).
   useEffect(() => { setSidebarOpen(false); }, [currentRoute]);
+  // Rappels « À relancer » (feature #7.15) : factures avec un solde dû dont la date convenue est
+  // arrivée. Recalculé à chaque navigation (un paiement enregistré met la liste à jour).
+  const [reminders, setReminders] = useState([]);
+  useEffect(() => {
+    if (!hasPermission || !hasPermission('invoices:read')) return;
+    axios.get(`${BACKEND_URL}/api/invoices/payment-reminders`)
+      .then((r) => setReminders(r.data?.reminders || []))
+      .catch(() => {});
+  }, [currentRoute, hasPermission]);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -199,12 +208,18 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
                   borderRadius: '8px', cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}>
                   <Bell size={18} strokeWidth={1.8} />
-                  <span style={{
-                    position: 'absolute', top: '4px', right: '4px', width: '8px', height: '8px',
-                    background: '#ef4444', borderRadius: '50%'
-                  }} />
+                  {reminders.length > 0 && (
+                    <span style={{
+                      position: 'absolute', top: '-2px', right: '-2px', minWidth: '16px', height: '16px',
+                      padding: '0 4px', background: '#ef4444', borderRadius: '999px', color: '#fff',
+                      fontSize: '10px', fontWeight: 700, display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', lineHeight: 1, boxSizing: 'border-box'
+                    }}>{reminders.length}</span>
+                  )}
                 </button>
-                <NotificationsDropdown isOpen={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
+                <NotificationsDropdown isOpen={notificationsOpen} reminders={reminders}
+                  onClose={() => setNotificationsOpen(false)}
+                  onGoInvoices={() => { setNotificationsOpen(false); navigate('/invoices'); }} />
               </div>
 
               {/* User Badge */}

@@ -16,6 +16,13 @@ const METHOD_OPTIONS = [
 
 const fmt = (n) => Number(n || 0).toFixed(2);
 
+// Date locale du navigateur (YYYY-MM-DD) — évite toISOString() qui rend la date UTC
+// (le soir au Québec, UTC est déjà le lendemain → paiement daté du mauvais jour / mauvaise période).
+const todayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
   const auth = useAuth();
   const token = tokenProp || auth?.token;
@@ -24,8 +31,11 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
   const [form, setForm] = useState({
     amount_cad: '',
     method: 'cheque',
-    date: new Date().toISOString().slice(0, 10),
+    date: todayLocal(),
     reference: '',
+    // Pré-remplir depuis la facture : sinon un 2e paiement partiel renvoie '' → le backend
+    // écraserait la date convenue déjà enregistrée avec null (rappel « À relancer » perdu).
+    balance_due_date: (invoice && invoice.balance_due_date) || '',
   });
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -37,12 +47,16 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
   const outstanding = Math.max(0, Number(invoice.total || 0) - totalPaid);
   const headers = { Authorization: `Bearer ${token}` };
 
-  const reset = () => {
+  // `src` = facture de référence pour la date convenue. Après un paiement on passe la
+  // facture RE-FETCHÉE (res.data) pour ne pas repartir d'une valeur périmée (deux paiements
+  // partiels d'affilée : le 1er a fixé la date → le closure `invoice` la précède encore).
+  const reset = (src = invoice) => {
     setForm({
       amount_cad: '',
       method: 'cheque',
-      date: new Date().toISOString().slice(0, 10),
+      date: todayLocal(),
       reference: '',
+      balance_due_date: (src && src.balance_due_date) || '',
     });
     setErr(null);
     setAdding(false);
@@ -64,7 +78,7 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
         { headers }
       );
       onUpdated && onUpdated(res.data);
-      reset();
+      reset(res.data);  // repartir de l'état canonique renvoyé par le backend
     } catch (e2) {
       setErr(e2.response?.data?.detail || "Erreur lors de l'ajout du paiement.");
     } finally {
@@ -245,6 +259,20 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
                 />
               </label>
             </div>
+            {(outstanding - Number(form.amount_cad || 0)) > 0.005 && (
+              <label style={{ fontSize: 13, fontWeight: 500, color: '#374151', display: 'block', marginBottom: 12 }}>
+                Date convenue pour le solde (optionnel)
+                <input
+                  type="date"
+                  value={form.balance_due_date}
+                  onChange={(e) => setForm({ ...form, balance_due_date: e.target.value })}
+                  style={{ display: 'block', width: '100%', padding: '8px 10px', marginTop: 4, border: '1px solid #ddd', borderRadius: 6, boxSizing: 'border-box' }}
+                />
+                <span style={{ display: 'block', fontWeight: 400, color: '#6b7280', fontSize: 12, marginTop: 4 }}>
+                  Tu recevras un rappel « À relancer » (cloche 🔔) à cette date pour réclamer le reste.
+                </span>
+              </label>
+            )}
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 type="submit" disabled={busy}
@@ -256,7 +284,7 @@ const PaymentModal = ({ invoice, onClose, onUpdated, token: tokenProp }) => {
                 {busy ? '...' : 'Enregistrer'}
               </button>
               <button
-                type="button" onClick={reset}
+                type="button" onClick={() => reset()}
                 style={{ background: '#f3f4f6', border: 'none', padding: '8px 16px', borderRadius: 6, cursor: 'pointer' }}
               >
                 Annuler

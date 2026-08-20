@@ -536,6 +536,31 @@ const SettingsPage = () => {
           </div>
         </div>
 
+        {/* Rappels de paiement (feature #7.15) */}
+        <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', marginBottom: '24px' }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: '18px', fontWeight: '700' }}>Rappels de paiement</h3>
+          <p style={{ color: '#6b7280', fontSize: '14px', margin: '0 0 16px' }}>
+            Quand tu enregistres un paiement partiel avec une « date convenue pour le solde », un rappel « À relancer »
+            apparaît sur la cloche 🔔. Choisis combien de jours AVANT cette date le rappel doit commencer à s'afficher.
+          </p>
+          <div style={{ maxWidth: '320px' }}>
+            <label style={{ display: 'block', marginBottom: '6px', fontWeight: '600' }}>
+              Jours d'avance avant la date convenue
+            </label>
+            <input
+              type="number" min="0" max="60"
+              data-testid="payment-reminder-lead-days"
+              value={settings.payment_reminder_lead_days ?? 3}
+              onChange={(e) => setSettings(prev => ({
+                ...prev,
+                payment_reminder_lead_days: e.target.value === ''
+                  ? '' : Math.max(0, Math.min(60, parseInt(e.target.value, 10) || 0)),
+              }))}
+              style={inputStyle}
+            />
+          </div>
+        </div>
+
         {canEditSettings ? (
           <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 14, padding: 12 }} data-testid="autosave-status">
             {saveState === 'saving' && <span>💾 Enregistrement…</span>}

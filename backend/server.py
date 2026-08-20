@@ -6869,6 +6869,49 @@ def get_invoices(current_user: CurrentUser = Depends(require_permission("invoice
                 {"_id": 0}
             )]
 
+
+@app.get("/api/invoices/payment-reminders")
+def payment_reminders(response: Response,
+                      current_user: CurrentUser = Depends(require_permission("invoices:read"))):
+    """Rappels « À relancer » (feature #7.15) : factures avec un SOLDE DÛ et une DATE CONVENUE pour
+    le solde arrivée — ou à ≤ N jours (N = `payment_reminder_lead_days` de l'org, défaut 3). Calculé
+    à la volée à chaque ouverture (aucun cron). Déclaré AVANT /{invoice_id} pour ne pas être capté
+    comme un id. [COMPTA] no-store : donnée vivante."""
+    _apply_ledger_no_store(response)
+    from datetime import date as _date, timedelta as _td
+    scope = _org_scope(current_user)
+    settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
+    try:
+        lead = max(0, min(60, int(settings.get("payment_reminder_lead_days", 3))))
+    except (ValueError, TypeError):
+        lead = 3
+    today = _date.fromisoformat(_today_local_isodate())
+    cutoff = (today + _td(days=lead)).isoformat()
+    reminders = []
+    for inv in db.invoices.find(
+            {**scope, "status": {"$in": ["sent", "partial", "overdue"]},
+             "balance_due_date": {"$exists": True, "$ne": None, "$lte": cutoff}}, {"_id": 0}):
+        outstanding = _get_invoice_outstanding(inv)
+        if outstanding <= 0.005:
+            continue
+        bdd = inv.get("balance_due_date")
+        try:
+            days_overdue = (today - _date.fromisoformat(bdd)).days  # >0 = en retard, ≤0 = à venir
+        except (ValueError, TypeError):
+            days_overdue = 0
+        client = db.clients.find_one({"id": inv.get("client_id"), **scope}, {"_id": 0}) or {}
+        reminders.append({
+            "invoice_id": inv["id"],
+            "invoice_number": inv.get("invoice_number"),
+            "client_name": client.get("name") or "",
+            "outstanding_cad": round(outstanding, 2),
+            "balance_due_date": bdd,
+            "days_overdue": days_overdue,
+        })
+    reminders.sort(key=lambda r: r["balance_due_date"])
+    return {"count": len(reminders), "reminders": reminders}
+
+
 @app.get("/api/invoices/{invoice_id}")
 def get_invoice(invoice_id: str, current_user: CurrentUser = Depends(require_permission("invoices:read"))):
     doc = db.invoices.find_one(
@@ -6990,9 +7033,25 @@ def add_invoice_payment(invoice_id: str, body: dict,
     }
     invoice.setdefault("payments", []).append(payment)
     new_status = _recompute_invoice_status(invoice)
+    set_fields = {"status": new_status}
+    # [Feature #7.15] Date convenue pour recevoir le SOLDE. Si la facture devient entièrement
+    # payée → on efface la date (plus rien à relancer). Sinon, si le body en fournit une (paiement
+    # partiel avec échéance convenue), on la mémorise pour le rappel « À relancer ».
+    if new_status == "paid":
+        set_fields["balance_due_date"] = None
+    elif "balance_due_date" in body:
+        bdd = (str(body.get("balance_due_date") or "").strip()) or None
+        if bdd:
+            _validate_iso_date_param(bdd, "date convenue")  # 400 si format non ISO
+            from datetime import date as _date
+            # Canonicalise en 'YYYY-MM-DD' PUR : Python 3.11 accepte des formes ISO exotiques
+            # (« 20260915 », « 2026-W38-1 ») que la comparaison lexicographique $lte de la query
+            # de rappels casserait silencieusement → un rappel manqué. On normalise à la source.
+            bdd = _date.fromisoformat(bdd).isoformat()
+        set_fields["balance_due_date"] = bdd
     db.invoices.update_one(
         {"id": invoice_id, **_org_scope(current_user)},
-        {"$push": {"payments": payment}, "$set": {"status": new_status}}
+        {"$push": {"payments": payment}, "$set": set_fields}
     )
     # [GL P2 — T8] Encaissement auto (§5.2), opt-in par org. Le recompute de statut
     # ci-dessus (partial/paid) NE re-poste PAS le revenu : seul le PAIEMENT est posté
@@ -10264,6 +10323,7 @@ def get_settings(current_user: CurrentUser = Depends(require_permission("setting
         settings.setdefault(f, "")
     settings.setdefault("entity_type", "sole_proprietor")
     settings.setdefault("province", "QC")
+    settings.setdefault("payment_reminder_lead_days", 3)
     settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
@@ -10332,6 +10392,15 @@ def update_settings(
         if not isinstance(d, int) or isinstance(d, bool) or not (1 <= d <= 31):
             raise HTTPException(400, "fiscal_year_end_day doit être entre 1 et 31")
         settings_data["fiscal_year_end_day"] = d
+    # Feature #7.15 — rappel de paiement : nb de jours AVANT la date convenue (entier 0–60).
+    if "payment_reminder_lead_days" in settings_data:
+        try:
+            v = float(settings_data["payment_reminder_lead_days"])
+        except (ValueError, TypeError):
+            raise HTTPException(422, "payment_reminder_lead_days doit être un entier")
+        if not math.isfinite(v):  # JSON Infinity/NaN → int(float('inf')) lève OverflowError (→ 500)
+            raise HTTPException(422, "payment_reminder_lead_days doit être un nombre fini")
+        settings_data["payment_reminder_lead_days"] = max(0, min(60, int(v)))
     # Feature #11 — update par organization_id (source de vérité multi-tenant),
     # avec fallback pre-migration sur user_id du owner (docs legacy).
     db.company_settings.update_one(
@@ -10357,6 +10426,7 @@ def update_settings(
         settings.setdefault(f, "")
     settings.setdefault("entity_type", "sole_proprietor")
     settings.setdefault("province", "QC")
+    settings.setdefault("payment_reminder_lead_days", 3)
     settings["tax_number_warnings"] = _tax_warnings(settings)
     return settings
 
