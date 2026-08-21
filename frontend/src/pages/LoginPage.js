@@ -190,9 +190,9 @@ const LoginPage = () => {
           {!isLogin && (
             <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: '#64748b' }}>
               En creant un compte, vous acceptez nos{' '}
-              <a href="#terms" style={{ color: '#00A08C', textDecoration: 'none' }}>conditions d'utilisation</a>{' '}
+              <a href="/cgu" target="_blank" rel="noopener noreferrer" style={{ color: '#00A08C', textDecoration: 'none' }}>conditions d'utilisation</a>{' '}
               et notre{' '}
-              <a href="#privacy" style={{ color: '#00A08C', textDecoration: 'none' }}>politique de confidentialite</a>
+              <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: '#00A08C', textDecoration: 'none' }}>politique de confidentialite</a>
             </div>
           )}
         </div>

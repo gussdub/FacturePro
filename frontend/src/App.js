@@ -17,6 +17,7 @@ import ReportsPage from './pages/ReportsPage';
 import BankReconciliationPage from './pages/BankReconciliationPage';
 import LedgerPage from './pages/LedgerPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
+import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
 
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
@@ -37,9 +38,16 @@ function App() {
     setCurrentRoute(path);
   };
 
-  // Public route — no auth required
+  // Public routes — no auth required
   if (window.location.pathname === '/accept-invite') {
     return <AcceptInvitePage />;
+  }
+  // Pages légales publiques (Loi 25) — les liens de consentement pointent ici.
+  if (window.location.pathname === '/privacy') {
+    return <PrivacyPolicyPage />;
+  }
+  if (window.location.pathname === '/cgu') {
+    return <TermsPage />;
   }
 
   if (!isAuthenticated) {
