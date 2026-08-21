@@ -958,6 +958,7 @@ class TestTask10MultiMemberHelpers:
         settings_marker = f"111111{uuid.uuid4().hex[:3].upper()}"[:9]
         original_settings = db.company_settings.find_one({"organization_id": org_id})
         settings_id = None
+        original_bn = None
         if not original_settings:
             settings_id = str(uuid.uuid4())
             db.company_settings.insert_one({
@@ -968,8 +969,11 @@ class TestTask10MultiMemberHelpers:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
         else:
+            # Les docs company_settings de style prod sont keyés par organization_id/_id et
+            # n'ont PAS de champ `id` → filtrer par `_id` (toujours présent), pas par `id`.
+            original_bn = original_settings.get("bn_number")
             db.company_settings.update_one(
-                {"id": original_settings["id"]},
+                {"_id": original_settings["_id"]},
                 {"$set": {"bn_number": settings_marker}},
             )
 
@@ -1023,6 +1027,12 @@ class TestTask10MultiMemberHelpers:
                 db.clients.delete_one({"id": created_client_id})
             if settings_id:
                 db.company_settings.delete_one({"id": settings_id})
+            elif original_settings is not None:
+                # restaure le bn_number d'origine sur les settings partagés (pas de pollution du seed)
+                db.company_settings.update_one(
+                    {"_id": original_settings["_id"]},
+                    {"$set": {"bn_number": original_bn}},
+                )
             self._cleanup_user(uid)
 
     # ── Scenario 2 : accountant matches bank tx to owner-created invoice ──
