@@ -209,21 +209,24 @@ class TestStripeWebhookMirrorsOrg:
             "metadata": {"plan": "facturepro_monthly", "email": email},
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
-        # Force json path (STRIPE_WEBHOOK_SECRET vide) + STRIPE_API_KEY set pour
-        # passer le gate initial du endpoint
+        # [Sécurité P0] Le webhook est fail-closed : un STRIPE_WEBHOOK_SECRET est requis et la
+        # signature est vérifiée. On monkeypatche construct_event pour tester la LOGIQUE métier
+        # (miroir d'abonnement sur l'org) sans forger de vraie signature Stripe.
         original_key = server_module.STRIPE_API_KEY
         server_module.STRIPE_API_KEY = "sk_test_dummy"
         original_secret = server_module.STRIPE_WEBHOOK_SECRET
-        server_module.STRIPE_WEBHOOK_SECRET = ""
+        server_module.STRIPE_WEBHOOK_SECRET = "whsec_test_dummy"
+        original_construct = server_module.stripe.Webhook.construct_event
+        payload = {
+            "type": "checkout.session.completed",
+            "data": {"object": {
+                "id": session_id,
+                "payment_status": "paid",
+                "metadata": {"user_id": uid},
+            }},
+        }
+        server_module.stripe.Webhook.construct_event = lambda body, sig, secret: payload
         try:
-            payload = {
-                "type": "checkout.session.completed",
-                "data": {"object": {
-                    "id": session_id,
-                    "payment_status": "paid",
-                    "metadata": {"user_id": uid},
-                }},
-            }
             resp = client.post("/api/webhook/stripe", json=payload)
             assert resp.status_code == 200, resp.text
             # Both user AND org must be flipped to active
@@ -235,6 +238,7 @@ class TestStripeWebhookMirrorsOrg:
                 "the organization, not only onto db.users"
             )
         finally:
+            server_module.stripe.Webhook.construct_event = original_construct
             server_module.STRIPE_API_KEY = original_key
             server_module.STRIPE_WEBHOOK_SECRET = original_secret
             db.users.delete_one({"id": uid})
@@ -865,20 +869,24 @@ class TestSubscriptionOnOrg:
             "status": "initiated",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
+        # [Sécurité P0] webhook fail-closed : secret requis + signature vérifiée. On monkeypatche
+        # construct_event pour tester le routage par organization_id sans forger de signature.
         original_key = server_module.STRIPE_API_KEY
         server_module.STRIPE_API_KEY = "sk_test_dummy"
         original_secret = server_module.STRIPE_WEBHOOK_SECRET
-        server_module.STRIPE_WEBHOOK_SECRET = ""
+        server_module.STRIPE_WEBHOOK_SECRET = "whsec_test_dummy"
+        original_construct = server_module.stripe.Webhook.construct_event
+        payload = {
+            "type": "checkout.session.completed",
+            "data": {"object": {
+                "id": session_id,
+                "payment_status": "paid",
+                "customer": "cus_test_dummy_123",
+                "metadata": {"user_id": uid, "organization_id": org_id},
+            }},
+        }
+        server_module.stripe.Webhook.construct_event = lambda body, sig, secret: payload
         try:
-            payload = {
-                "type": "checkout.session.completed",
-                "data": {"object": {
-                    "id": session_id,
-                    "payment_status": "paid",
-                    "customer": "cus_test_dummy_123",
-                    "metadata": {"user_id": uid, "organization_id": org_id},
-                }},
-            }
             resp = client.post("/api/webhook/stripe", json=payload)
             assert resp.status_code == 200, resp.text
             org_after = db.organizations.find_one({"id": org_id})
@@ -886,6 +894,7 @@ class TestSubscriptionOnOrg:
             # stripe_customer_id persisted for future customer portal usage
             assert org_after.get("stripe_customer_id") == "cus_test_dummy_123"
         finally:
+            server_module.stripe.Webhook.construct_event = original_construct
             server_module.STRIPE_API_KEY = original_key
             server_module.STRIPE_WEBHOOK_SECRET = original_secret
             db.users.delete_one({"id": uid})

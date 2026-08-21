@@ -79,8 +79,9 @@ class TestAuth:
         })
         assert response.status_code == 200
         data = response.json()
-        assert "reset_token" in data
-        print("✅ Forgot password token generated")
+        # [Sécurité P0] Le jeton n'est PLUS renvoyé dans la réponse (envoyé par courriel).
+        assert "reset_token" not in data
+        print("✅ Forgot password : aucun token exposé dans la réponse")
     
     def test_reset_password_invalid_token(self):
         response = requests.post(f"{BASE_URL}/api/auth/reset-password", json={

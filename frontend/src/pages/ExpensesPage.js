@@ -865,16 +865,17 @@ const ExpensesPage = () => {
                       </p>
                     )}
                     {exp.receipt_url && (
-                      <a
-                        href={`${BACKEND_URL}${exp.receipt_url}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      // [Sécurité P0] Le reçu n'est plus servi par l'endpoint public /api/files ;
+                      // on l'affiche via la voie authentifiée viewReceipt() (/api/receipts/{id}).
+                      <button
+                        type="button"
                         data-testid={`receipt-link-${exp.id}`}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '13px', color: '#008F7A', fontWeight: '600', textDecoration: 'none' }}
+                        onClick={(e) => { e.stopPropagation(); viewReceipt((exp.receipt_url || '').split('/').pop()); }}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '13px', color: '#008F7A', fontWeight: '600', textDecoration: 'none', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
                         Voir le recu
-                      </a>
+                      </button>
                     )}
                     {!exp.receipt_url && exp.receipt_file_id && (
                       <button

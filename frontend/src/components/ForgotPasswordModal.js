@@ -14,14 +14,12 @@ const ForgotPasswordModal = ({ onClose }) => {
     e.preventDefault();
     setLoading(true); setError(''); setSuccess('');
     try {
-      const response = await axios.post(`${BACKEND_URL}/api/auth/forgot-password`, { email });
-      if (response.data.reset_token) {
-        setResetData(prev => ({ ...prev, token: response.data.reset_token }));
-        setSuccess('Code de recuperation genere ! Utilisez-le ci-dessous.');
-        setStep('reset');
-      }
+      // Le code n'est plus renvoyé par l'API (sécurité) : il est envoyé par COURRIEL.
+      await axios.post(`${BACKEND_URL}/api/auth/forgot-password`, { email });
+      setSuccess("Si un compte existe pour cette adresse, un code de récupération vient d'être envoyé par courriel. Copiez-le ci-dessous.");
+      setStep('reset');
     } catch (err) {
-      setError('Erreur lors de la generation du code');
+      setError('Erreur lors de la demande de réinitialisation');
     } finally {
       setLoading(false);
     }
@@ -33,15 +31,19 @@ const ForgotPasswordModal = ({ onClose }) => {
       setError('Les mots de passe ne correspondent pas');
       return;
     }
+    if ((resetData.new_password || '').length < 8) {
+      setError('Le mot de passe doit contenir au moins 8 caractères');
+      return;
+    }
     setLoading(true); setError('');
     try {
       await axios.post(`${BACKEND_URL}/api/auth/reset-password`, {
-        token: resetData.token, new_password: resetData.new_password
+        token: resetData.token.trim(), new_password: resetData.new_password
       });
       setSuccess('Mot de passe reinitialise avec succes !');
       setTimeout(onClose, 2000);
     } catch (err) {
-      setError('Erreur lors de la reinitialisation');
+      setError(err.response?.data?.detail || 'Erreur lors de la reinitialisation');
     } finally {
       setLoading(false);
     }
@@ -95,14 +97,10 @@ const ForgotPasswordModal = ({ onClose }) => {
           </form>
         ) : (
           <form onSubmit={handleResetPassword}>
-            <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
-              <strong>Code : </strong>
-              <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{resetData.token}</span>
-            </div>
             <div style={{ marginBottom: '15px' }}>
               <input type="text" value={resetData.token}
                 onChange={(e) => setResetData(prev => ({ ...prev, token: e.target.value }))}
-                placeholder="Code de recuperation" required
+                placeholder="Code reçu par courriel" required
                 style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', fontFamily: 'monospace', boxSizing: 'border-box' }} />
             </div>
             <div style={{ marginBottom: '15px' }}>

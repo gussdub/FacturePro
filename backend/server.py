@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form, Query, Request, Response, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import stripe
 import httpx
@@ -4269,7 +4269,8 @@ def accept_invite(body: dict, request: Request):
         )
         user_id = user["id"]
     else:
-        # New user path
+        # New user path — plancher non-vide (min 6). Note : /register applique min 8 ; l'invitation
+        # garde min 6 pour compatibilité. La faille corrigée était le mot de passe VIDE à /register.
         if len(password) < 6:
             raise HTTPException(400, "Le mot de passe doit contenir au moins 6 caractères")
         user_id = str(uuid.uuid4())
@@ -6646,6 +6647,7 @@ def register(user_data: UserCreate):
     # rely on a consistent stored form. Case-insensitive existing-user
     # check protects against duplicate accounts differing only in casing.
     normalized_email = (user_data.email or "").strip().lower()
+    _validate_password_strength(user_data.password)  # [Sécurité P0] refuse un mot de passe vide/trop court
     existing = db.users.find_one({
         "email": {"$regex": f"^{re.escape(normalized_email)}$", "$options": "i"},
     })
@@ -6706,60 +6708,235 @@ def register(user_data: UserCreate):
     user_response = {k: v for k, v in user_doc.items() if k not in ("created_at", "_id", "organization_id", "role")}
     return Token(access_token=token, user=User(**user_response))
 
+# ─── Sécurité authentification (correctifs P0 — audit Loi 25 2026-08-20) ───
+def _as_utc(dt):
+    """Normalise un datetime pour comparaison (pymongo renvoie des datetimes NAÏFS en UTC)."""
+    if dt is not None and getattr(dt, "tzinfo", None) is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _validate_password_strength(pw: str):
+    """Politique minimale : au moins 8 caractères. Empêche de réinitialiser vers un mot de
+    passe vide/trivial (lève 400 sinon)."""
+    if not pw or len(pw) < 8:
+        raise HTTPException(400, "Le mot de passe doit contenir au moins 8 caractères")
+
+
+def _reset_token_hash(token: str) -> str:
+    """Empreinte SHA-256 du jeton de réinitialisation : on ne stocke JAMAIS le jeton en clair."""
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+def _send_password_reset_email(to_email: str, token: str) -> bool:
+    """Envoie le code de réinitialisation par COURRIEL via Resend. Le jeton n'est JAMAIS renvoyé
+    dans la réponse HTTP (sinon prise de contrôle de compte). Best-effort, ne lève pas."""
+    if not RESEND_API_KEY:
+        print("[password-reset] RESEND_API_KEY absent — courriel non envoyé")
+        return False
+    try:
+        resend.api_key = os.environ.get("RESEND_API_KEY")
+        resend.Emails.send({
+            "from": SENDER_EMAIL,
+            "to": [to_email],
+            "subject": "Réinitialisation de votre mot de passe FacturePro",
+            "html": (
+                "<p>Bonjour,</p>"
+                "<p>Vous avez demandé la réinitialisation de votre mot de passe. "
+                "Voici votre code de récupération :</p>"
+                f"<p style=\"font-family:monospace;font-size:15px;background:#f3f4f6;"
+                f"padding:12px;border-radius:8px;word-break:break-all\">{token}</p>"
+                "<p>Copiez ce code dans l'application pour choisir un nouveau mot de passe. "
+                "Il expire dans 1 heure. Si vous n'êtes pas à l'origine de cette demande, "
+                "ignorez ce courriel.</p>"
+            ),
+        })
+        return True
+    except Exception as e:
+        print(f"[password-reset] Resend error type={type(e).__name__}")  # no secrets in log
+        return False
+
+
+def _issue_password_reset(user):
+    """Génère + persiste (hashé) le jeton et envoie le courriel. Exécuté en TÂCHE DE FOND :
+    les écritures DB ne sont donc PAS sur le chemin de réponse → aucun différentiel de timing
+    entre « email existe » et « email inexistant » (anti-énumération)."""
+    try:
+        reset_token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        db.password_resets.delete_many({"user_id": user["id"]})  # invalide les jetons précédents
+        db.password_resets.insert_one({
+            "token_hash": _reset_token_hash(reset_token),
+            "user_id": user["id"],
+            "expires_at": now + timedelta(hours=1),
+            "created_at": now,
+        })
+        _send_password_reset_email(user["email"], reset_token)
+    except Exception as e:  # noqa: BLE001 — best-effort, ne jamais planter la tâche de fond
+        print(f"[password-reset] issue error type={type(e).__name__}")
+
+
+# Anti-force-brute /api/auth/login : verrouillage temporaire persisté en base (robuste aux
+# redémarrages Render et au multi-instance). Keyé sur (email + IP) : un tiers ne peut PAS
+# verrouiller un compte légitime depuis SON IP (pas de DoS ciblé de la victime, qui se connecte
+# depuis une autre IP), tout en bloquant la force brute d'une même source.
+_LOGIN_MAX_FAILS = 5
+_LOGIN_WINDOW_SEC = 900   # fenêtre de comptage des échecs : 15 min
+_LOGIN_LOCK_SEC = 900     # durée du verrou une fois le seuil atteint : 15 min
+
+
+def _client_ip(request) -> str:
+    """IP client fiable derrière le proxy Render. On prend la valeur la plus à DROITE de
+    X-Forwarded-For : c'est celle AJOUTÉE par le proxy de confiance (Render), donc NON usurpable
+    par le client (qui ne peut que préfixer de fausses entrées à gauche). Prendre la gauche serait
+    contournable (évasion du verrou + lockout ciblé de la victime). Repli sur l'IP TCP réelle."""
+    if request is not None:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            if parts:
+                return parts[-1]
+        if request.client:
+            return request.client.host
+    return "unknown"
+
+
+def _login_attempt_key(email: str, ip: str = "") -> str:
+    return hashlib.sha256(f"{(email or '').strip().lower()}|{ip or ''}".encode()).hexdigest()
+
+
+def _login_check_lock(email: str, ip: str = ""):
+    """Lève 429 (Retry-After) si (email+IP) est temporairement verrouillé. Vérifié AVANT toute
+    comparaison d'identifiant, keyé sur l'email SOUMIS (existant ou non) → aucun oracle d'énumération."""
+    rec = db.login_attempts.find_one({"_id": _login_attempt_key(email, ip)})
+    if not rec:
+        return
+    lu = _as_utc(rec.get("locked_until"))
+    if lu and lu > datetime.now(timezone.utc):
+        retry = max(1, int((lu - datetime.now(timezone.utc)).total_seconds()))
+        raise HTTPException(429, "Trop de tentatives de connexion. Réessaie plus tard.",
+                            headers={"Retry-After": str(retry)})
+
+
+def _login_record_failure(email: str, ip: str = ""):
+    """Incrément ATOMIQUE (find_one_and_update $inc) → aucune perte d'échec sous concurrence
+    (l'endpoint login est synchrone, exécuté en threadpool ; un read-modify-write serait racé)."""
+    now = datetime.now(timezone.utc)
+    key = _login_attempt_key(email, ip)
+    rec = db.login_attempts.find_one_and_update(
+        {"_id": key},
+        {"$inc": {"fail_count": 1}, "$set": {"updated_at": now}, "$setOnInsert": {"first_fail_at": now}},
+        upsert=True, return_document=ReturnDocument.AFTER,
+    )
+    first = _as_utc(rec.get("first_fail_at"))
+    if first and first < now - timedelta(seconds=_LOGIN_WINDOW_SEC):
+        # fenêtre expirée : on repart proprement à 1 (le $inc avait bumpé un compteur périmé)
+        db.login_attempts.update_one(
+            {"_id": key},
+            {"$set": {"fail_count": 1, "first_fail_at": now, "locked_until": None, "updated_at": now}},
+        )
+        return
+    if int(rec.get("fail_count", 0)) >= _LOGIN_MAX_FAILS:
+        db.login_attempts.update_one(
+            {"_id": key}, {"$set": {"locked_until": now + timedelta(seconds=_LOGIN_LOCK_SEC)}})
+
+
+def _login_clear(email: str, ip: str = ""):
+    db.login_attempts.delete_one({"_id": _login_attempt_key(email, ip)})
+
+
+# Anti-abus /api/auth/forgot-password : chaque appel envoie un vrai courriel (Resend) → sans limite,
+# un attaquant peut bombarder la boîte d'une victime et brûler le quota. Limiteur mémoire par IP.
+_FORGOT_PW_RATE = {}  # {ip: [timestamps]}
+_FORGOT_PW_WINDOW_SEC = 900
+_FORGOT_PW_MAX = 5
+
+
+def _rate_limit_forgot_password(ip: str) -> bool:
+    """True si dans les limites, False si dépassé (5 / 15 min / IP)."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    window_start = now_ts - _FORGOT_PW_WINDOW_SEC
+    if len(_FORGOT_PW_RATE) > 5000:  # garde-fou mémoire : purge les IP dont la fenêtre a expiré
+        for _k in [k for k, v in _FORGOT_PW_RATE.items() if not any(t > window_start for t in v)]:
+            _FORGOT_PW_RATE.pop(_k, None)
+    hits = [t for t in _FORGOT_PW_RATE.get(ip, []) if t > window_start]
+    if len(hits) >= _FORGOT_PW_MAX:
+        _FORGOT_PW_RATE[ip] = hits
+        return False
+    hits.append(now_ts)
+    _FORGOT_PW_RATE[ip] = hits
+    return True
+
+
 @app.post("/api/auth/login", response_model=Token)
-def login(credentials: UserLogin):
+def login(credentials: UserLogin, request: Request):
     # Case-insensitive email lookup: new users store normalized lowercase
     # emails, but legacy records may be mixed-case. This lets both log in
     # regardless of the casing the user types.
     email_input = (credentials.email or "").strip()
+    ip = _client_ip(request)
+    _login_check_lock(email_input, ip)  # [Sécurité P0] 429 si trop d'échecs récents (email+IP)
     user = db.users.find_one(
         {"email": {"$regex": f"^{re.escape(email_input)}$", "$options": "i"}},
         {"_id": 0},
     )
     if not user:
+        _login_record_failure(email_input, ip)
         raise HTTPException(401, "Incorrect email or password")
 
     pwd_doc = db.user_passwords.find_one({"user_id": user["id"]})
     if not pwd_doc or not verify_password(credentials.password, pwd_doc["hashed_password"]):
+        _login_record_failure(email_input, ip)
         raise HTTPException(401, "Incorrect email or password")
 
+    _login_clear(email_input, ip)  # succès → réinitialise le compteur d'échecs
     token = create_token(user["id"])
     return Token(access_token=token, user=User(**user))
 
 # ─── Password Reset ───
-reset_tokens_store = {}
-
 @app.post("/api/auth/forgot-password")
-def forgot_password(request: dict):
-    email = request.get("email")
+def forgot_password(payload: dict, request: Request, background_tasks: BackgroundTasks):
+    """[Sécurité P0] Envoie un code de réinitialisation PAR COURRIEL (jamais dans la réponse HTTP)
+    et le persiste HASHÉ en base. Réponse générique IDENTIQUE que l'email existe ou non ; TOUTE la
+    génération/persistance/envoi est déportée en tâche de fond → chemin de réponse ~constant (pas
+    d'oracle d'énumération par timing : les deux cas ne font qu'un find_one puis retournent)."""
+    email = (payload.get("email") or "").strip()
+    generic = {"message": "Si cette adresse email existe, un code de récupération a été envoyé par courriel."}
     if not email:
         raise HTTPException(400, "Email required")
+    if not _rate_limit_forgot_password(_client_ip(request)):
+        raise HTTPException(429, "Trop de demandes de réinitialisation. Réessaie plus tard.")
 
-    user = db.users.find_one({"email": email})
-    if not user:
-        return {"message": "Si cette adresse email existe, un code de recuperation a ete genere"}
-
-    reset_token = secrets.token_urlsafe(32)
-    reset_tokens_store[reset_token] = {
-        "user_id": user["id"],
-        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
-    }
-    return {"message": "Code genere", "reset_token": reset_token}
+    # Lookup insensible à la casse (aligné sur /login) pour ne pas rater les emails mixtes.
+    user = db.users.find_one(
+        {"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}}, {"_id": 0}
+    )
+    if user:
+        # Écritures DB + envoi APRÈS la réponse : aucun coût observable côté client.
+        background_tasks.add_task(_issue_password_reset, user)
+    return generic  # même réponse, même travail synchrone : pas d'oracle d'existence de compte
 
 @app.post("/api/auth/reset-password")
 def reset_password(request: dict):
     token = request.get("token")
     new_password = request.get("new_password")
+    if not token:
+        raise HTTPException(400, "Code invalide ou expire")
+    _validate_password_strength(new_password)  # refuse un mot de passe vide/trop court
 
-    token_data = reset_tokens_store.get(token)
-    if not token_data or datetime.now(timezone.utc) > token_data["expires_at"]:
+    # Usage unique garanti par le delete_one ci-dessous (pas de champ `used` : il serait vestigial).
+    rec = db.password_resets.find_one({"token_hash": _reset_token_hash(token)})
+    if not rec:
+        raise HTTPException(400, "Code invalide ou expire")
+    if datetime.now(timezone.utc) > _as_utc(rec["expires_at"]):
+        db.password_resets.delete_one({"_id": rec["_id"]})
         raise HTTPException(400, "Code invalide ou expire")
 
     db.user_passwords.update_one(
-        {"user_id": token_data["user_id"]},
+        {"user_id": rec["user_id"]},
         {"$set": {"hashed_password": hash_password(new_password)}}
     )
-    del reset_tokens_store[token]
+    db.password_resets.delete_one({"_id": rec["_id"]})  # usage unique
     return {"message": "Mot de passe reinitialise"}
 
 # ─── Clients CRUD ───
@@ -8379,7 +8556,8 @@ def get_receipt_file(file_id: str,
         raise HTTPException(404, "Receipt not found")
     return StreamingResponse(
         io.BytesIO(bytes(record["data"])),
-        media_type=record.get("mime_type", "image/jpeg"),
+        # OCR : mime_type ; téléversement manuel (/api/upload) : content_type. Repli image/jpeg.
+        media_type=record.get("mime_type") or record.get("content_type") or "image/jpeg",
         headers={"Cache-Control": "private, max-age=3600"},
     )
 
@@ -10447,13 +10625,22 @@ def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_c
     if len(data) > max_size:
         raise HTTPException(400, "Fichier trop volumineux (max 5 MB)")
 
+    org_id = getattr(current_user, "organization_id", None)
+    if not org_id:
+        _u = db.users.find_one({"id": current_user.id}, {"_id": 0, "organization_id": 1})
+        org_id = (_u or {}).get("organization_id")
     file_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user.id,
+        "organization_id": org_id,
         "data": Binary(data),
         "original_filename": file.filename,
         "content_type": file.content_type,
         "size": len(data),
+        # [Sécurité P0] /api/upload sert au téléversement de REÇUS de dépense (PII). On les tague
+        # purpose='receipt' + org : ils ne sont donc PAS servis par l'endpoint public /api/files/{id}
+        # (garde défensive) et restent visibles via /api/receipts/{id} (authentifié + scope org).
+        "purpose": "receipt",
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -10463,8 +10650,26 @@ def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_c
 
 @app.get("/api/files/{file_id}")
 def download_file(file_id: str):
+    # [Sécurité P0] Endpoint PUBLIC (logo chargé via <img src> sans en-tête d'auth). Deux gardes
+    # CUMULÉES avant de servir un octet :
+    #   (1) le fichier doit être référencé comme logo_url dans company_settings (on n'utilise PAS le
+    #       champ `purpose`, peu fiable : la migration legacy tague 'logo' tout fichier sans purpose,
+    #       dont d'anciens reçus) ;
+    #   (2) le PROPRIÉTAIRE du fichier doit être celui du réglage qui le référence — sinon un tiers
+    #       pourrait pointer SON propre logo_url (modifiable via POST /api/settings/company/logo) vers
+    #       le reçu (PII) d'autrui pour le rendre public.
+    # Les reçus restent accessibles UNIQUEMENT via /api/receipts/{id} (authentifié + scope org).
+    # Tout écart → 404 (aucun oracle d'existence).
     record = db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
     if not record:
+        raise HTTPException(404, "File not found")
+    if record.get("purpose") == "receipt":
+        # Garde défensive explicite : un reçu (PII) n'est JAMAIS servi ici, même s'il était
+        # référencé comme logo_url. Il n'est accessible que via /api/receipts/{id} (authentifié).
+        raise HTTPException(404, "File not found")
+    owner = record.get("user_id")
+    ref = db.company_settings.find_one({"logo_url": f"/api/files/{file_id}"}, {"_id": 0, "user_id": 1})
+    if not owner or not ref or ref.get("user_id") != owner:
         raise HTTPException(404, "File not found")
     if "data" not in record:
         raise HTTPException(410, "Fichier sur l'ancien stockage Emergent. Veuillez le re-televerser.")
@@ -10487,6 +10692,7 @@ def upload_logo_file(file: UploadFile = File(...), current_user: User = Depends(
         "original_filename": file.filename,
         "content_type": file.content_type,
         "size": len(data),
+        "purpose": "logo",  # [Sécurité P0] tag correct dès l'upload (data model fiable)
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -11226,15 +11432,14 @@ def check_subscription_status(
 async def stripe_webhook(request: Request):
     if not STRIPE_API_KEY:
         raise HTTPException(500, "Stripe non configure")
+    if not STRIPE_WEBHOOK_SECRET:
+        # [Sécurité P0] Fail-closed : ne JAMAIS traiter un événement Stripe non vérifié — sinon un
+        # attaquant forge checkout.session.completed et active un abonnement sans payer.
+        raise HTTPException(500, "Stripe webhook non configuré (STRIPE_WEBHOOK_SECRET requis)")
     body = await request.body()
     sig = request.headers.get("Stripe-Signature", "")
     try:
-        if STRIPE_WEBHOOK_SECRET:
-            event = stripe.Webhook.construct_event(body, sig, STRIPE_WEBHOOK_SECRET)
-        else:
-            print("WARNING: STRIPE_WEBHOOK_SECRET not set, accepting webhook without signature verification")
-            import json
-            event = json.loads(body)
+        event = stripe.Webhook.construct_event(body, sig, STRIPE_WEBHOOK_SECRET)
         if event["type"] == "checkout.session.completed":
             session_data = event["data"]["object"]
             if session_data.get("payment_status") == "paid":
@@ -12314,6 +12519,11 @@ def seed_data():
                     expireAfterSeconds=_BANK_PDF_CACHE_TTL_SECONDS)
         # Mémoire de rapprochements manuels (feature #7.3)
         _safe_index(db.bank_match_aliases, [("organization_id", 1)], "bank_match_aliases.org")
+        # [Sécurité P0 — audit Loi 25] Jetons de reset persistés (hash) + TTL à l'expiration ;
+        # tentatives de login (anti-force-brute) auto-purgées après 1 h.
+        _safe_index(db.password_resets, "token_hash", "password_resets.token_hash")
+        _safe_index(db.password_resets, "expires_at", "password_resets.ttl", expireAfterSeconds=0)
+        _safe_index(db.login_attempts, "updated_at", "login_attempts.ttl", expireAfterSeconds=3600)
         print("Database indexes created")
 
         # [ROBUSTESSE] Chaque migration est ISOLÉE dans son propre try/except : le bloc de
@@ -12349,7 +12559,45 @@ def seed_data():
         # Feature #7.7 — recale les dépenses vers le net de taxes (déductible + re-post repas).
         _run_migration(migrate_expense_net_tax_v1, "expense_net_tax_v1")
 
-        # Feature #8 — set purpose="logo" sur les anciens db.files (idempotent)
+        # [Sécurité P0 — audit Loi 25] Backfill : les reçus téléversés manuellement (référencés par
+        # expense.receipt_url = /api/files/{id}) sont tagués purpose='receipt' (+ organization_id si
+        # dispo), pour (i) NE PAS être servis par l'endpoint public /api/files/{id} et (ii) rester
+        # visibles via /api/receipts/{id} (authentifié). Idempotent ; corrige aussi les reçus déjà
+        # mal étiquetés 'logo' par la migration legacy ci-dessous. À exécuter AVANT le blanket logo.
+        try:
+            _rcpt = 0
+            for _exp in db.expenses.find(
+                    {"receipt_url": {"$regex": r"^/api/files/"}},
+                    {"_id": 0, "receipt_url": 1, "organization_id": 1}):
+                _fid = (_exp.get("receipt_url") or "").rsplit("/", 1)[-1]
+                if not _fid:
+                    continue
+                # receipt_url est SAISI par le client → il peut pointer un fichier ARBITRAIRE. Deux
+                # protections : ne JAMAIS toucher un logo référencé (sinon on le casse), et ne JAMAIS
+                # re-homer un fichier vers une autre org (pas de réécriture d'ownership).
+                if db.company_settings.find_one({"logo_url": f"/api/files/{_fid}"}, {"_id": 1}):
+                    continue
+                _f = db.files.find_one(
+                    {"id": _fid}, {"_id": 0, "user_id": 1, "organization_id": 1, "purpose": 1})
+                if not _f or _f.get("purpose") == "receipt":
+                    continue
+                _set = {"purpose": "receipt"}
+                # organization_id posé seulement s'il est ABSENT ET que le fichier appartient bien à
+                # l'org de la dépense (via son uploader) — sinon on laisse le scope user_id d'origine.
+                _oid = _exp.get("organization_id")
+                if _oid and not _f.get("organization_id"):
+                    _owner = db.users.find_one({"id": _f.get("user_id")}, {"_id": 0, "organization_id": 1})
+                    if _owner and _owner.get("organization_id") == _oid:
+                        _set["organization_id"] = _oid
+                _rcpt += db.files.update_one(
+                    {"id": _fid, "purpose": {"$ne": "receipt"}}, {"$set": _set}).modified_count
+            if _rcpt:
+                print(f"Backfill: {_rcpt} db.files re-tagged purpose=receipt (reçus manuels)")
+        except Exception as _e:  # noqa: BLE001 — non bloquant
+            print(f"Backfill manual receipts failed (non-fatal): {type(_e).__name__}")
+
+        # Feature #8 — set purpose="logo" sur les anciens db.files sans purpose (idempotent).
+        # Les reçus manuels ont déjà été tagués 'receipt' juste au-dessus → non affectés ici.
         res = db.files.update_many(
             {"purpose": {"$exists": False}},
             {"$set": {"purpose": "logo"}}

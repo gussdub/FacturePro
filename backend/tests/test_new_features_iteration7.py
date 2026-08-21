@@ -213,11 +213,12 @@ class TestFileUploadAndDownload:
         file_id = upload_response.json()["file_id"]
         self.uploaded_file_ids.append(file_id)
         
-        # Now download the file (no auth required for download)
+        # [Sécurité P0] GET /api/files/{id} ne sert QUE les logos référencés. Un fichier générique
+        # (non-logo) NE doit PAS être téléchargeable sans auth → 404 (les reçus PII sont protégés).
+        # Le service des logos est couvert par test_security_p0_fixes.py::TestFileEndpointLockdown.
         download_response = requests.get(f"{BASE_URL}/api/files/{file_id}")
-        assert download_response.status_code == 200, f"Expected 200, got {download_response.status_code}"
-        assert download_response.headers.get("content-type") == "image/png", "Content-Type should be image/png"
-        print(f"Downloaded file {file_id} successfully")
+        assert download_response.status_code == 404, f"Expected 404 (non-logo), got {download_response.status_code}"
+        print(f"Non-logo file {file_id} correctly NOT served publicly")
     
     def test_download_nonexistent_file_returns_404(self):
         """Test that downloading non-existent file returns 404"""
