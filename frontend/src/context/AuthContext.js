@@ -70,17 +70,35 @@ export const AuthProvider = ({ children }) => {
     }
   }, [token, fetchUserAndOrg]);
 
+  const _completeLogin = async (access_token) => {
+    setToken(access_token);
+    localStorage.setItem('token', access_token);
+    axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+    await fetchUserAndOrg(access_token);
+  };
+
   const login = async (email, password) => {
     try {
       const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
-      const { access_token } = response.data;
-      setToken(access_token);
-      localStorage.setItem('token', access_token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      await fetchUserAndOrg(access_token);
+      // [MFA] Double authentification activée → pas de JWT encore : on passe au 2e facteur.
+      if (response.data?.mfa_required) {
+        return { success: false, mfaRequired: true, mfaToken: response.data.mfa_token };
+      }
+      await _completeLogin(response.data.access_token);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.response?.data?.detail || 'Email ou mot de passe incorrect' };
+    }
+  };
+
+  const completeMfaChallenge = async (mfaToken, code) => {
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/auth/mfa/challenge`,
+        { mfa_token: mfaToken, code });
+      await _completeLogin(response.data.access_token);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.detail || 'Code invalide' };
     }
   };
 
@@ -137,7 +155,7 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider value={{
       user, organization, permissions, role,
-      token, login, register, acceptInvite, logout, refreshUser,
+      token, login, completeMfaChallenge, register, acceptInvite, logout, refreshUser,
       hasPermission,
       isAuthenticated: !!token,
     }}>

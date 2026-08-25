@@ -13,3 +13,4 @@ stripe
 anthropic>=0.40.0
 openpyxl>=3.1,<4
 defusedxml>=0.7
+pyotp>=2.9,<3

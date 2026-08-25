@@ -10,6 +10,7 @@ import os
 import math
 import logging
 import jwt
+import pyotp  # MFA / TOTP (double authentification)
 import bcrypt
 import resend
 from datetime import date, datetime, timezone, timedelta
@@ -3849,6 +3850,8 @@ EXEMPT_USERS = ["gussdub@gmail.com"]
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
+        if payload.get("mfa_pending"):  # [MFA] jeton pré-auth ≠ jeton d'accès (sinon bypass du 2e facteur)
+            raise HTTPException(401, "Invalid token")
         user_id = payload.get("sub")
         user = db.users.find_one({"id": user_id}, {"_id": 0})
         if not user:
@@ -3875,6 +3878,11 @@ def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Dep
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except Exception:
+        raise HTTPException(401, "Invalid token")
+
+    # [MFA] Un jeton pré-auth (mfa_pending) N'EST PAS un jeton d'accès : le refuser ici, sinon un
+    # utilisateur MFA pourrait l'utiliser comme Bearer et court-circuiter le 2e facteur (5 min durant).
+    if payload.get("mfa_pending"):
         raise HTTPException(401, "Invalid token")
 
     user = db.users.find_one({"id": user_id}, {"_id": 0})
@@ -3943,6 +3951,8 @@ def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
         ),
         "scan_quota_limit": SCAN_QUOTA_LIMIT,
         "receipt_ocr_consent_at": user_doc.get("receipt_ocr_consent_at"),
+        # [MFA] état de la double authentification (pour Paramètres → Sécurité)
+        "mfa_enabled": _mfa_enabled(current_user.id),
     }
 
 
@@ -6878,7 +6888,7 @@ def _rate_limit_forgot_password(ip: str) -> bool:
     return True
 
 
-@app.post("/api/auth/login", response_model=Token)
+@app.post("/api/auth/login")
 def login(credentials: UserLogin, request: Request):
     # Case-insensitive email lookup: new users store normalized lowercase
     # emails, but legacy records may be mixed-case. This lets both log in
@@ -6900,6 +6910,10 @@ def login(credentials: UserLogin, request: Request):
         raise HTTPException(401, "Incorrect email or password")
 
     _login_clear(email_input, ip)  # succès → réinitialise le compteur d'échecs
+    # [MFA] Si la double authentification est activée, on ne délivre PAS encore le JWT d'accès :
+    # on renvoie un jeton pré-auth court à échanger via /api/auth/mfa/challenge (code TOTP/secours).
+    if _mfa_enabled(user["id"]):
+        return {"mfa_required": True, "mfa_token": _create_mfa_pending_token(user["id"])}
     token = create_token(user["id"])
     return Token(access_token=token, user=User(**user))
 
@@ -6948,6 +6962,145 @@ def reset_password(request: dict):
     )
     db.password_resets.delete_one({"_id": rec["_id"]})  # usage unique
     return {"message": "Mot de passe reinitialise"}
+
+
+# ─── MFA / double authentification (TOTP) — backlog P1 audit Loi 25 ───
+# État stocké dans db.user_mfa (clé user_id, comme user_passwords) : {secret (base32), enabled,
+# backup_codes (sha256), ...}. Le secret TOTP est réversible par nature (nécessaire à la vérif) ;
+# v1 le stocke tel quel (même posture que db.files) — chiffrement au repos = durcissement suivi.
+_MFA_ISSUER = "FacturePro"
+_MFA_BACKUP_CODES_COUNT = 8
+_MFA_BACKUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # sans I,O,0,1 ambigus
+
+
+def _get_user_mfa(user_id: str):
+    return db.user_mfa.find_one({"user_id": user_id}, {"_id": 0})
+
+
+def _mfa_enabled(user_id: str) -> bool:
+    doc = _get_user_mfa(user_id)
+    return bool(doc and doc.get("enabled"))
+
+
+def _hash_backup_code(code: str) -> str:
+    return hashlib.sha256((code or "").strip().upper().encode()).hexdigest()
+
+
+def _gen_backup_codes(n=_MFA_BACKUP_CODES_COUNT):
+    """Codes de secours lisibles (ex. « A1B2-C3D4 »), retournés UNE fois, stockés hachés."""
+    out = []
+    for _ in range(n):
+        raw = "".join(secrets.choice(_MFA_BACKUP_ALPHABET) for _ in range(8))
+        out.append(f"{raw[:4]}-{raw[4:]}")
+    return out
+
+
+def _create_mfa_pending_token(user_id: str) -> str:
+    """Jeton pré-auth COURT (5 min) émis après le mot de passe, échangé contre le vrai JWT au
+    challenge. Claim `mfa_pending` distinct → ne peut pas servir de jeton d'accès."""
+    payload = {"sub": user_id, "mfa_pending": True,
+               "exp": datetime.now(timezone.utc) + timedelta(minutes=5)}
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def _verify_mfa_code(user_id: str, code: str) -> bool:
+    """Vérifie un code TOTP (fenêtre ±1 = ±30 s) OU un code de secours (consommé à usage unique).
+    Retourne False si MFA non activée / code vide / invalide."""
+    code = (code or "").strip()
+    if not code:
+        return False
+    doc = _get_user_mfa(user_id)
+    if not doc or not doc.get("enabled"):
+        return False
+    digits = code.replace(" ", "")
+    secret = doc.get("secret")
+    if secret and digits.isdigit():
+        try:
+            if pyotp.TOTP(secret).verify(digits, valid_window=1):
+                return True
+        except Exception:
+            pass
+    # Code de secours : consommation ATOMIQUE (filtre + $pull en une seule op) → un même code ne
+    # peut pas être accepté 2× en parallèle (le 2e $pull ne modifie rien → modified_count 0).
+    h = _hash_backup_code(code)
+    res = db.user_mfa.update_one({"user_id": user_id, "backup_codes": h},
+                                 {"$pull": {"backup_codes": h}})
+    return res.modified_count == 1
+
+
+@app.post("/api/auth/mfa/setup")
+def mfa_setup(current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Génère un secret TOTP (état PENDING, non activé) + l'URI otpauth à scanner/saisir dans
+    l'app d'authentification. N'ACTIVE PAS la MFA (voir /mfa/enable)."""
+    if _mfa_enabled(current_user.id):
+        raise HTTPException(400, "La double authentification est déjà activée")
+    secret = pyotp.random_base32()
+    db.user_mfa.update_one(
+        {"user_id": current_user.id},
+        {"$set": {"user_id": current_user.id, "secret": secret, "enabled": False,
+                  "backup_codes": [], "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    uri = pyotp.TOTP(secret).provisioning_uri(name=current_user.email, issuer_name=_MFA_ISSUER)
+    return {"secret": secret, "otpauth_uri": uri, "issuer": _MFA_ISSUER}
+
+
+@app.post("/api/auth/mfa/enable")
+def mfa_enable(body: dict, current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Confirme l'activation en vérifiant un 1er code TOTP contre le secret PENDING. Retourne les
+    codes de secours UNE SEULE FOIS (ensuite stockés hachés)."""
+    doc = _get_user_mfa(current_user.id)
+    if not doc or not doc.get("secret"):
+        raise HTTPException(400, "Aucune configuration MFA en attente — appelle /mfa/setup d'abord")
+    if doc.get("enabled"):
+        raise HTTPException(400, "La double authentification est déjà activée")
+    code = (body.get("code") or "").strip().replace(" ", "")
+    if not (code.isdigit() and pyotp.TOTP(doc["secret"]).verify(code, valid_window=1)):
+        raise HTTPException(400, "Code invalide")
+    backup_codes = _gen_backup_codes()
+    db.user_mfa.update_one(
+        {"user_id": current_user.id},
+        {"$set": {"enabled": True,
+                  "backup_codes": [_hash_backup_code(c) for c in backup_codes],
+                  "enabled_at": datetime.now(timezone.utc).isoformat()}})
+    return {"enabled": True, "backup_codes": backup_codes}
+
+
+@app.post("/api/auth/mfa/disable")
+def mfa_disable(body: dict, current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Désactive la MFA après vérification d'un code (TOTP ou code de secours)."""
+    if not _mfa_enabled(current_user.id):
+        raise HTTPException(400, "La double authentification n'est pas activée")
+    if not _verify_mfa_code(current_user.id, body.get("code")):
+        raise HTTPException(400, "Code invalide")
+    db.user_mfa.delete_one({"user_id": current_user.id})
+    return {"enabled": False}
+
+
+@app.post("/api/auth/mfa/challenge", response_model=Token)
+def mfa_challenge(body: dict, request: Request):
+    """2e facteur au login : valide le jeton pré-auth (mfa_pending) + le code (TOTP ou secours),
+    puis délivre le vrai JWT d'accès. Verrouillage anti-force-brute par (user+IP) : sinon un
+    attaquant qui connaît le mot de passe pourrait re-login à volonté pour émettre des jetons et
+    grinder le code à 6 chiffres."""
+    try:
+        payload = jwt.decode(body.get("mfa_token") or "", JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "Session de vérification expirée — reconnecte-toi")
+    except Exception:
+        raise HTTPException(401, "Jeton de vérification invalide")
+    if not payload.get("mfa_pending"):
+        raise HTTPException(401, "Jeton de vérification invalide")
+    user_id = payload.get("sub")
+    ip = _client_ip(request)
+    _login_check_lock("mfa:" + str(user_id), ip)   # 429 après trop d'échecs
+    if not _verify_mfa_code(user_id, body.get("code")):
+        _login_record_failure("mfa:" + str(user_id), ip)
+        raise HTTPException(401, "Code invalide")
+    _login_clear("mfa:" + str(user_id), ip)
+    user = db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(401, "Utilisateur introuvable")
+    return Token(access_token=create_token(user_id), user=User(**user))
 
 # ─── Clients CRUD ───
 @app.get("/api/clients")
@@ -12576,6 +12729,8 @@ def seed_data():
         _safe_index(db.password_resets, "token_hash", "password_resets.token_hash")
         _safe_index(db.password_resets, "expires_at", "password_resets.ttl", expireAfterSeconds=0)
         _safe_index(db.login_attempts, "updated_at", "login_attempts.ttl", expireAfterSeconds=3600)
+        # [MFA] état double authentification (secret TOTP + codes de secours), 1 doc par user.
+        _safe_index(db.user_mfa, "user_id", "user_mfa.user_id", unique=True)
         print("Database indexes created")
 
         # [ROBUSTESSE] Chaque migration est ISOLÉE dans son propre try/except : le bloc de

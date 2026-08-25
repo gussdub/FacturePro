@@ -4,6 +4,7 @@ import { Trash2, UserPlus, X as XIcon, Pencil, Crown } from 'lucide-react';
 import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
+import MfaSettings from '../components/MfaSettings';
 import { useAuth } from '../context/AuthContext';
 import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS, roleLabel } from '../constants/permissions';
 
@@ -184,7 +185,25 @@ const SettingsPage = () => {
             Équipe
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setActiveTab('security')}
+          data-testid="tab-security"
+          style={{
+            background: 'none', border: 'none', padding: '12px 20px', cursor: 'pointer',
+            fontSize: 14, fontWeight: 600,
+            color: activeTab === 'security' ? '#00A08C' : '#6b7280',
+            borderBottom: activeTab === 'security' ? '2px solid #00A08C' : '2px solid transparent',
+            marginBottom: -1,
+          }}
+        >
+          Sécurité
+        </button>
       </div>
+
+      {activeTab === 'security' && (
+        <div style={{ padding: '8px 0' }}><MfaSettings /></div>
+      )}
 
       {activeTab === 'team' && hasPermission('team:manage') && (
         <TeamManagementSection

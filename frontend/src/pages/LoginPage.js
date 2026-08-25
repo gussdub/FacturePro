@@ -11,7 +11,9 @@ const LoginPage = () => {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login, register } = useAuth();
+  const [mfaToken, setMfaToken] = useState(null);   // [MFA] jeton pré-auth quand le 2e facteur est requis
+  const [mfaCode, setMfaCode] = useState('');
+  const { login, completeMfaChallenge, register } = useAuth();
   // En dessous de 1024px (mobile + tablette) on masque le hero marketing et on
   // passe le formulaire en pleine largeur centré. Le desktop garde le split 50/50.
   const isMobile = useIsMobile(1024);
@@ -26,6 +28,24 @@ const LoginPage = () => {
       } else {
         result = await register(formData.email, formData.password, formData.companyName);
       }
+      if (result.mfaRequired) {
+        setMfaToken(result.mfaToken);   // [MFA] passe à l'écran de saisie du code
+        setMfaCode('');
+      } else if (!result.success) {
+        setError(result.error);
+      }
+    } catch (err) {
+      setError('Une erreur est survenue');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMfaSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true); setError('');
+    try {
+      const result = await completeMfaChallenge(mfaToken, mfaCode);
       if (!result.success) setError(result.error);
     } catch (err) {
       setError('Une erreur est survenue');
@@ -113,6 +133,30 @@ const LoginPage = () => {
               }}>{error}</div>
             )}
 
+            {mfaToken ? (
+              <form onSubmit={handleMfaSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }} data-testid="mfa-form">
+                <p style={{ color: '#475569', fontSize: '14px', margin: 0, textAlign: 'center' }}>
+                  Vérification en deux étapes — entre le code à 6 chiffres de ton application
+                  d'authentification (ou un code de secours).
+                </p>
+                <input type="text" inputMode="numeric" autoComplete="one-time-code" autoFocus
+                  value={mfaCode} onChange={e => setMfaCode(e.target.value)}
+                  placeholder="123 456" data-testid="mfa-code-input"
+                  style={{ width: '100%', height: '48px', fontSize: '18px', letterSpacing: '2px', textAlign: 'center', padding: '12px 16px', border: '1px solid #d1d5db', borderRadius: '12px', boxSizing: 'border-box' }} />
+                <button type="submit" disabled={loading} data-testid="mfa-submit-btn" style={{
+                  width: '100%', height: '48px', fontSize: '16px', fontWeight: '700',
+                  background: loading ? '#94a3b8' : 'linear-gradient(135deg, #00A08C 0%, #47D2A7 100%)',
+                  color: 'white', border: 'none', borderRadius: '12px', cursor: loading ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 10px 25px rgba(0,160,140,0.4)'
+                }}>
+                  {loading ? 'Vérification...' : 'Vérifier'}
+                </button>
+                <button type="button" onClick={() => { setMfaToken(null); setMfaCode(''); setError(''); }}
+                  style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '14px' }}>
+                  Annuler
+                </button>
+              </form>
+            ) : (
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
               {!isLogin && (
                 <div>
@@ -166,8 +210,9 @@ const LoginPage = () => {
                 {loading ? 'Chargement...' : (isLogin ? 'Se connecter' : 'Creer mon compte')}
               </button>
             </form>
+            )}
 
-            {isLogin && (
+            {isLogin && !mfaToken && (
               <div style={{ marginTop: '16px', textAlign: 'center' }}>
                 <button type="button" onClick={() => setShowForgotPassword(true)} data-testid="forgot-password-btn" style={{
                   background: 'none', border: 'none', color: '#00A08C', fontSize: '14px', cursor: 'pointer', textDecoration: 'underline'
@@ -177,6 +222,7 @@ const LoginPage = () => {
               </div>
             )}
 
+            {!mfaToken && (
             <div style={{ marginTop: '24px', textAlign: 'center' }}>
               <button type="button" data-testid="toggle-auth-btn" onClick={() => {
                 setIsLogin(!isLogin); setError('');
@@ -185,6 +231,7 @@ const LoginPage = () => {
                 {isLogin ? "Pas encore de compte ? S'inscrire" : "Deja un compte ? Se connecter"}
               </button>
             </div>
+            )}
           </div>
 
           {!isLogin && (
