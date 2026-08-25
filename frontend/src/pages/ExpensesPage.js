@@ -54,7 +54,7 @@ const ExpensesPage = () => {
   const [viewingReceipt, setViewingReceipt] = useState(null); // {url,type} — reçu affiché en modale (mobile-safe)
   const [formData, setFormData] = useState({
     employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '',
-    currency: 'CAD', exchange_rate_to_cad: 1.0,
+    currency: 'CAD', exchange_rate_to_cad: 1.0, amount_cad_manual: '',
     category_code: '', category_custom_label: '',
     gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false,
   });
@@ -142,7 +142,7 @@ const ExpensesPage = () => {
   };
 
   const resetForm = () => {
-    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0, category_code: '', category_custom_label: '', gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false });
+    setFormData({ employee_id: '', description: '', amount: '', category: '', expense_date: new Date().toISOString().split('T')[0], notes: '', receipt_url: '', currency: 'CAD', exchange_rate_to_cad: 1.0, amount_cad_manual: '', category_code: '', category_custom_label: '', gst_paid_cad: 0, qst_paid_cad: 0, hst_paid_cad: 0, taxes_auto_computed: false });
     setPreviewReceipt(null);
     setEditingExpenseId(null);
   };
@@ -157,6 +157,9 @@ const ExpensesPage = () => {
       receipt_url: exp.receipt_url || '',
       currency: exp.currency || 'CAD',
       exchange_rate_to_cad: exp.exchange_rate_to_cad || 1.0,
+      // Toujours vide à l'ouverture : sinon une valeur manuelle périmée réécrirait amount_cad quand
+      // l'utilisateur corrige juste le montant en devise (revue 2026-08-21). Il re-saisit au besoin.
+      amount_cad_manual: '',
       category_custom_label: exp.category_custom_label || '',
       taxes_auto_computed: exp.taxes_auto_computed || false,
       vendor: exp.vendor || '',
@@ -1000,6 +1003,25 @@ const ExpensesPage = () => {
                   onChange={(cur, rate) => setFormData(prev => ({ ...prev, currency: cur, exchange_rate_to_cad: rate }))}
                 />
               </div>
+              {/* [FX] Montant CAD réel selon le relevé — devise étrangère seulement */}
+              {formData.currency && formData.currency !== 'CAD' && (
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={labelStyle}>Montant réel en CAD (selon relevé) — optionnel</label>
+                  <input
+                    type="number" step="0.01" min="0" data-testid="expense-cad-manual-input"
+                    value={formData.amount_cad_manual || ''}
+                    onChange={e => setFormData(prev => ({ ...prev, amount_cad_manual: e.target.value }))}
+                    placeholder="ex. 33.59"
+                    style={inputStyle}
+                  />
+                  <span style={{ display: 'block', fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                    La conversion ci-dessus est une <strong>estimation</strong> au taux du marché. Ta
+                    banque applique sa propre marge de change — saisis ici le montant CAD <strong>exact
+                    débité</strong> (appli/relevé bancaire) pour qu'il fasse foi. Sinon, il sera corrigé
+                    automatiquement lors du rapprochement bancaire.
+                  </span>
+                </div>
+              )}
               <div style={{ marginBottom: '16px' }}>
                 <label style={labelStyle}>Description *</label>
                 <input type="text" data-testid="expense-description-input" value={formData.description}

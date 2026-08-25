@@ -1230,7 +1230,11 @@ def _apply_match(tx, kind, target_id, scope):
         # marge de change. On conserve l'estimation d'origine (amount_cad_estimated) pour pouvoir
         # la restaurer au unmatch, on recalcule le taux réel et les champs dérivés (déductible,
         # portion perso télécom). Les dépenses en CAD ne sont jamais modifiées (montant = banque).
-        if expense.get("currency") not in (None, "", "CAD") and tx_amount > 0:
+        # [FX] On adopte le montant banque SAUF si le CAD a été saisi MANUELLEMENT (source autoritaire) :
+        # l'utilisateur affirme le vrai montant débité, l'auto-rapprochement ne doit pas l'écraser
+        # (protège aussi contre un faux match qui réécrirait une valeur manuelle — revue 2026-08-21).
+        if (expense.get("currency") not in (None, "", "CAD") and tx_amount > 0
+                and expense.get("cad_amount_source") != "manual"):
             est = round(float(expense.get("amount_cad", 0) or 0), 2)
             if abs(est - tx_amount) >= 0.01:
                 fx = round(float(expense.get("amount", 0) or 0), 2)
@@ -1591,10 +1595,16 @@ def _auto_match_transactions(import_id, scope):
             for exp in open_expenses:
                 exp_cad = float(exp.get("amount_cad", 0) or 0)
                 # Montant EXACT (±0,01) par défaut. Fourchette ±5 % du montant de la TRANSACTION
-                # uniquement pour une dépense marquée en devise étrangère (son CAD est un estimé
-                # ≠ débité). Pour une dépense CAD, aucun estimé de change n'excuse un écart : un
-                # montant décalé = probablement une AUTRE charge du même fournisseur -> exact requis
-                # (sinon faux rapprochement — cf. revue : Bell 100↔105, vol glouton entre tx).
+                # uniquement pour une dépense marquée en devise étrangère (son CAD n'est qu'un estimé
+                # au taux mid-market ≠ montant débité). On garde ce ±5 % VOLONTAIREMENT SERRÉ pour
+                # l'AUTO-adoption silencieuse : l'élargir (testé à ±15 %) laisse un 2e débit du même
+                # fournisseur (SaaS : « OpenAI ChatGPT » + « OpenAI API ») s'auto-rapprocher à la
+                # MAUVAISE dépense unique et réécrire son montant en silence, et absorbe une VRAIE
+                # différence de prix comme un écart de change (revue adversariale 2026-08-21). Les
+                # écarts de change > 5 % sont corrigés CONSCIEMMENT via le rapport de comparaison
+                # (« Comparer aux dépenses » → « Adopter le montant banque ») ou via le champ manuel
+                # « Montant réel en CAD » à la saisie. Pour une dépense CAD, aucun estimé n'excuse un
+                # écart : exact requis (Bell 100↔105, vol glouton entre tx).
                 cur = (exp.get("currency") or "CAD").strip().upper()
                 is_foreign = cur not in ("", "CAD")
                 amount_tol = max(0.02, round(target * 0.05, 2)) if is_foreign else 0.01
@@ -9049,12 +9059,37 @@ def get_expenses(current_user: CurrentUser = Depends(require_permission("expense
         {"_id": 0}
     ))
 
+def _parse_manual_cad(raw):
+    """[FX] Valide le montant CAD manuel (override devise étrangère). Retourne un float FINI > 0
+    arrondi à 2 déc., ou None si vide/absent. Lève 400 si fourni mais invalide (non numérique,
+    non fini — Infinity/NaN via JSON —, ou ≤ 0) : sinon un amount_cad empoisonné fausserait
+    P&L/T2125/TPS-TVQ qui lisent la dépense directement (revue adversariale 2026-08-21)."""
+    if raw in (None, ""):
+        return None
+    try:
+        v = float(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Montant CAD manuel invalide")
+    if not math.isfinite(v) or v <= 0:
+        raise HTTPException(400, "Le montant CAD manuel doit être un nombre positif")
+    return round(v, 2)
+
+
 @app.post("/api/expenses")
 def create_expense(expense_data: dict, current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     amount = float(expense_data.get("amount", 0))
     currency = expense_data.get("currency", "CAD")
     exchange_rate = expense_data.get("exchange_rate_to_cad", 1.0)
     amount_cad = round(amount / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else amount
+    # [FX] Override manuel du montant CAD réel : pour une dépense en devise étrangère, l'utilisateur
+    # peut fournir le VRAI montant débité (relevé / appli bancaire). Il fait autorité (la conversion
+    # au taux mid-market n'est qu'un estimé) ; on en dérive le taux effectif et on marque la source.
+    cad_source = "estimate" if currency != "CAD" else None
+    _mc = _parse_manual_cad(expense_data.get("amount_cad_manual")) if currency != "CAD" else None
+    if _mc and amount > 0:
+        amount_cad = _mc
+        exchange_rate = round(amount / _mc, 6)
+        cad_source = "manual"
     _settings0 = db.company_settings.find_one({"organization_id": current_user.organization_id}, {"_id": 0}) or {}
     _tpct = _telecom_business_pct(_settings0, (expense_data.get("category_code") or "").strip())
     cat_snapshot = _build_expense_category_snapshot(expense_data, amount_cad, telecom_business_pct=_tpct)
@@ -9067,6 +9102,7 @@ def create_expense(expense_data: dict, current_user: CurrentUser = Depends(requi
         "description": expense_data.get("description", ""),
         "amount": amount, "currency": currency,
         "exchange_rate_to_cad": exchange_rate, "amount_cad": amount_cad,
+        "cad_amount_source": cad_source,
         **cat_snapshot,
         "gst_paid_cad": float(expense_data.get("gst_paid_cad", 0) or 0),
         "qst_paid_cad": float(expense_data.get("qst_paid_cad", 0) or 0),
@@ -9120,6 +9156,17 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
     new_currency = expense_data.get("currency", current.get("currency", "CAD"))
     new_rate = expense_data.get("exchange_rate_to_cad", current.get("exchange_rate_to_cad", 1.0))
     new_amount_cad = round(new_amount / new_rate, 2) if new_rate > 0 and new_currency != "CAD" else new_amount
+    # [FX] Override manuel du montant CAD réel (devise étrangère) : fait autorité, dérive le taux
+    # effectif. On force exchange_rate_to_cad dans le body pour que la branche de recalcul ci-dessous
+    # s'exécute même si l'utilisateur ne change QUE ce champ (sinon amount_cad/déductible non recalculés).
+    _raw_manual = expense_data.pop("amount_cad_manual", None)  # toujours retirer (jamais persisté)
+    _mc = _parse_manual_cad(_raw_manual) if new_currency != "CAD" else None
+    _manual_applied = False
+    if _mc and new_amount > 0:
+        new_amount_cad = _mc
+        new_rate = round(new_amount / _mc, 6)
+        expense_data["exchange_rate_to_cad"] = new_rate
+        _manual_applied = True
     # Décider: re-snapshot complet, recalc deductible only, ou rien
     if "category_code" in expense_data:
         # Re-snapshot complet des champs catégorie + recalc deductible_amount (+ télécom)
@@ -9141,11 +9188,16 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
         # Feature #14 — télécom : recalcule la portion perso au prorata du nouveau montant
         if current.get("personal_use_amount_cad") is not None:
             expense_data["personal_use_amount_cad"] = round(new_amount_cad - new_ded, 2)
-    # [FX] Une édition manuelle du montant/devise/taux/catégorie reprend la main sur le CAD :
-    # si la dépense avait ADOPTÉ un montant bancaire, on purge l'état d'adoption
-    # (cad_amount_source/amount_cad_estimated). Sinon un unmatch ultérieur restaurerait une
-    # estimation PÉRIMÉE (bug trouvé en revue). L'utilisateur pourra re-adopter en re-rapprochant.
-    if "amount_cad" in expense_data and current.get("cad_amount_source") == "bank":
+    # [FX] Gestion de la source du montant CAD après édition :
+    #  - override manuel fourni → source="manual" (fait autorité), on purge l'estimé résiduel ;
+    #  - sinon, si le montant CAD change alors qu'il avait été ADOPTÉ (banque) ou saisi manuellement,
+    #    on repasse en "estimate" et on purge amount_cad_estimated (sinon un unmatch ultérieur
+    #    restaurerait une estimation PÉRIMÉE — bug trouvé en revue). L'utilisateur pourra re-adopter
+    #    en re-rapprochant, ou re-saisir un montant manuel.
+    if _manual_applied:
+        expense_data["cad_amount_source"] = "manual"
+        expense_data["amount_cad_estimated"] = None
+    elif "amount_cad" in expense_data and current.get("cad_amount_source") in ("bank", "manual"):
         expense_data["cad_amount_source"] = "estimate"
         expense_data["amount_cad_estimated"] = None
     # Feature #8 — swap receipt_file_id avec cascade soft-delete
