@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Trash2, UserPlus, X as XIcon, Pencil, Crown } from 'lucide-react';
+import { Trash2, UserPlus, X as XIcon, Pencil, Crown, ShieldOff } from 'lucide-react';
 import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
@@ -630,6 +630,21 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
     }
   };
 
+  const resetMemberMfa = async (userId, email) => {
+    if (!window.confirm(
+      `Réinitialiser la double authentification de ${email} ?\n\n` +
+      `À utiliser si ce membre a perdu son téléphone ET ses codes de secours. ` +
+      `Il devra reconfigurer sa 2FA à sa prochaine connexion.`
+    )) return;
+    try {
+      await axios.post(`${BACKEND_URL}/api/org/members/${userId}/reset-mfa`);
+      alert('Double authentification réinitialisée. Le membre devra la reconfigurer.');
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
   const promptEditEmail = async (currentEmail) => {
     const newEmail = window.prompt("Nouvelle adresse email :", currentEmail);
     if (!newEmail || newEmail.trim().toLowerCase() === currentEmail.toLowerCase()) return;
@@ -767,6 +782,18 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                             gap: 4, marginBottom: 4,
                           }}>
                     <Crown size={14} /> Transférer propriété
+                  </button>
+                )}
+                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && (
+                  <button onClick={() => resetMemberMfa(m.id, m.email)}
+                          data-testid={`reset-mfa-btn-${m.id}`}
+                          title="Réinitialiser la 2FA de ce membre (perte de téléphone + codes de secours)"
+                          style={{
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: '#6b7280', display: 'flex', alignItems: 'center',
+                            gap: 4, marginBottom: 4,
+                          }}>
+                    <ShieldOff size={14} /> Réinitialiser la 2FA
                   </button>
                 )}
                 {!isOwner(m.id) && m.id !== currentUserId && (

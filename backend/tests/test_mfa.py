@@ -168,3 +168,138 @@ class TestDisableAndMe:
         _enable_mfa(mfa_user)
         after = client.get("/api/auth/me", headers=mfa_user["headers"]).json()
         assert after["mfa_enabled"] is True
+
+
+class TestQrAndOrgEnforcement:
+    def test_setup_returns_qr(self, mfa_user):
+        r = client.post("/api/auth/mfa/setup", headers=mfa_user["headers"])
+        assert r.status_code == 200, r.text
+        assert r.json()["qr_data_uri"].startswith("data:image/png;base64,")
+
+    def test_toggle_require_mfa_needs_owner_own_mfa(self, mfa_user):
+        # Le propriétaire ne peut IMPOSER la 2FA sans l'avoir lui-même activée (anti-lockout).
+        r = client.post("/api/org/require-mfa", headers=mfa_user["headers"], json={"enabled": True})
+        assert r.status_code == 400
+        # après activation de SA 2FA, il peut imposer
+        _enable_mfa(mfa_user)
+        r2 = client.post("/api/org/require-mfa", headers=mfa_user["headers"], json={"enabled": True})
+        assert r2.status_code == 200 and r2.json()["require_mfa"] is True
+
+    def test_enforcement_blocks_member_without_mfa(self, mfa_user):
+        org_id = (db.users.find_one({"id": mfa_user["id"]}) or {}).get("organization_id")
+        _enable_mfa(mfa_user)
+        assert client.post("/api/org/require-mfa", headers=mfa_user["headers"],
+                           json={"enabled": True}).status_code == 200
+        # membre SANS 2FA dans la même org
+        m_email = f"member-{_uuid.uuid4().hex[:8]}@ex.com"
+        m_pw = "memberpass123"
+        m_uid = str(_uuid.uuid4())
+        db.users.insert_one({"id": m_uid, "email": m_email.lower(), "organization_id": org_id,
+                             "role": "accountant", "is_active": True})
+        db.user_passwords.insert_one({"user_id": m_uid, "hashed_password": server.hash_password(m_pw)})
+        try:
+            m_tok = client.post("/api/auth/login",
+                                json={"email": m_email, "password": m_pw}).json()["access_token"]
+            mh = {"Authorization": f"Bearer {m_tok}"}
+            # endpoint métier bloqué avec le motif d'enrôlement
+            r = client.get("/api/clients", headers=mh)
+            assert r.status_code == 403
+            assert r.json().get("detail") == "mfa_enrollment_required"
+            # [Sécurité] un endpoint MUTANT en accès direct (hors require_permission) est AUSSI bloqué —
+            # sinon un membre sans 2FA pourrait quand même téléverser des fichiers malgré l'imposition.
+            up = client.post("/api/upload", headers=mh,
+                             files={"file": ("t.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+            assert up.status_code == 403
+            assert up.json().get("detail") == "mfa_enrollment_required"
+            # idem pour le changement d'email (mutation de compte en accès direct)
+            em = client.put("/api/auth/me/email", headers=mh, json={"email": "new@ex.com"})
+            assert em.status_code == 403
+            assert em.json().get("detail") == "mfa_enrollment_required"
+            # /api/auth/me reste accessible (pour pouvoir s'enrôler)
+            assert client.get("/api/auth/me", headers=mh).status_code == 200
+            # le membre ne peut pas non plus lever l'exigence (réservé au propriétaire)
+            assert client.post("/api/org/require-mfa", headers=mh,
+                               json={"enabled": False}).status_code == 403
+        finally:
+            db.users.delete_one({"id": m_uid})
+            db.user_passwords.delete_one({"user_id": m_uid})
+            db.user_mfa.delete_one({"user_id": m_uid})
+            db.login_attempts.delete_one({"_id": server._login_attempt_key(m_email, "testclient")})
+
+    def test_org_me_hides_roster_from_unenrolled_member(self, mfa_user):
+        # Un membre non-enrôlé (org impose la 2FA) ne doit PAS voir le trombinoscope ni la matrice RBAC.
+        org_id = (db.users.find_one({"id": mfa_user["id"]}) or {}).get("organization_id")
+        _enable_mfa(mfa_user)
+        assert client.post("/api/org/require-mfa", headers=mfa_user["headers"],
+                           json={"enabled": True}).status_code == 200
+        m_email = f"member-{_uuid.uuid4().hex[:8]}@ex.com"
+        m_pw, m_uid = "memberpass123", str(_uuid.uuid4())
+        db.users.insert_one({"id": m_uid, "email": m_email.lower(), "organization_id": org_id,
+                             "role": "accountant", "is_active": True})
+        db.user_passwords.insert_one({"user_id": m_uid, "hashed_password": server.hash_password(m_pw)})
+        try:
+            m_tok = client.post("/api/auth/login",
+                                json={"email": m_email, "password": m_pw}).json()["access_token"]
+            mh = {"Authorization": f"Bearer {m_tok}"}
+            body = client.get("/api/org/me", headers=mh).json()
+            assert body["members"] == []
+            assert body["organization"]["role_permissions"] == {}
+            assert body["organization"]["mfa_enrollment_required"] is True
+            assert body["current_user"]["role"] == "accountant"   # de quoi amorcer l'enrôlement
+        finally:
+            db.users.delete_one({"id": m_uid})
+            db.user_passwords.delete_one({"user_id": m_uid})
+            db.login_attempts.delete_one({"_id": server._login_attempt_key(m_email, "testclient")})
+
+    def test_owner_breakglass_resets_member_mfa(self, mfa_user):
+        # Le propriétaire peut réinitialiser la 2FA d'un membre verrouillé (perte authenticator + codes).
+        org_id = (db.users.find_one({"id": mfa_user["id"]}) or {}).get("organization_id")
+        _enable_mfa(mfa_user)
+        m_uid = str(_uuid.uuid4())
+        db.users.insert_one({"id": m_uid, "email": f"m-{m_uid[:8]}@ex.com", "organization_id": org_id,
+                             "role": "accountant", "is_active": True})
+        db.user_mfa.insert_one({"user_id": m_uid, "secret": "X", "enabled": True, "backup_codes": []})
+        try:
+            # non-propriétaire ne peut pas ; propriétaire oui
+            r = client.post(f"/api/org/members/{m_uid}/reset-mfa", headers=mfa_user["headers"])
+            assert r.status_code == 200 and r.json()["reset"] is True
+            assert db.user_mfa.find_one({"user_id": m_uid}) is None       # 2FA du membre supprimée
+            # propriétaire ne peut PAS se réinitialiser lui-même par ce biais (contournerait /disable)
+            assert client.post(f"/api/org/members/{mfa_user['id']}/reset-mfa",
+                               headers=mfa_user["headers"]).status_code == 400
+            # membre inconnu → 404
+            assert client.post(f"/api/org/members/{_uuid.uuid4()}/reset-mfa",
+                               headers=mfa_user["headers"]).status_code == 404
+        finally:
+            db.users.delete_one({"id": m_uid})
+            db.user_mfa.delete_one({"user_id": m_uid})
+
+    def test_reset_member_mfa_requires_owner(self, mfa_user):
+        # Un membre lambda ne peut pas réinitialiser la 2FA d'autrui.
+        org_id = (db.users.find_one({"id": mfa_user["id"]}) or {}).get("organization_id")
+        m_email = f"member-{_uuid.uuid4().hex[:8]}@ex.com"
+        m_pw, m_uid = "memberpass123", str(_uuid.uuid4())
+        db.users.insert_one({"id": m_uid, "email": m_email.lower(), "organization_id": org_id,
+                             "role": "accountant", "is_active": True})
+        db.user_passwords.insert_one({"user_id": m_uid, "hashed_password": server.hash_password(m_pw)})
+        try:
+            m_tok = client.post("/api/auth/login",
+                                json={"email": m_email, "password": m_pw}).json()["access_token"]
+            r = client.post(f"/api/org/members/{mfa_user['id']}/reset-mfa",
+                            headers={"Authorization": f"Bearer {m_tok}"})
+            assert r.status_code == 403
+        finally:
+            db.users.delete_one({"id": m_uid})
+            db.user_passwords.delete_one({"user_id": m_uid})
+            db.login_attempts.delete_one({"_id": server._login_attempt_key(m_email, "testclient")})
+
+    def test_require_mfa_rejects_non_boolean(self, mfa_user):
+        # bool("false") == True : un 'enabled' non booléen ne doit PAS activer l'imposition par erreur.
+        _enable_mfa(mfa_user)
+        r = client.post("/api/org/require-mfa", headers=mfa_user["headers"], json={"enabled": "false"})
+        assert r.status_code == 400
+        # l'imposition n'a pas été activée par la valeur mal typée
+        assert client.get("/api/auth/me", headers=mfa_user["headers"]).json()["require_mfa"] is False
+
+    def test_me_exposes_require_mfa(self, mfa_user):
+        assert client.get("/api/auth/me", headers=mfa_user["headers"]).json()["require_mfa"] is False

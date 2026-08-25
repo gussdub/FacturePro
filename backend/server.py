@@ -2302,12 +2302,28 @@ def _get_org_for_user(user: dict) -> dict:
     return org
 
 
+def _enforce_org_mfa(current_user: CurrentUser) -> None:
+    """[MFA] Imposition par l'org : si `require_mfa` est actif et que l'utilisateur n'a PAS activé sa
+    2FA, on bloque l'accès (403 mfa_enrollment_required). À appeler sur TOUT endpoint qui mute ou lit
+    des données métier — que ce soit via require_permission (cas courant) ou en accès direct
+    get_current_user_with_access (uploads). Les endpoints d'enrôlement (/api/auth/me, /mfa/*,
+    /org/require-mfa) ne l'appellent PAS → restent accessibles pour s'enrôler / lever l'exigence. Le
+    compte de service exempté (is_exempt) est épargné pour éviter un lockout d'exploitation."""
+    if current_user.is_exempt:
+        return
+    org = db.organizations.find_one(
+        {"id": current_user.organization_id}, {"_id": 0, "require_mfa": 1})
+    if org and org.get("require_mfa") and not _mfa_enabled(current_user.id):
+        raise HTTPException(403, "mfa_enrollment_required")
+
+
 def require_permission(perm_code: str):
     """FastAPI dependency factory. Utilisation :
         @app.get("/api/expenses", dependencies=[...])
         def list_expenses(current_user: CurrentUser = Depends(require_permission("expenses:read"))):
             ..."""
     def _dep(current_user: CurrentUser = Depends(get_current_user_with_access)) -> CurrentUser:
+        _enforce_org_mfa(current_user)
         if perm_code not in current_user.permissions:
             raise HTTPException(403, f"Permission requise : {perm_code}")
         return current_user
@@ -3953,6 +3969,7 @@ def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
         "receipt_ocr_consent_at": user_doc.get("receipt_ocr_consent_at"),
         # [MFA] état de la double authentification (pour Paramètres → Sécurité)
         "mfa_enabled": _mfa_enabled(current_user.id),
+        "require_mfa": bool(org.get("require_mfa")),  # l'org impose-t-elle la 2FA ?
     }
 
 
@@ -3981,6 +3998,34 @@ def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)
         user_doc = db.users.find_one({"id": current_user.id}, {"_id": 0})
         org = _synthesize_solo_org_from_user(user_doc)
 
+    # [MFA] Si l'org impose la 2FA et que ce membre ne l'a pas activée, il est bloqué partout ailleurs.
+    # On ne lui divulgue donc PAS le trombinoscope (courriels des collègues = RP) ni la matrice RBAC :
+    # on renvoie juste de quoi amorcer l'écran d'enrôlement forcé (son identité/rôle + le drapeau
+    # require_mfa). Ainsi un attaquant qui n'a que le mot de passe d'un compte non-enrôlé n'obtient
+    # aucune donnée d'organisation.
+    if (not current_user.is_exempt) and org.get("require_mfa") and not _mfa_enabled(current_user.id):
+        return {
+            "organization": {
+                "id": org["id"],
+                "name": org.get("name"),
+                "owner_id": org.get("owner_id"),
+                "subscription_status": org.get("subscription_status"),
+                "trial_ends_at": org.get("trial_ends_at"),
+                "role_permissions": {},          # matrice RBAC masquée tant que non-enrôlé
+                "scan_count_this_month": org.get("scan_count_this_month", 0),
+                "scan_quota_limit": SCAN_QUOTA_LIMIT,
+                "require_mfa": True,
+                "mfa_enrollment_required": True,
+            },
+            "current_user": {
+                "id": current_user.id,
+                "email": current_user.email,
+                "role": current_user.role,
+                "permissions": current_user.permissions,
+            },
+            "members": [],                        # trombinoscope masqué tant que non-enrôlé
+        }
+
     members_cursor = db.users.find(
         {"organization_id": current_user.organization_id, "is_active": {"$ne": False}},
         {"_id": 0, "id": 1, "email": 1, "role": 1, "created_at": 1}
@@ -3997,6 +4042,7 @@ def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)
             "role_permissions": org.get("role_permissions") or DEFAULT_ROLE_PERMISSIONS,
             "scan_count_this_month": org.get("scan_count_this_month", 0),
             "scan_quota_limit": SCAN_QUOTA_LIMIT,
+            "require_mfa": bool(org.get("require_mfa")),
         },
         "current_user": {
             "id": current_user.id,
@@ -4396,6 +4442,7 @@ def update_own_email(
     - 409 si collision case-insensitive avec un autre user (global)
     - JWT reste valide (payload utilise user_id)
     """
+    _enforce_org_mfa(current_user)   # [MFA] mutation de compte en accès direct → soumise à l'imposition org
     new_email = (body.email or "").strip().lower()
     if not new_email:
         raise HTTPException(400, "Email requis")
@@ -6995,6 +7042,19 @@ def _gen_backup_codes(n=_MFA_BACKUP_CODES_COUNT):
     return out
 
 
+def _qr_data_uri(data: str) -> str:
+    """Génère un QR code (PNG data URI) à partir de l'URI otpauth, pour scan direct dans l'app
+    d'authentification. Best-effort : chaîne vide si la génération échoue (le secret reste saisissable)."""
+    try:
+        import qrcode
+        import base64 as _b64
+        buf = io.BytesIO()
+        qrcode.make(data).save(buf, format="PNG")
+        return "data:image/png;base64," + _b64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
 def _create_mfa_pending_token(user_id: str) -> str:
     """Jeton pré-auth COURT (5 min) émis après le mot de passe, échangé contre le vrai JWT au
     challenge. Claim `mfa_pending` distinct → ne peut pas servir de jeton d'accès."""
@@ -7041,7 +7101,7 @@ def mfa_setup(current_user: CurrentUser = Depends(get_current_user_with_access))
                   "backup_codes": [], "updated_at": datetime.now(timezone.utc).isoformat()}},
         upsert=True)
     uri = pyotp.TOTP(secret).provisioning_uri(name=current_user.email, issuer_name=_MFA_ISSUER)
-    return {"secret": secret, "otpauth_uri": uri, "issuer": _MFA_ISSUER}
+    return {"secret": secret, "otpauth_uri": uri, "qr_data_uri": _qr_data_uri(uri), "issuer": _MFA_ISSUER}
 
 
 @app.post("/api/auth/mfa/enable")
@@ -7101,6 +7161,48 @@ def mfa_challenge(body: dict, request: Request):
     if not user:
         raise HTTPException(401, "Utilisateur introuvable")
     return Token(access_token=create_token(user_id), user=User(**user))
+
+
+@app.post("/api/org/require-mfa")
+def set_org_require_mfa(body: dict, current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """[MFA] Imposer (ou lever) la double authentification pour TOUS les membres de l'organisation.
+    Réservé au PROPRIÉTAIRE. Pour ACTIVER, il doit d'abord avoir sa propre 2FA (sinon il se
+    verrouillerait lui-même). Volontairement PAS derrière require_permission → reste accessible pour
+    DÉSACTIVER même si le propriétaire a perdu sa 2FA."""
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    if not org or org.get("owner_id") != current_user.id:
+        raise HTTPException(403, "Réservé au propriétaire de l'organisation")
+    # Exiger un booléen JSON strict : bool("false") == True coercerait un client mal typé à ACTIVER
+    # l'imposition alors qu'il voulait la lever (et l'inverse). On n'accepte que true/false explicites.
+    raw_enabled = body.get("enabled")
+    if not isinstance(raw_enabled, bool):
+        raise HTTPException(400, "Le champ 'enabled' doit être un booléen (true/false)")
+    enabled = raw_enabled
+    if enabled and not _mfa_enabled(current_user.id):
+        raise HTTPException(400, "Active d'abord ta propre double authentification avant de l'imposer à l'équipe")
+    db.organizations.update_one({"id": org["id"]}, {"$set": {"require_mfa": enabled}})
+    return {"require_mfa": enabled}
+
+
+@app.post("/api/org/members/{user_id}/reset-mfa")
+def reset_member_mfa(user_id: str, current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """[MFA] Bris de glace : le PROPRIÉTAIRE réinitialise la 2FA d'un membre qui a perdu son
+    authentificateur ET ses codes de secours. Sans cela, imposer la 2FA verrouillerait à jamais un tel
+    membre. Effet : on supprime son doc user_mfa → il redevient non-enrôlé → forcé de re-configurer sa
+    2FA au prochain accès (via l'écran d'enrôlement) si l'org l'impose. Volontairement PAS derrière
+    require_permission (reste dispo même si l'org impose la 2FA). Le propriétaire ne peut pas se
+    réinitialiser lui-même par ce biais (sinon il contournerait la vérification par code de /mfa/disable)."""
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    if not org or org.get("owner_id") != current_user.id:
+        raise HTTPException(403, "Réservé au propriétaire de l'organisation")
+    if user_id == current_user.id:
+        raise HTTPException(400, "Utilise « Désactiver la 2FA » (avec un code) pour ta propre double authentification")
+    target = db.users.find_one(
+        {"id": user_id, "organization_id": current_user.organization_id}, {"_id": 0, "id": 1})
+    if not target:
+        raise HTTPException(404, "Membre introuvable")
+    db.user_mfa.delete_one({"user_id": user_id})
+    return {"reset": True, "user_id": user_id}
 
 # ─── Clients CRUD ───
 @app.get("/api/clients")
@@ -10815,12 +10917,14 @@ def update_settings(
 
 @app.post("/api/settings/company/upload-logo")
 def upload_logo(logo_data: dict, current_user: User = Depends(get_current_user_with_access)):
+    _enforce_org_mfa(current_user)   # [MFA] endpoint mutant en accès direct → soumis à l'imposition org
     db.company_settings.update_one({"user_id": current_user.id}, {"$set": {"logo_url": logo_data.get("logo_url", "")}}, upsert=True)
     return {"message": "Logo saved", "logo_url": logo_data.get("logo_url", "")}
 
 # ─── File Upload/Download ───
 @app.post("/api/upload")
 def upload_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
+    _enforce_org_mfa(current_user)   # [MFA] endpoint mutant en accès direct → soumis à l'imposition org
     allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
     if file.content_type not in allowed_types:
         raise HTTPException(400, f"Type de fichier non supporte: {file.content_type}")
@@ -10882,6 +10986,7 @@ def download_file(file_id: str):
 
 @app.post("/api/settings/company/upload-logo-file")
 def upload_logo_file(file: UploadFile = File(...), current_user: User = Depends(get_current_user_with_access)):
+    _enforce_org_mfa(current_user)   # [MFA] endpoint mutant en accès direct → soumis à l'imposition org
     allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
     if file.content_type not in allowed_types:
         raise HTTPException(400, "Seules les images sont acceptees (JPG, PNG, GIF, WebP)")

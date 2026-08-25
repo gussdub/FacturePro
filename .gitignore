@@ -344,3 +344,6 @@ credentials.json
 # Visual brainstorming companion artifacts
 .superpowers/
 
+
+# Cybersecurity skills (symlinks vers dépôt central, ne pas versionner)
+.claude/skills/

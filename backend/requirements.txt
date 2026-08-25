@@ -14,3 +14,5 @@ anthropic>=0.40.0
 openpyxl>=3.1,<4
 defusedxml>=0.7
 pyotp>=2.9,<3
+qrcode>=7,<9
+Pillow>=10,<13

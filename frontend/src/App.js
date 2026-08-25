@@ -18,12 +18,13 @@ import BankReconciliationPage from './pages/BankReconciliationPage';
 import LedgerPage from './pages/LedgerPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
+import MfaSettings from './components/MfaSettings';
 
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
     window.location.pathname === '/' ? '/dashboard' : window.location.pathname
   );
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, logout } = useAuth();
 
   useEffect(() => {
     const handlePopState = () => {
@@ -52,6 +53,32 @@ function App() {
 
   if (!isAuthenticated) {
     return <LoginPage />;
+  }
+
+  // Imposition MFA par l'org (Loi 25) : si l'organisation exige la 2FA et que ce membre ne l'a
+  // pas encore activée, on bloque TOUT l'accès applicatif derrière un écran d'enrôlement forcé
+  // (miroir de l'enforcement backend dans require_permission ; le compte de service is_exempt est
+  // épargné pour éviter un lockout d'exploitation). Il ne reste que : activer la 2FA, ou se déconnecter.
+  const needsMfaEnrollment = user?.require_mfa && !user?.mfa_enabled && !user?.is_exempt;
+  if (needsMfaEnrollment) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#f8fafb', display: 'flex',
+        alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(0,0,0,0.1)',
+          padding: 32, maxWidth: 680, width: '100%' }}>
+          <h2 style={{ color: '#1f2937', marginTop: 0 }}>Double authentification requise</h2>
+          <p style={{ color: '#6b7280' }}>
+            Ton organisation exige la double authentification pour protéger les données financières.
+            Configure-la ci-dessous pour continuer.
+          </p>
+          <MfaSettings />
+          <button onClick={logout} style={{ marginTop: 20, background: 'none', border: 'none',
+            color: '#6b7280', cursor: 'pointer', fontSize: 14, textDecoration: 'underline' }}>
+            Se déconnecter
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Subscription gating: if expired, only allow subscription page and settings

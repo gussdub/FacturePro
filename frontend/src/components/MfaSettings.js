@@ -16,16 +16,27 @@ const input = {
 };
 
 const MfaSettings = () => {
-  const { user, refreshUser } = useAuth();
+  const { user, role, refreshUser } = useAuth();
   const enabled = !!user?.mfa_enabled;
 
-  const [setupData, setSetupData] = useState(null);   // {secret, otpauth_uri}
+  const [setupData, setSetupData] = useState(null);   // {secret, otpauth_uri, qr_data_uri}
   const [code, setCode] = useState('');
   const [backupCodes, setBackupCodes] = useState(null);
   const [disarmCode, setDisarmCode] = useState('');
   const [showDisable, setShowDisable] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [orgError, setOrgError] = useState('');
+  const [orgBusy, setOrgBusy] = useState(false);
+
+  const toggleRequireMfa = async () => {
+    setOrgBusy(true); setOrgError('');
+    try {
+      await axios.post(`${BACKEND_URL}/api/org/require-mfa`, { enabled: !user?.require_mfa });
+      await refreshUser();
+    } catch (e) { setOrgError(e.response?.data?.detail || 'Erreur'); }
+    finally { setOrgBusy(false); }
+  };
 
   const startSetup = async () => {
     setBusy(true); setError(''); setBackupCodes(null);
@@ -43,7 +54,9 @@ const MfaSettings = () => {
       const r = await axios.post(`${BACKEND_URL}/api/auth/mfa/enable`, { code });
       setBackupCodes(r.data.backup_codes);
       setSetupData(null); setCode('');
-      await refreshUser();
+      // NE PAS rafraîchir l'utilisateur ici : sur l'écran d'enrôlement forcé (App.js), passer
+      // mfa_enabled=true démonterait aussitôt ce composant et ferait DISPARAÎTRE les codes de
+      // secours affichés une seule fois. On diffère refreshUser() au clic « J'ai noté mes codes ».
     } catch (e2) { setError(e2.response?.data?.detail || 'Code invalide'); }
     finally { setBusy(false); }
   };
@@ -83,7 +96,7 @@ const MfaSettings = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontFamily: 'monospace', fontSize: 15 }}>
             {backupCodes.map((c) => <span key={c} style={{ background: 'white', border: '1px solid #d1fae5', borderRadius: 6, padding: '6px 10px', textAlign: 'center' }}>{c}</span>)}
           </div>
-          <button onClick={() => setBackupCodes(null)} style={{ ...btn(false), marginTop: 12 }}>J'ai noté mes codes</button>
+          <button onClick={async () => { setBackupCodes(null); await refreshUser(); }} style={{ ...btn(false), marginTop: 12 }}>J'ai noté mes codes</button>
         </div>
       )}
 
@@ -131,9 +144,16 @@ const MfaSettings = () => {
       {!enabled && setupData && (
         <div style={{ marginTop: 12, border: '1px solid #e5e7eb', borderRadius: 10, padding: 16 }}>
           <p style={{ fontSize: 14, color: '#374151', marginTop: 0 }}>
-            1. Dans ton application d'authentification, ajoute un compte en saisissant cette clé
-            (ou en collant le lien) :
+            1. Dans ton application d'authentification, scanne ce code QR
+            (ou saisis la clé manuellement) :
           </p>
+          {setupData.qr_data_uri && (
+            <div style={{ textAlign: 'center', marginBottom: 12 }}>
+              <img src={setupData.qr_data_uri} alt="Code QR de configuration 2FA"
+                width={200} height={200}
+                style={{ border: '1px solid #e5e7eb', borderRadius: 8, background: 'white', padding: 8 }} />
+            </div>
+          )}
           <div style={{ background: '#f8fafb', border: '1px dashed #cbd5e1', borderRadius: 8, padding: 12, marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: '#6b7280' }}>Clé de configuration</div>
             <code style={{ fontSize: 16, letterSpacing: 2, wordBreak: 'break-all', color: '#111827' }}>{setupData.secret}</code>
@@ -151,6 +171,29 @@ const MfaSettings = () => {
                 style={{ background: '#f3f4f6', border: 'none', padding: '10px 18px', borderRadius: 8, cursor: 'pointer' }}>Annuler</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Imposition à toute l'organisation — propriétaire seulement */}
+      {role === 'owner' && (
+        <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid #e5e7eb' }}>
+          <h4 style={{ fontSize: 16, color: '#1f2937', margin: '0 0 4px' }}>Imposer la 2FA à toute l'équipe</h4>
+          <p style={{ color: '#6b7280', fontSize: 13, marginTop: 0 }}>
+            Quand c'est activé, chaque membre devra configurer la double authentification pour
+            accéder à l'application. Tu dois avoir activé la tienne d'abord.
+          </p>
+          {orgError && (
+            <div style={{ background: '#fee2e2', border: '1px solid #fecaca', borderRadius: 8,
+              padding: '10px 12px', margin: '10px 0', color: '#b91c1c', fontSize: 13 }}>{orgError}</div>
+          )}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, cursor: orgBusy ? 'wait' : 'pointer' }}>
+            <input type="checkbox" checked={!!user?.require_mfa} disabled={orgBusy}
+              onChange={toggleRequireMfa} data-testid="org-require-mfa-toggle"
+              style={{ width: 18, height: 18, cursor: 'inherit' }} />
+            <span style={{ fontSize: 14, color: '#374151', fontWeight: 600 }}>
+              {user?.require_mfa ? 'Obligatoire pour tous les membres' : 'Facultative'}
+            </span>
+          </label>
         </div>
       )}
     </div>
