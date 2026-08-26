@@ -3974,13 +3974,16 @@ def get_me(current_user: CurrentUser = Depends(get_current_user_with_access)):
 
 
 @app.post("/api/auth/me/receipt-ocr-consent")
-def grant_receipt_ocr_consent(current_user: User = Depends(get_current_user_with_access)):
+def grant_receipt_ocr_consent(request: Request, current_user: User = Depends(get_current_user_with_access)):
     """Marque le consent PIPEDA de l'utilisateur pour l'OCR de reçus."""
     now = datetime.now(timezone.utc).isoformat()
     db.users.update_one(
         {"id": current_user.id},
         {"$set": {"receipt_ocr_consent_at": now}}
     )
+    _audit("privacy.consent.receipt_ocr", request=request, actor_user_id=current_user.id,
+           actor_email=getattr(current_user, "email", None),
+           organization_id=getattr(current_user, "organization_id", None), category="admin")
     return {"receipt_ocr_consent_at": now}
 
 
@@ -4057,6 +4060,7 @@ def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)
 @app.put("/api/org/role-permissions")
 def update_role_permissions(
     body: dict,
+    request: Request,
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     """Éditer la matrice de permissions pour un rôle donné.
@@ -4071,11 +4075,20 @@ def update_role_permissions(
     for code in permissions:
         if code not in PERMISSIONS_EDITABLE:
             raise HTTPException(400, f"Permission code invalide : {code}")
+    # Gestion des privilèges → événement d'audit avec avant/après (exigence Loi 25 : traçabilité des
+    # changements de droits d'accès).
+    _org = db.organizations.find_one({"id": current_user.organization_id},
+                                     {"_id": 0, "role_permissions": 1})
+    old_perms = ((_org or {}).get("role_permissions") or {}).get(role, [])
     # Persist (idempotent update on the org)
     db.organizations.update_one(
         {"id": current_user.organization_id},
         {"$set": {f"role_permissions.{role}": permissions}}
     )
+    _audit("org.role_permissions.update", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="role", target_id=role,
+           metadata={"role": role, "old": old_perms, "new": permissions})
     return {"role": role, "permissions": permissions}
 
 
@@ -4124,6 +4137,7 @@ def _send_invitation_email(to_email: str, org_name: str, token: str):
 @app.post("/api/org/invitations", status_code=201)
 def create_invitation(
     body: dict,
+    request: Request,
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     email = (body.get("email") or "").strip().lower()
@@ -4183,6 +4197,10 @@ def create_invitation(
         db.invitations.delete_one({"id": invitation_id})
         raise HTTPException(502, "Envoi de l'email d'invitation impossible — réessaie plus tard")
 
+    _audit("org.invitation.create", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_label=email, metadata={"role": role})
+
     return {
         "id": invitation_id,
         "email": email,
@@ -4207,6 +4225,7 @@ def list_invitations(
 @app.delete("/api/org/invitations/{invitation_id}", status_code=204)
 def revoke_invitation(
     invitation_id: str,
+    request: Request,
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     inv = db.invitations.find_one({
@@ -4221,6 +4240,9 @@ def revoke_invitation(
         {"id": invitation_id},
         {"$set": {"status": "revoked"}}
     )
+    _audit("org.invitation.revoked", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_label=inv.get("email"))
     return
 
 
@@ -4360,6 +4382,9 @@ def accept_invite(body: dict, request: Request):
         {"id": inv["id"]},
         {"$set": {"status": "accepted", "consumed_at": now}}
     )
+    _audit("org.invitation.accepted", request=request, actor_user_id=user_id, actor_email=email,
+           organization_id=inv["organization_id"], category="admin",
+           metadata={"role": inv.get("role")})
 
     token_jwt = create_token(user_id)
     return {
@@ -4380,6 +4405,7 @@ def accept_invite(body: dict, request: Request):
 def update_member_role(
     user_id: str,
     body: dict,
+    request: Request,
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     role = body.get("role")
@@ -4396,12 +4422,18 @@ def update_member_role(
     if org and org.get("owner_id") == user_id:
         raise HTTPException(400, "Impossible de modifier le rôle du propriétaire")
     db.users.update_one({"id": user_id}, {"$set": {"role": role}})
+    _audit("org.member.role_changed", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="user", target_id=user_id,
+           target_label=target.get("email"),
+           metadata={"old_role": target.get("role"), "new_role": role})
     return {"user_id": user_id, "role": role}
 
 
 @app.delete("/api/org/members/{user_id}", status_code=204)
 def remove_member(
     user_id: str,
+    request: Request,
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     target = db.users.find_one({
@@ -4420,6 +4452,10 @@ def remove_member(
         {"id": user_id},
         {"$unset": {"organization_id": "", "role": ""}}
     )
+    _audit("org.member.remove", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="user", target_id=user_id,
+           target_label=target.get("email"))
     return
 
 
@@ -4432,6 +4468,7 @@ class UpdateEmailRequest(BaseModel):
 @app.put("/api/auth/me/email")
 def update_own_email(
     body: UpdateEmailRequest,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user_with_access)
 ):
     """Permet à un user authentifié de changer sa propre adresse email.
@@ -4459,7 +4496,11 @@ def update_own_email(
     })
     if existing:
         raise HTTPException(409, "Cette adresse est déjà utilisée")
+    old_email = current_user.email
     db.users.update_one({"id": current_user.id}, {"$set": {"email": new_email}})
+    _audit("auth.email.changed", request=request, actor_user_id=current_user.id,
+           actor_email=new_email, organization_id=current_user.organization_id, category="auth",
+           target_label=new_email, metadata={"old_email": old_email})
     return {"email": new_email}
 
 
@@ -4470,6 +4511,7 @@ class TransferOwnershipRequest(BaseModel):
 @app.post("/api/org/transfer-ownership")
 def transfer_ownership(
     body: TransferOwnershipRequest,
+    request: Request,
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     """Transfère la propriété de l'organisation à un autre membre actif.
@@ -4520,6 +4562,10 @@ def transfer_ownership(
 
     print(f"INFO transfer_ownership org={current_user.organization_id} "
           f"from={current_user.id} to={body.new_owner_user_id}")
+    _audit("org.ownership.transfer", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="user", target_id=body.new_owner_user_id,
+           target_label=new_owner.get("email"))
     return {
         "organization_id": current_user.organization_id,
         "new_owner_id": body.new_owner_user_id,
@@ -6868,6 +6914,124 @@ def _client_ip(request) -> str:
     return "unknown"
 
 
+# ─── Journal d'audit (Loi 25 : traçabilité des accès et actions) ───
+# Append-only. Rétention 12 mois (purge auto via index TTL sur `ts`). Deux sources :
+#  1) MIDDLEWARE (_audit_mutations_mw) : journalise génériquement TOUTE mutation métier (POST/PUT/
+#     PATCH/DELETE) sur les préfixes données ci-dessous → couverture complète, un seul point.
+#  2) SÉMANTIQUE (_audit) : événements de sécurité/compte (auth, MFA, équipe) journalisés au point
+#     concerné avec des métadonnées riches. Ces préfixes (/api/auth, /api/org) sont EXCLUS du
+#     middleware pour éviter le double-comptage.
+_AUDIT_RETENTION_DAYS = 365
+_AUDIT_DATA_PREFIXES = {
+    "/api/invoices": "invoice", "/api/quotes": "quote", "/api/clients": "client",
+    "/api/products": "product", "/api/employees": "employee", "/api/expenses": "expense",
+    "/api/bank": "bank", "/api/ledger": "ledger", "/api/mileage": "mileage",
+    "/api/settings": "settings", "/api/upload": "file", "/api/files": "file",
+}
+_AUDIT_VERB = {"POST": "create", "PUT": "update", "PATCH": "update", "DELETE": "delete"}
+
+
+def _audit(action, *, request=None, actor_user_id=None, actor_email=None,
+           organization_id=None, target_type=None, target_id=None, target_label=None,
+           outcome="success", category="security", metadata=None):
+    """Écrit UNE entrée au journal d'audit. BEST-EFFORT : n'échoue JAMAIS l'appelant (comme
+    _safe_autopost). Ne journalise jamais de secret (mot de passe / jeton / code) — les appelants
+    ne passent que des métadonnées sûres. `ts` est une date BSON (tri + purge TTL)."""
+    try:
+        ip = _client_ip(request) if request is not None else None
+        ua = ((request.headers.get("user-agent") or "")[:300] or None) if request is not None else None
+        db.audit_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc),
+            "organization_id": organization_id,
+            "actor_user_id": actor_user_id,
+            "actor_email": actor_email,
+            "action": action,
+            "category": category,
+            "target_type": target_type,
+            "target_id": target_id,
+            "target_label": (str(target_label)[:200] if target_label is not None else None),
+            "outcome": outcome,
+            "ip": ip,
+            "user_agent": ua,
+            "metadata": metadata if isinstance(metadata, dict) else None,
+        })
+    except Exception:
+        pass  # jamais bloquant
+
+
+def _audit_http_mutation(token, method, path, resource, target_id, status, ip, ua):
+    """Worker SYNCHRONE du middleware (exécuté hors event-loop via run_in_threadpool). Résout
+    l'acteur depuis le JWT (best-effort) puis journalise la mutation. Ignore les requêtes sans
+    acteur authentifié (le jeton pré-auth mfa_pending n'est PAS un acteur)."""
+    try:
+        if not token:
+            return
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        except Exception:
+            return
+        if payload.get("mfa_pending"):
+            return
+        user = db.users.find_one({"id": payload.get("sub")},
+                                 {"_id": 0, "id": 1, "email": 1, "organization_id": 1})
+        if not user:
+            return
+        db.audit_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc),
+            "organization_id": user.get("organization_id"),
+            "actor_user_id": user.get("id"),
+            "actor_email": user.get("email"),
+            "action": f"{resource}.{_AUDIT_VERB.get(method, method.lower())}",
+            "category": "data",
+            "target_type": resource,
+            "target_id": target_id,
+            "target_label": None,
+            "outcome": "success" if status < 400 else "failure",
+            "ip": ip,
+            "user_agent": ua,
+            "metadata": {"method": method, "path": path, "status": status},
+        })
+    except Exception:
+        pass
+
+
+@app.middleware("http")
+async def _audit_mutations_mw(request, call_next):
+    """Filet de sécurité : journalise toute MUTATION métier (données) de façon générique, quelle que
+    soit la route. Best-effort, jamais bloquant, n'altère pas la réponse. Les événements de sécurité
+    (auth/org) sont journalisés sémantiquement ailleurs et exclus ici."""
+    response = await call_next(request)
+    try:
+        method = request.method
+        if method in _AUDIT_VERB:
+            path = request.url.path
+            resource = prefix = None
+            for pfx, res in _AUDIT_DATA_PREFIXES.items():
+                if path == pfx or path.startswith(pfx + "/"):
+                    resource, prefix = res, pfx
+                    break
+            # On journalise les mutations réussies (<300) ou en échec (>=400), mais PAS les
+            # redirections 3xx (ex. 307 sur slash final) : la vraie action est journalisée sur la
+            # requête suivie → un 307 créerait une entrée « succès » fantôme + un doublon. 401 = non
+            # authentifié → aucun acteur pertinent.
+            if (resource is not None and response.status_code != 401
+                    and not (300 <= response.status_code < 400)):
+                rest = path[len(prefix):].strip("/")
+                target_id = rest.split("/")[0] if rest else None
+                auth = request.headers.get("authorization") or ""
+                token = auth[7:] if auth.lower().startswith("bearer ") else None
+                from starlette.concurrency import run_in_threadpool
+                await run_in_threadpool(
+                    _audit_http_mutation, token, method, path, resource, target_id,
+                    response.status_code, _client_ip(request),
+                    (request.headers.get("user-agent") or "")[:300] or None)
+    except Exception:
+        pass  # jamais bloquant : le journal ne casse aucune requête
+    return response
+
+
 def _login_attempt_key(email: str, ip: str = "") -> str:
     return hashlib.sha256(f"{(email or '').strip().lower()}|{ip or ''}".encode()).hexdigest()
 
@@ -6949,11 +7113,16 @@ def login(credentials: UserLogin, request: Request):
     )
     if not user:
         _login_record_failure(email_input, ip)
+        _audit("auth.login.failure", request=request, actor_email=email_input.lower(),
+               outcome="failure", category="auth", metadata={"reason": "unknown_email"})
         raise HTTPException(401, "Incorrect email or password")
 
     pwd_doc = db.user_passwords.find_one({"user_id": user["id"]})
     if not pwd_doc or not verify_password(credentials.password, pwd_doc["hashed_password"]):
         _login_record_failure(email_input, ip)
+        _audit("auth.login.failure", request=request, actor_user_id=user["id"],
+               actor_email=user.get("email"), organization_id=user.get("organization_id"),
+               outcome="failure", category="auth", metadata={"reason": "bad_password"})
         raise HTTPException(401, "Incorrect email or password")
 
     _login_clear(email_input, ip)  # succès → réinitialise le compteur d'échecs
@@ -6962,6 +7131,8 @@ def login(credentials: UserLogin, request: Request):
     if _mfa_enabled(user["id"]):
         return {"mfa_required": True, "mfa_token": _create_mfa_pending_token(user["id"])}
     token = create_token(user["id"])
+    _audit("auth.login", request=request, actor_user_id=user["id"], actor_email=user.get("email"),
+           organization_id=user.get("organization_id"), category="auth")
     return Token(access_token=token, user=User(**user))
 
 # ─── Password Reset ───
@@ -6988,7 +7159,7 @@ def forgot_password(payload: dict, request: Request, background_tasks: Backgroun
     return generic  # même réponse, même travail synchrone : pas d'oracle d'existence de compte
 
 @app.post("/api/auth/reset-password")
-def reset_password(request: dict):
+def reset_password(request: dict, req: Request):
     token = request.get("token")
     new_password = request.get("new_password")
     if not token:
@@ -7008,6 +7179,10 @@ def reset_password(request: dict):
         {"$set": {"hashed_password": hash_password(new_password)}}
     )
     db.password_resets.delete_one({"_id": rec["_id"]})  # usage unique
+    _u = db.users.find_one({"id": rec["user_id"]}, {"_id": 0, "email": 1, "organization_id": 1})
+    _audit("auth.password.reset", request=req, actor_user_id=rec["user_id"],
+           actor_email=(_u or {}).get("email"), organization_id=(_u or {}).get("organization_id"),
+           category="auth")
     return {"message": "Mot de passe reinitialise"}
 
 
@@ -7105,7 +7280,7 @@ def mfa_setup(current_user: CurrentUser = Depends(get_current_user_with_access))
 
 
 @app.post("/api/auth/mfa/enable")
-def mfa_enable(body: dict, current_user: CurrentUser = Depends(get_current_user_with_access)):
+def mfa_enable(body: dict, request: Request, current_user: CurrentUser = Depends(get_current_user_with_access)):
     """Confirme l'activation en vérifiant un 1er code TOTP contre le secret PENDING. Retourne les
     codes de secours UNE SEULE FOIS (ensuite stockés hachés)."""
     doc = _get_user_mfa(current_user.id)
@@ -7122,17 +7297,21 @@ def mfa_enable(body: dict, current_user: CurrentUser = Depends(get_current_user_
         {"$set": {"enabled": True,
                   "backup_codes": [_hash_backup_code(c) for c in backup_codes],
                   "enabled_at": datetime.now(timezone.utc).isoformat()}})
+    _audit("mfa.enable", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id)
     return {"enabled": True, "backup_codes": backup_codes}
 
 
 @app.post("/api/auth/mfa/disable")
-def mfa_disable(body: dict, current_user: CurrentUser = Depends(get_current_user_with_access)):
+def mfa_disable(body: dict, request: Request, current_user: CurrentUser = Depends(get_current_user_with_access)):
     """Désactive la MFA après vérification d'un code (TOTP ou code de secours)."""
     if not _mfa_enabled(current_user.id):
         raise HTTPException(400, "La double authentification n'est pas activée")
     if not _verify_mfa_code(current_user.id, body.get("code")):
         raise HTTPException(400, "Code invalide")
     db.user_mfa.delete_one({"user_id": current_user.id})
+    _audit("mfa.disable", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id)
     return {"enabled": False}
 
 
@@ -7155,16 +7334,20 @@ def mfa_challenge(body: dict, request: Request):
     _login_check_lock("mfa:" + str(user_id), ip)   # 429 après trop d'échecs
     if not _verify_mfa_code(user_id, body.get("code")):
         _login_record_failure("mfa:" + str(user_id), ip)
+        _audit("auth.mfa.challenge.failure", request=request, actor_user_id=user_id,
+               outcome="failure", category="auth")
         raise HTTPException(401, "Code invalide")
     _login_clear("mfa:" + str(user_id), ip)
     user = db.users.find_one({"id": user_id}, {"_id": 0})
     if not user:
         raise HTTPException(401, "Utilisateur introuvable")
+    _audit("auth.login", request=request, actor_user_id=user["id"], actor_email=user.get("email"),
+           organization_id=user.get("organization_id"), category="auth", metadata={"mfa": True})
     return Token(access_token=create_token(user_id), user=User(**user))
 
 
 @app.post("/api/org/require-mfa")
-def set_org_require_mfa(body: dict, current_user: CurrentUser = Depends(get_current_user_with_access)):
+def set_org_require_mfa(body: dict, request: Request, current_user: CurrentUser = Depends(get_current_user_with_access)):
     """[MFA] Imposer (ou lever) la double authentification pour TOUS les membres de l'organisation.
     Réservé au PROPRIÉTAIRE. Pour ACTIVER, il doit d'abord avoir sa propre 2FA (sinon il se
     verrouillerait lui-même). Volontairement PAS derrière require_permission → reste accessible pour
@@ -7181,11 +7364,14 @@ def set_org_require_mfa(body: dict, current_user: CurrentUser = Depends(get_curr
     if enabled and not _mfa_enabled(current_user.id):
         raise HTTPException(400, "Active d'abord ta propre double authentification avant de l'imposer à l'équipe")
     db.organizations.update_one({"id": org["id"]}, {"$set": {"require_mfa": enabled}})
+    _audit("org.require_mfa", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=org["id"], category="admin",
+           metadata={"enabled": enabled})
     return {"require_mfa": enabled}
 
 
 @app.post("/api/org/members/{user_id}/reset-mfa")
-def reset_member_mfa(user_id: str, current_user: CurrentUser = Depends(get_current_user_with_access)):
+def reset_member_mfa(user_id: str, request: Request, current_user: CurrentUser = Depends(get_current_user_with_access)):
     """[MFA] Bris de glace : le PROPRIÉTAIRE réinitialise la 2FA d'un membre qui a perdu son
     authentificateur ET ses codes de secours. Sans cela, imposer la 2FA verrouillerait à jamais un tel
     membre. Effet : on supprime son doc user_mfa → il redevient non-enrôlé → forcé de re-configurer sa
@@ -7202,7 +7388,122 @@ def reset_member_mfa(user_id: str, current_user: CurrentUser = Depends(get_curre
     if not target:
         raise HTTPException(404, "Membre introuvable")
     db.user_mfa.delete_one({"user_id": user_id})
+    _audit("org.member.mfa_reset", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=org["id"], category="admin",
+           target_type="user", target_id=user_id)
     return {"reset": True, "user_id": user_id}
+
+
+def _audit_require_owner(current_user):
+    """Le journal d'audit est réservé au PROPRIÉTAIRE (contrôle admin). Retourne l'org ou lève 403."""
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0, "owner_id": 1})
+    if not org or org.get("owner_id") != current_user.id:
+        raise HTTPException(403, "Réservé au propriétaire de l'organisation")
+    return org
+
+
+def _audit_query(current_user, category, outcome, actor, start, end):
+    q = {"organization_id": current_user.organization_id}
+    if category:
+        q["category"] = category
+    if outcome:
+        q["outcome"] = outcome
+    if actor:
+        q["actor_email"] = actor
+    # Les dates du filtre sont interprétées comme des BORNES DE JOUR AU QUÉBEC (America/Toronto)
+    # puis converties en UTC : sinon un événement du soir québécois (déjà le lendemain en UTC) serait
+    # exclu d'un filtre « Au: ce jour » → l'auditeur raterait des entrées.
+    try:
+        from zoneinfo import ZoneInfo
+        _tz = ZoneInfo("America/Toronto")
+    except Exception:
+        _tz = timezone.utc
+    ts = {}
+    ds = _parse_iso_date(start) if start else None
+    de = _parse_iso_date(end) if end else None
+    if ds:
+        ts["$gte"] = datetime(ds.year, ds.month, ds.day, 0, 0, 0, tzinfo=_tz).astimezone(timezone.utc)
+    if de:
+        ts["$lte"] = datetime(de.year, de.month, de.day, 23, 59, 59, tzinfo=_tz).astimezone(timezone.utc)
+    if ts:
+        q["ts"] = ts
+    return q
+
+
+def _audit_serialize(d):
+    ts = d.get("ts")
+    if hasattr(ts, "isoformat"):
+        d["ts"] = ts.isoformat()
+    return d
+
+
+@app.get("/api/org/audit-logs")
+def get_audit_logs(response: Response, current_user: CurrentUser = Depends(get_current_user_with_access),
+                   limit: int = 100, skip: int = 0, category: str = None,
+                   outcome: str = None, actor: str = None, start: str = None, end: str = None):
+    """Journal d'audit (Loi 25), propriétaire seulement. Filtres : category (data/auth/security/admin),
+    outcome, actor (courriel), start/end (dates ISO, bornes de jour au Québec). Trié du plus récent au
+    plus ancien, paginé."""
+    _audit_require_owner(current_user)
+    _enforce_org_mfa(current_user)   # cohérent avec l'imposition org : pas d'accès données sans 2FA
+    _apply_ledger_no_store(response)
+    limit = max(1, min(int(limit or 100), 500))
+    skip = max(0, int(skip or 0))
+    q = _audit_query(current_user, category, outcome, actor, start, end)
+    total = db.audit_logs.count_documents(q)
+    cur = db.audit_logs.find(q, {"_id": 0}).sort("ts", -1).skip(skip).limit(limit)
+    return {"logs": [_audit_serialize(d) for d in cur], "total": total, "limit": limit, "skip": skip}
+
+
+@app.get("/api/org/audit-logs/export")
+def export_audit_logs(response: Response, format: str = "csv",
+                      current_user: CurrentUser = Depends(get_current_user_with_access),
+                      category: str = None, outcome: str = None, actor: str = None,
+                      start: str = None, end: str = None):
+    """Export du journal d'audit pour la conformité / SIEM (propriétaire seulement). CSV (BOM Excel,
+    cellules assainies) ou JSON. no-store. Borné à 50 000 lignes par export ; si l'export est TRONQUÉ,
+    les en-têtes X-Audit-Export-Total / -Returned / -Truncated le signalent (jamais de troncature
+    silencieuse — l'auditeur doit resserrer les filtres pour tout obtenir)."""
+    _AUDIT_EXPORT_CAP = 50000
+    _audit_require_owner(current_user)
+    _enforce_org_mfa(current_user)
+    _apply_ledger_no_store(response)
+    q = _audit_query(current_user, category, outcome, actor, start, end)
+    total = db.audit_logs.count_documents(q)
+    docs = list(db.audit_logs.find(q, {"_id": 0}).sort("ts", -1).limit(_AUDIT_EXPORT_CAP))
+    docs = [_audit_serialize(d) for d in docs]
+    trunc_headers = {
+        "X-Audit-Export-Total": str(total),
+        "X-Audit-Export-Returned": str(len(docs)),
+        "X-Audit-Export-Truncated": "true" if total > len(docs) else "false",
+    }
+    for k, v in trunc_headers.items():
+        response.headers[k] = v
+    if (format or "csv").lower() == "json":
+        return docs
+    import csv as _csv
+    import json as _json
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["Date (UTC)", "Acteur", "Action", "Catégorie", "Type cible", "Cible",
+                "Résultat", "IP", "Détails"])
+    for d in docs:
+        meta = d.get("metadata")
+        w.writerow([
+            _sanitize_cell(d.get("ts") or ""),
+            _sanitize_cell(d.get("actor_email") or d.get("actor_user_id") or ""),
+            _sanitize_cell(d.get("action") or ""),
+            _sanitize_cell(d.get("category") or ""),
+            _sanitize_cell(d.get("target_type") or ""),
+            _sanitize_cell(d.get("target_label") or d.get("target_id") or ""),
+            _sanitize_cell(d.get("outcome") or ""),
+            _sanitize_cell(d.get("ip") or ""),
+            _sanitize_cell(_json.dumps(meta, ensure_ascii=False) if meta else ""),
+        ])
+    data = ("﻿" + buf.getvalue()).encode("utf-8")
+    return Response(content=data, media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="journal-audit.csv"',
+                             "Cache-Control": "no-store", **trunc_headers})
 
 # ─── Clients CRUD ───
 @app.get("/api/clients")
@@ -12888,6 +13189,15 @@ def seed_data():
         _safe_index(db.login_attempts, "updated_at", "login_attempts.ttl", expireAfterSeconds=3600)
         # [MFA] état double authentification (secret TOTP + codes de secours), 1 doc par user.
         _safe_index(db.user_mfa, "user_id", "user_mfa.user_id", unique=True)
+        # [Journal d'audit — Loi 25] index de requête (org + tri par date, filtres) + TTL 12 mois.
+        # `ts` est une date BSON → le TTL purge automatiquement au-delà de la rétention.
+        _safe_index(db.audit_logs, [("organization_id", 1), ("ts", -1)], "audit_logs.org_ts")
+        _safe_index(db.audit_logs, [("organization_id", 1), ("category", 1), ("ts", -1)],
+                    "audit_logs.org_cat_ts")
+        _safe_index(db.audit_logs, [("organization_id", 1), ("actor_user_id", 1), ("ts", -1)],
+                    "audit_logs.org_actor_ts")
+        _safe_index(db.audit_logs, "ts", "audit_logs.ttl",
+                    expireAfterSeconds=_AUDIT_RETENTION_DAYS * 24 * 3600)
         print("Database indexes created")
 
         # [ROBUSTESSE] Chaque migration est ISOLÉE dans son propre try/except : le bloc de

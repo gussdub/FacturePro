@@ -5,6 +5,7 @@ import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
 import MfaSettings from '../components/MfaSettings';
+import AuditLog from '../components/AuditLog';
 import { useAuth } from '../context/AuthContext';
 import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS, roleLabel } from '../constants/permissions';
 
@@ -199,10 +200,30 @@ const SettingsPage = () => {
         >
           Sécurité
         </button>
+        {currentUserRole === 'owner' && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('audit')}
+            data-testid="tab-audit"
+            style={{
+              background: 'none', border: 'none', padding: '12px 20px', cursor: 'pointer',
+              fontSize: 14, fontWeight: 600,
+              color: activeTab === 'audit' ? '#00A08C' : '#6b7280',
+              borderBottom: activeTab === 'audit' ? '2px solid #00A08C' : '2px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            Journal d'audit
+          </button>
+        )}
       </div>
 
       {activeTab === 'security' && (
         <div style={{ padding: '8px 0' }}><MfaSettings /></div>
+      )}
+
+      {activeTab === 'audit' && currentUserRole === 'owner' && (
+        <div style={{ padding: '8px 0' }}><AuditLog /></div>
       )}
 
       {activeTab === 'team' && hasPermission('team:manage') && (
