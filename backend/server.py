@@ -8069,6 +8069,13 @@ def _cmp_expense_brief(exp):
     }
 
 
+# Repli « correspondance probable » : quand AUCUN match par nom n'existe, mais qu'une dépense non
+# rapprochée a le MÊME montant (±0,01) à une date proche. Fenêtre volontairement plus serrée que le
+# match par nom (10 j) : sans le signal du nom, on ne s'appuie que sur montant+date, donc on exige
+# une proximité stricte. Et UNIQUEMENT si UN SEUL candidat (voir _reconciliation_comparison passe 2).
+_CMP_POSSIBLE_DATE_WINDOW_DAYS = 5
+
+
 def _reconciliation_comparison(import_id, scope):
     """Compare les RETRAITS (débits) d'un relevé importé aux dépenses existantes.
 
@@ -8076,20 +8083,28 @@ def _reconciliation_comparison(import_id, scope):
     - « concordante » : une dépense existe, montant CAD identique (± 0,01) — ou déjà rapprochée ;
     - « ecart » : une dépense existe (même fournisseur + date proche) mais le CAD DIFFÈRE
       (conversion USD, frais de change/banque) → l'utilisateur pourra « adopter le montant banque » ;
-    - « absente » : aucune dépense ne correspond → l'utilisateur pourra « créer » (optionnel).
+    - « possible » : AUCUN match par nom, mais une SEULE dépense non rapprochée a le même montant
+      (±0,01) à une date proche (≤ 5 j) → probablement le même commerçant sous un autre nom (ex. le
+      terminal de paiement affiche « Pêcherie Manicouagan » alors que le reçu dit « Resto-Poissonnerie
+      Manic ») → l'utilisateur pourra « Lier » (au lieu de recréer un doublon) ;
+    - « absente » : aucune correspondance fiable → l'utilisateur pourra « créer » (optionnel).
 
-    Appariement par NOM (vendor/description direct OU alias appris) + date proche (≤ 10 j). Le montant
-    n'est PAS un filtre : c'est justement l'écart qu'on veut faire ressortir. Les CRÉDITS (dépôts →
-    factures) sont hors de ce rapport. Aucune création/modification : ce sont des ACTIONS séparées."""
+    DEUX PASSES pour ne pas laisser le repli faible (montant seul) voler une dépense qu'un match par
+    NOM (signal fort) réclamerait : passe 1 = déjà-rapprochées + match par nom (vendor/description
+    direct OU alias appris, ± 10 j) ; passe 2 = repli montant exact + date proche, sur les seules
+    dépenses NON consommées par la passe 1, et SEULEMENT si le candidat est unique (sinon « absente »,
+    on ne devine jamais). Le montant n'est jamais un filtre en passe 1 : c'est l'écart qu'on montre.
+    Les CRÉDITS (dépôts → factures) sont hors scope. Aucune création/modification (actions séparées)."""
     txs = list(db.bank_transactions.find(
         {"import_id": import_id, **scope}, {"_id": 0}).sort("row_index", 1))
     open_expenses = list(db.expenses.find(
         {**scope, "bank_transaction_id": None}, {"_id": 0}))
     aliases = list(db.bank_match_aliases.find(scope, {"_id": 0}))
-    lines = []
-    n_concord = n_ecart = n_absent = 0
-    total_ecart = 0.0
     used = set()  # dépenses déjà appariées dans CE run : une dépense ≠ 2 transactions du relevé
+    result_by_tx = {}     # tx_id -> ligne (assemblées en ordre de relevé à la fin)
+    deferred = []         # débits sans match par nom → passe 2 : (tx, base, bank_amount, tx_date)
+
+    # ── PASSE 1 : déjà-rapprochées + match par NOM ──
     for tx in txs:
         if tx.get("parse_error") or tx.get("status") == "ignored":
             continue
@@ -8111,13 +8126,9 @@ def _reconciliation_comparison(import_id, scope):
             # Déjà rapprochée mais écart RÉSIDUEL (ex. dépense CAD non ajustée) → on ne cache jamais
             # l'écart : statut « ecart » (le rapport doit toujours faire ressortir une divergence).
             status = "concordante" if abs(ecart) <= 0.01 else "ecart"
-            lines.append({**base, "status": status, "already_matched": True,
-                          "expense": _cmp_expense_brief(exp), "ecart": ecart, "can_adopt": False})
-            if status == "ecart":
-                n_ecart += 1
-                total_ecart += ecart
-            else:
-                n_concord += 1
+            result_by_tx[tx["id"]] = {**base, "status": status, "already_matched": True,
+                                      "expense": _cmp_expense_brief(exp), "ecart": ecart,
+                                      "can_adopt": False}
             continue
 
         # Meilleure dépense NON rapprochée ET NON déjà consommée dans ce run, par NOM + date
@@ -8141,32 +8152,71 @@ def _reconciliation_comparison(import_id, scope):
                 best, best_key = exp, key
 
         if best is None:
-            lines.append({**base, "status": "absente", "expense": None,
-                          "ecart": None, "can_adopt": False})
-            n_absent += 1
+            deferred.append((tx, base, bank_amount, tx_date))  # → passe 2
+            continue
+        used.add(best.get("id"))
+        exp_cad = round(float(best.get("amount_cad", 0) or 0), 2)
+        ecart = round(bank_amount - exp_cad, 2)
+        status = "concordante" if abs(ecart) <= 0.01 else "ecart"
+        cur = (best.get("currency") or "CAD").strip().upper()
+        # « Adopter le montant banque » n'agit QUE sur une dépense en DEVISE ÉTRANGÈRE
+        # (_apply_match). Sur une dépense CAD avec écart, adopter serait un no-op trompeur →
+        # on ne l'offre pas ; l'écart reste affiché (saisie à vérifier/corriger manuellement).
+        can_adopt = status == "ecart" and cur not in ("", "CAD")
+        result_by_tx[tx["id"]] = {**base, "status": status,
+                                  "expense": _cmp_expense_brief(best),
+                                  "ecart": ecart, "can_adopt": can_adopt}
+
+    # ── PASSE 2 : repli MONTANT EXACT + date proche, sur les dépenses non consommées, UNIQUE only ──
+    # D'abord, candidats montant+date par transaction différée + DEMANDE par dépense (combien de
+    # transactions différées la revendiquent). Une correspondance « probable » exige une unicité
+    # BIDIRECTIONNELLE : une seule dépense candidate pour la transaction ET une seule transaction
+    # candidate pour la dépense. Sinon (2 débits même montant ↔ 1 dépense, ou l'inverse) c'est
+    # ambigu → « absente » (on ne devine jamais quel débit correspond).
+    deferred_cands = []
+    exp_demand = {}
+    for tx, base, bank_amount, tx_date in deferred:
+        cands = []
+        for exp in open_expenses:
+            if exp.get("id") in used:
+                continue
+            if abs(round(float(exp.get("amount_cad", 0) or 0), 2) - bank_amount) > 0.01:
+                continue
+            edate = _parse_iso_date(exp.get("expense_date") or exp.get("date"))
+            if not (tx_date and edate) or abs((tx_date - edate).days) > _CMP_POSSIBLE_DATE_WINDOW_DAYS:
+                continue
+            cands.append(exp)
+        deferred_cands.append((tx, base, bank_amount, cands))
+        for exp in cands:
+            exp_demand[exp.get("id")] = exp_demand.get(exp.get("id"), 0) + 1
+
+    for tx, base, bank_amount, cands in deferred_cands:
+        exp = cands[0] if len(cands) == 1 else None
+        # probable seulement si unique des DEUX côtés (tx→dépense ET dépense→tx)
+        if exp is not None and exp_demand.get(exp.get("id"), 0) == 1:
+            exp_cad = round(float(exp.get("amount_cad", 0) or 0), 2)
+            result_by_tx[tx["id"]] = {**base, "status": "possible",
+                                      "expense": _cmp_expense_brief(exp),
+                                      "ecart": round(bank_amount - exp_cad, 2),
+                                      "can_adopt": False, "can_link": True}
         else:
-            used.add(best.get("id"))
-            exp_cad = round(float(best.get("amount_cad", 0) or 0), 2)
-            ecart = round(bank_amount - exp_cad, 2)
-            status = "concordante" if abs(ecart) <= 0.01 else "ecart"
-            cur = (best.get("currency") or "CAD").strip().upper()
-            # « Adopter le montant banque » n'agit QUE sur une dépense en DEVISE ÉTRANGÈRE
-            # (_apply_match). Sur une dépense CAD avec écart, adopter serait un no-op trompeur →
-            # on ne l'offre pas ; l'écart reste affiché (saisie à vérifier/corriger manuellement).
-            can_adopt = status == "ecart" and cur not in ("", "CAD")
-            lines.append({**base, "status": status, "expense": _cmp_expense_brief(best),
-                          "ecart": ecart, "can_adopt": can_adopt})
-            if status == "ecart":
-                n_ecart += 1
-                total_ecart += ecart
-            else:
-                n_concord += 1
+            result_by_tx[tx["id"]] = {**base, "status": "absente", "expense": None,
+                                      "ecart": None, "can_adopt": False}
+
+    # ── Assemblage en ordre de relevé + décompte ──
+    lines = [result_by_tx[tx["id"]] for tx in txs if tx["id"] in result_by_tx]
+    n_concord = sum(1 for ln in lines if ln["status"] == "concordante")
+    n_ecart = sum(1 for ln in lines if ln["status"] == "ecart")
+    n_possible = sum(1 for ln in lines if ln["status"] == "possible")
+    n_absent = sum(1 for ln in lines if ln["status"] == "absente")
+    total_ecart = round(sum(ln["ecart"] for ln in lines
+                            if ln["status"] == "ecart" and ln.get("ecart") is not None), 2)
 
     return {
         "import_id": import_id,
-        "summary": {"concordante": n_concord, "ecart": n_ecart, "absente": n_absent,
-                    "total_fx_ecart": round(total_ecart, 2),
-                    "total_debits": n_concord + n_ecart + n_absent},
+        "summary": {"concordante": n_concord, "ecart": n_ecart, "possible": n_possible,
+                    "absente": n_absent, "total_fx_ecart": total_ecart,
+                    "total_debits": n_concord + n_ecart + n_possible + n_absent},
         "lines": lines,
     }
 
@@ -8179,7 +8229,8 @@ def _bank_read_scope(current_user):
     ]}
 
 
-_CMP_STATUS_FR = {"concordante": "Concordante", "ecart": "Écart", "absente": "Absente"}
+_CMP_STATUS_FR = {"concordante": "Concordante", "ecart": "Écart",
+                  "possible": "Correspondance probable", "absente": "Absente"}
 
 
 @app.get("/api/bank/imports/{import_id}/comparison")
@@ -8207,7 +8258,8 @@ def _render_comparison_pdf(report, org_id, import_label):
     body = ParagraphStyle("CMP", parent=S["small"], fontSize=8, textColor=S["dark"], leading=10)
     s = report["summary"]
     subtitle = (f"{import_label} · {s['concordante']} concordante(s) · {s['ecart']} écart(s) · "
-                f"{s['absente']} absente(s) · écart de change total {_ledger_pdf_money(s['total_fx_ecart'])}")
+                f"{s.get('possible', 0)} probable(s) · {s['absente']} absente(s) · "
+                f"écart de change total {_ledger_pdf_money(s['total_fx_ecart'])}")
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(letter), topMargin=0.5 * inch,
                             bottomMargin=0.5 * inch, leftMargin=0.5 * inch, rightMargin=0.5 * inch)
@@ -8241,7 +8293,7 @@ def _render_comparison_pdf(report, org_id, import_label):
     # Couleur de l'état par ligne
     for i, ln in enumerate(report["lines"], start=1):
         col = {"concordante": HexColor("#059669"), "ecart": HexColor("#b45309"),
-               "absente": HexColor("#dc2626")}.get(ln["status"])
+               "possible": HexColor("#7c3aed"), "absente": HexColor("#dc2626")}.get(ln["status"])
         if col:
             style.append(("TEXTCOLOR", (0, i), (0, i), col))
             style.append(("FONTNAME", (0, i), (0, i), "Helvetica-Bold"))

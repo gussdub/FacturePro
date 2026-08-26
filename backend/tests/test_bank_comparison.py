@@ -154,6 +154,110 @@ class TestComparison:
         assert len(nflx) == 2
         assert sorted(l["status"] for l in nflx) == ["absente", "concordante"]
 
+    def test_possible_match_different_name_same_amount_date(self, recon_org):
+        # Cas réel « Pêcherie » : le terminal de paiement affiche un nom (banque) sans aucun mot
+        # commun avec le nom du reçu (dépense), mais montant + date identiques → « correspondance
+        # probable » (Lier), PAS « absente/Créer » (sinon doublon).
+        org_id, import_id = recon_org["org_id"], recon_org["import_id"]
+        db.expenses.insert_one({"id": str(_uuid.uuid4()), "organization_id": org_id,
+            "vendor": "Resto-Poissonnerie Manic", "description": "Resto-Poissonnerie Manic",
+            "amount_cad": 225.34, "currency": "CAD", "expense_date": "2026-07-15",
+            "bank_transaction_id": None})
+        db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+            "organization_id": org_id, "date": "2026-07-15",
+            "description": "PECHERIE MANICOUAGAN LES ESCOUMINSQC", "amount_cad": -225.34,
+            "status": "unmatched", "match_kind": None, "match_id": None, "row_index": 20,
+            "parse_error": False})
+        rep = _reconciliation_comparison(import_id, recon_org["scope"])
+        line = next(l for l in rep["lines"] if "PECHERIE" in l["description"])
+        assert line["status"] == "possible"
+        assert line["can_link"] is True
+        assert line["expense"]["vendor"] == "Resto-Poissonnerie Manic"
+        assert line["ecart"] == 0.0
+        assert rep["summary"]["possible"] == 1
+
+    def test_possible_ambiguous_two_candidates_stays_absente(self, recon_org):
+        # Deux dépenses au MÊME montant exact + date proche, sans match par nom → ambigu → on ne
+        # devine pas : reste « absente » (jamais de correspondance probable si ≥2 candidats).
+        org_id, import_id = recon_org["org_id"], recon_org["import_id"]
+        for v in ("Alpha Bureau", "Beta Fournitures"):
+            db.expenses.insert_one({"id": str(_uuid.uuid4()), "organization_id": org_id,
+                "vendor": v, "description": v, "amount_cad": 61.00, "currency": "CAD",
+                "expense_date": "2026-07-10", "bank_transaction_id": None})
+        db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+            "organization_id": org_id, "date": "2026-07-10", "description": "ZZZ TERMINAL 4001",
+            "amount_cad": -61.00, "status": "unmatched", "match_kind": None, "match_id": None,
+            "row_index": 21, "parse_error": False})
+        rep = _reconciliation_comparison(import_id, recon_org["scope"])
+        line = next(l for l in rep["lines"] if "ZZZ TERMINAL" in l["description"])
+        assert line["status"] == "absente" and line["expense"] is None
+
+    def test_possible_reverse_ambiguous_two_txs_one_expense(self, recon_org):
+        # Unicité BIDIRECTIONNELLE : 2 débits au même montant + date proche pour UNE seule dépense
+        # (sans match par nom) → on ne devine pas lequel correspond → les DEUX restent « absente ».
+        org_id, import_id = recon_org["org_id"], recon_org["import_id"]
+        db.expenses.insert_one({"id": str(_uuid.uuid4()), "organization_id": org_id,
+            "vendor": "Traiteur Unique", "description": "Traiteur Unique", "amount_cad": 73.50,
+            "currency": "CAD", "expense_date": "2026-07-12", "bank_transaction_id": None})
+        for ridx, d in ((30, "2026-07-12"), (31, "2026-07-13")):
+            db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+                "organization_id": org_id, "date": d, "description": f"QQQ TERMINAL {ridx}",
+                "amount_cad": -73.50, "status": "unmatched", "match_kind": None,
+                "match_id": None, "row_index": ridx, "parse_error": False})
+        rep = _reconciliation_comparison(import_id, recon_org["scope"])
+        qqq = [l for l in rep["lines"] if "QQQ TERMINAL" in l["description"]]
+        assert len(qqq) == 2
+        assert all(l["status"] == "absente" for l in qqq)   # jamais « possible » quand ambigu côté tx
+        assert rep["summary"]["possible"] == 0
+
+    def test_name_match_wins_over_possible_no_stealing(self, recon_org):
+        # Deux passes : un match par NOM (signal fort) doit réclamer la dépense AVANT que le repli
+        # montant (signal faible) d'une autre transaction ne la « vole ». Ici tx1 (sans nom) et tx2
+        # (avec nom) visent la même unique dépense → tx2 concordante, tx1 absente.
+        org_id, import_id = recon_org["org_id"], recon_org["import_id"]
+        db.expenses.insert_one({"id": str(_uuid.uuid4()), "organization_id": org_id,
+            "vendor": "Bistro Central", "description": "Bistro Central", "amount_cad": 88.00,
+            "currency": "CAD", "expense_date": "2026-07-20", "bank_transaction_id": None})
+        db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+            "organization_id": org_id, "date": "2026-07-20", "description": "MYSTERY DEBIT 77",
+            "amount_cad": -88.00, "status": "unmatched", "match_kind": None, "match_id": None,
+            "row_index": 22, "parse_error": False})  # sans nom, row AVANT le match par nom
+        db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+            "organization_id": org_id, "date": "2026-07-20", "description": "BISTRO CENTRAL MTL",
+            "amount_cad": -88.00, "status": "unmatched", "match_kind": None, "match_id": None,
+            "row_index": 23, "parse_error": False})  # match par nom
+        rep = _reconciliation_comparison(import_id, recon_org["scope"])
+        mystery = next(l for l in rep["lines"] if "MYSTERY" in l["description"])
+        bistro = next(l for l in rep["lines"] if "BISTRO" in l["description"])
+        assert bistro["status"] == "concordante"          # le nom fort réclame la dépense
+        assert mystery["status"] == "absente"             # le faible ne la vole pas
+
+    def test_possible_respects_date_window(self, recon_org):
+        # Repli montant exact : accepté à ≤5 j, rejeté au-delà (sans le signal du nom, on exige
+        # une proximité stricte).
+        org_id, import_id = recon_org["org_id"], recon_org["import_id"]
+        # Paire A : 5 jours → possible
+        db.expenses.insert_one({"id": str(_uuid.uuid4()), "organization_id": org_id,
+            "vendor": "Cabane Sucre", "description": "Cabane Sucre", "amount_cad": 45.00,
+            "currency": "CAD", "expense_date": "2026-07-01", "bank_transaction_id": None})
+        db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+            "organization_id": org_id, "date": "2026-07-06", "description": "AAA TERMINAL 1",
+            "amount_cad": -45.00, "status": "unmatched", "match_kind": None, "match_id": None,
+            "row_index": 24, "parse_error": False})
+        # Paire B : 7 jours → absente (hors fenêtre)
+        db.expenses.insert_one({"id": str(_uuid.uuid4()), "organization_id": org_id,
+            "vendor": "Ferme Lointaine", "description": "Ferme Lointaine", "amount_cad": 47.00,
+            "currency": "CAD", "expense_date": "2026-07-01", "bank_transaction_id": None})
+        db.bank_transactions.insert_one({"id": str(_uuid.uuid4()), "import_id": import_id,
+            "organization_id": org_id, "date": "2026-07-08", "description": "BBB TERMINAL 2",
+            "amount_cad": -47.00, "status": "unmatched", "match_kind": None, "match_id": None,
+            "row_index": 25, "parse_error": False})
+        rep = _reconciliation_comparison(import_id, recon_org["scope"])
+        a = next(l for l in rep["lines"] if "AAA TERMINAL" in l["description"])
+        b = next(l for l in rep["lines"] if "BBB TERMINAL" in l["description"])
+        assert a["status"] == "possible"
+        assert b["status"] == "absente"
+
 
 @pytest.fixture
 def auth_headers():

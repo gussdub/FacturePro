@@ -133,6 +133,25 @@ export default function BankMatchingScreen({ importId, onBack }) {
            amount_cad: -Math.abs(line.bank_amount || 0) };
     setShowComparison(false); setOpenCreate(tx);
   };
+  // « Lier » (correspondance probable) : même montant + date qu'une dépense existante mais nom
+  // différent (ex. terminal « Pêcherie Manicouagan » vs reçu « Resto-Poissonnerie Manic »). On
+  // rapproche la transaction à CETTE dépense au lieu d'en recréer une (doublon). Réutilise /match.
+  const linkExpense = async (line) => {
+    const e = line.expense || {};
+    if (!window.confirm(
+      `Lier cette transaction à la dépense existante « ${e.vendor || e.description || ""} » `
+      + `(${fmt(e.amount_cad)} $) ?\n\nÀ utiliser si c'est le même commerçant sous un autre nom.`)) return;
+    setCmpBusy(true);
+    try {
+      await axios.post(`${BACKEND_URL}/api/bank/transactions/${line.tx_id}/match`,
+                       { kind: "expense", target_id: e.id });
+    } catch (err) {
+      alert(err.response?.data?.detail || "Erreur lors du lien.");
+    } finally {
+      try { await fetchData(); await refreshComparison(); } catch { /* rapport gardé tel quel */ }
+      setCmpBusy(false);
+    }
+  };
   const cmpDownload = async (ext, mime) => {
     try {
       const r = await axios.get(`${BACKEND_URL}/api/bank/imports/${importId}/comparison/${ext}`,
@@ -260,6 +279,9 @@ export default function BankMatchingScreen({ importId, onBack }) {
                           fontSize: 13, borderBottom: "1px solid #f3f4f6", alignItems: "center" }}>
               <span style={{ color: "#059669", fontWeight: 600 }}>✓ {comparison.summary.concordante} concordante(s)</span>
               <span style={{ color: "#b45309", fontWeight: 600 }}>⚠ {comparison.summary.ecart} écart(s)</span>
+              {comparison.summary.possible > 0 && (
+                <span style={{ color: "#7c3aed", fontWeight: 600 }}>≈ {comparison.summary.possible} probable(s)</span>
+              )}
               <span style={{ color: "#dc2626", fontWeight: 600 }}>＋ {comparison.summary.absente} absente(s)</span>
               <span style={{ color: "#6b7280" }}>Écart de change total : {fmt(comparison.summary.total_fx_ecart)} $</span>
               <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
@@ -275,6 +297,7 @@ export default function BankMatchingScreen({ importId, onBack }) {
                 const meta = {
                   concordante: { c: "#059669", t: "Concordante", bg: "#ecfdf5" },
                   ecart: { c: "#b45309", t: "Écart", bg: "#fffbeb" },
+                  possible: { c: "#7c3aed", t: "Correspondance probable", bg: "#f5f3ff" },
                   absente: { c: "#dc2626", t: "Absente", bg: "#fef2f2" },
                 }[ln.status] || { c: "#6b7280", t: ln.status, bg: "#f9fafb" };
                 return (
@@ -308,6 +331,17 @@ export default function BankMatchingScreen({ importId, onBack }) {
                           <span style={{ fontSize: 11, color: "#b45309" }}>
                             {ln.already_matched ? "déjà rapprochée" : "à vérifier (dépense CAD)"}
                           </span>
+                        )}
+                        {ln.status === "possible" && ln.can_link && !isClosed && (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                            <button onClick={() => linkExpense(ln)} disabled={cmpBusy}
+                                    style={cmpBtn("#7c3aed")}>Lier à cette dépense</button>
+                            <button onClick={() => createFromLine(ln)} disabled={cmpBusy}
+                                    style={{ background: "none", border: "none", color: "#6b7280",
+                                             fontSize: 11, cursor: "pointer", textDecoration: "underline" }}>
+                              Créer quand même
+                            </button>
+                          </div>
                         )}
                         {ln.status === "absente" && !isClosed && (
                           <button onClick={() => createFromLine(ln)} style={cmpBtn("#dc2626")}>Créer</button>
