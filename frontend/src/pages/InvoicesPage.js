@@ -35,7 +35,7 @@ const InvoicesPage = () => {
   const [success, setSuccess] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy] = useState('date_desc');
-  const [emailData, setEmailData] = useState({ to_email: '', subject: '', message: '' });
+  const [emailData, setEmailData] = useState({ to_email: '', cc: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState('');
   const [processing, setProcessing] = useState(false);
@@ -204,6 +204,7 @@ const InvoicesPage = () => {
     const client = clients.find(c => c.id === invoice.client_id);
     setEmailData({
       to_email: client?.email || '',
+      cc: '',
       subject: `Facture ${invoice.invoice_number}`,
       message: `Bonjour,\n\nVeuillez trouver ci-joint la facture ${invoice.invoice_number}.\n\nCordialement`
     });
@@ -625,10 +626,17 @@ const InvoicesPage = () => {
             </div>
             <div style={{ padding: '20px 24px' }}>
               <div style={{ marginBottom: '14px' }}>
-                <label style={labelStyle}>Destinataire *</label>
-                <input data-testid="email-to-inv" type="email" value={emailData.to_email}
+                <label style={labelStyle}>Destinataire(s) *</label>
+                <input data-testid="email-to-inv" type="text" value={emailData.to_email}
                   onChange={e => setEmailData(prev => ({ ...prev, to_email: e.target.value }))}
-                  placeholder="email@client.com" required style={inputStyle} />
+                  placeholder="email@client.com, autre@client.com" required style={inputStyle} />
+                <p style={{ color: '#9ca3af', fontSize: '11px', margin: '4px 0 0' }}>Plusieurs adresses ? Séparez-les par des virgules.</p>
+              </div>
+              <div style={{ marginBottom: '14px' }}>
+                <label style={labelStyle}>Cc</label>
+                <input data-testid="email-cc-inv" type="text" value={emailData.cc}
+                  onChange={e => setEmailData(prev => ({ ...prev, cc: e.target.value }))}
+                  placeholder="copie@exemple.com (optionnel)" style={inputStyle} />
               </div>
               <div style={{ marginBottom: '14px' }}>
                 <label style={labelStyle}>Objet</label>

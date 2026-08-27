@@ -82,7 +82,7 @@ const SettingsPage = () => {
         setError('Erreur lors de la sauvegarde automatique');
         setSaveState('error');
       }
-    }, 800);
+    }, 400);
     return () => clearTimeout(t);
   }, [settings, loading, canEditSettings]);
 

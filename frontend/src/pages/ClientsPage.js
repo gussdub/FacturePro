@@ -44,16 +44,20 @@ const ClientsPage = () => {
     setError(''); setSuccess('');
     try {
       if (editingClient) {
-        await axios.put(`${BACKEND_URL}/api/clients/${editingClient.id}`, formData);
+        const res = await axios.put(`${BACKEND_URL}/api/clients/${editingClient.id}`, formData);
+        // Mise à jour directe depuis la réponse (pas de refetch bloquant → réactif)
+        setClients(prev => prev.map(c => (c.id === editingClient.id ? res.data : c)));
         setSuccess('Client modifie avec succes');
       } else {
-        await axios.post(`${BACKEND_URL}/api/clients`, formData);
+        const res = await axios.post(`${BACKEND_URL}/api/clients`, formData);
+        // Append (et non prepend) pour refléter l'ordre d'insertion du serveur — pas de saut de
+        // position au rechargement de la page.
+        setClients(prev => [...prev, res.data]);
         setSuccess('Client cree avec succes');
       }
       setShowForm(false); setEditingClient(null);
       setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '', bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '' });
       setShowTaxNumbers(false);
-      fetchClients();
     } catch (err) {
       setError(err.response?.data?.detail || 'Erreur lors de la sauvegarde');
     }

@@ -6929,6 +6929,21 @@ _AUDIT_DATA_PREFIXES = {
     "/api/settings": "settings", "/api/upload": "file", "/api/files": "file",
 }
 _AUDIT_VERB = {"POST": "create", "PUT": "update", "PATCH": "update", "DELETE": "delete"}
+# Tâches d'audit détachées (fire-and-forget) : on garde une référence forte le temps qu'elles vivent
+# pour qu'elles ne soient pas ramassées par le GC avant la fin de l'écriture.
+_audit_bg_tasks = set()
+# Limiteur DÉDIÉ au journal : les écritures d'audit s'exécutent dans un petit pool BORNÉ, distinct du
+# pool de threads partagé qui sert les requêtes → un ralentissement Mongo sur audit_logs ne peut pas
+# affamer les endpoints métier (les requêtes ne se bloquent jamais derrière l'audit).
+_audit_limiter = None
+
+
+def _get_audit_limiter():
+    global _audit_limiter
+    if _audit_limiter is None:
+        import anyio
+        _audit_limiter = anyio.CapacityLimiter(4)
+    return _audit_limiter
 
 
 def _audit(action, *, request=None, actor_user_id=None, actor_email=None,
@@ -7022,14 +7037,37 @@ async def _audit_mutations_mw(request, call_next):
                 target_id = rest.split("/")[0] if rest else None
                 auth = request.headers.get("authorization") or ""
                 token = auth[7:] if auth.lower().startswith("bearer ") else None
-                from starlette.concurrency import run_in_threadpool
-                await run_in_threadpool(
+                # FIRE-AND-FORGET : l'écriture d'audit ne doit PAS être sur le chemin de réponse
+                # (sinon chaque mutation attend 2 allers-retours Mongo → latence ressentie). On la
+                # détache : run_in_threadpool sort le pymongo synchrone de l'event-loop, create_task
+                # rend la main immédiatement. Best-effort (erreurs avalées dans _audit_http_mutation).
+                import asyncio
+                import anyio
+                _t = asyncio.create_task(anyio.to_thread.run_sync(
                     _audit_http_mutation, token, method, path, resource, target_id,
                     response.status_code, _client_ip(request),
-                    (request.headers.get("user-agent") or "")[:300] or None)
+                    (request.headers.get("user-agent") or "")[:300] or None,
+                    limiter=_get_audit_limiter()))
+                _audit_bg_tasks.add(_t)
+                _t.add_done_callback(_audit_bg_tasks.discard)
     except Exception:
         pass  # jamais bloquant : le journal ne casse aucune requête
     return response
+
+
+@app.on_event("shutdown")
+async def _drain_audit_bg_tasks():
+    """Au redéploiement (SIGTERM Render), on laisse les écritures d'audit détachées se terminer
+    (borné) avant de quitter → pas de perte d'entrée sur un arrêt gracieux. Best-effort : ne bloque
+    jamais l'arrêt au-delà du délai."""
+    if not _audit_bg_tasks:
+        return
+    import asyncio
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*list(_audit_bg_tasks), return_exceptions=True), timeout=5.0)
+    except Exception:
+        pass
 
 
 def _login_attempt_key(email: str, ip: str = "") -> str:
@@ -11882,6 +11920,51 @@ def get_invoice_pdf(invoice_id: str, current_user: CurrentUser = Depends(require
         })
 
 # ─── Email Sending ───
+_EMAIL_MAX_RECIPIENTS = 25
+
+
+def _parse_email_list(value):
+    """Normalise une entrée d'adresses (chaîne « a@x, b@y » séparée par , ; ou espaces, OU liste) en
+    liste d'emails validés, dédupliquée (insensible à la casse), dans l'ordre. Lève 400 sur une
+    adresse malformée (chaque adresse doit matcher _EMAIL_RE → pas de saut de ligne / injection)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = re.split(r"[,;\s]+", value)
+    elif isinstance(value, (list, tuple)):
+        raw = []
+        for v in value:
+            raw.extend(re.split(r"[,;\s]+", str(v)))
+    else:
+        raise HTTPException(400, "Format d'adresses invalide")
+    out, seen = [], set()
+    for a in raw:
+        a = a.strip()
+        if not a:
+            continue
+        if not _EMAIL_RE.match(a):
+            raise HTTPException(400, f"Adresse email invalide : {a}")
+        key = a.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(a)
+    return out
+
+
+def _resolve_email_recipients(body, fallback_to):
+    """Construit (to_list, cc_list) pour un envoi : plusieurs destinataires + Cc. Au moins un « To »
+    (repli sur l'email du client). Le Cc ne duplique jamais un « To ». Plafond global anti-abus."""
+    to_list = _parse_email_list(body.get("to_email") or fallback_to)
+    if not to_list:
+        raise HTTPException(400, "Adresse email du destinataire requise")
+    cc_list = _parse_email_list(body.get("cc"))
+    to_lower = {t.lower() for t in to_list}
+    cc_list = [c for c in cc_list if c.lower() not in to_lower]
+    if len(to_list) + len(cc_list) > _EMAIL_MAX_RECIPIENTS:
+        raise HTTPException(400, f"Trop de destinataires (maximum {_EMAIL_MAX_RECIPIENTS})")
+    return to_list, cc_list
+
+
 @app.post("/api/quotes/{quote_id}/send")
 def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     if not RESEND_API_KEY:
@@ -11894,9 +11977,7 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     client_info = db.clients.find_one({"id": quote.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
     products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
 
-    to_email = body.get("to_email") or (client_info or {}).get("email")
-    if not to_email:
-        raise HTTPException(400, "Adresse email du destinataire requise")
+    to_list, cc_list = _resolve_email_recipients(body, (client_info or {}).get("email"))
 
     pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
     pdf_bytes = pdf_buffer.read()
@@ -11909,15 +11990,18 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
 
     params = {
         "from": SENDER_EMAIL,
-        "to": [to_email],
+        "to": to_list,
         "subject": subject,
         "text": message,
         "attachments": [{"filename": f"soumission_{quote_num}.pdf", "content": pdf_b64}]
     }
+    if cc_list:
+        params["cc"] = cc_list
+    sent_to = ", ".join(to_list)
     try:
         r = resend.Emails.send(params)
-        db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
-        return {"message": f"Soumission envoyee a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
+        db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
+        return {"message": f"Soumission envoyee a {sent_to}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
 
@@ -11933,9 +12017,7 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = 
     client_info = db.clients.find_one({"id": invoice.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
     products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
 
-    to_email = body.get("to_email") or (client_info or {}).get("email")
-    if not to_email:
-        raise HTTPException(400, "Adresse email du destinataire requise")
+    to_list, cc_list = _resolve_email_recipients(body, (client_info or {}).get("email"))
 
     pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
     pdf_bytes = pdf_buffer.read()
@@ -11948,15 +12030,18 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = 
 
     params = {
         "from": SENDER_EMAIL,
-        "to": [to_email],
+        "to": to_list,
         "subject": subject,
         "text": message,
         "attachments": [{"filename": f"facture_{inv_num}.pdf", "content": pdf_b64}]
     }
+    if cc_list:
+        params["cc"] = cc_list
+    sent_to = ", ".join(to_list)
     try:
         r = resend.Emails.send(params)
-        db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": to_email}})
-        return {"message": f"Facture envoyee a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
+        db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
+        return {"message": f"Facture envoyee a {sent_to}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
 

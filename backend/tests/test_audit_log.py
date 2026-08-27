@@ -11,6 +11,7 @@ os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
 os.environ.setdefault("JWT_SECRET", "test")
 os.environ.setdefault("DB_NAME", "facturepro")
 
+import time  # noqa: E402
 import pytest  # noqa: E402
 from datetime import datetime  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -18,6 +19,18 @@ from backend import server  # noqa: E402
 from backend.server import app, db  # noqa: E402
 
 client = TestClient(app)
+
+
+def _wait_audit(query, timeout=3.0):
+    """Le middleware écrit le journal en FIRE-AND-FORGET (hors chemin de réponse). On attend donc que
+    l'entrée apparaisse (le portail bloquant de TestClient fait tourner l'event-loop en continu)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        d = db.audit_logs.find_one(query)
+        if d:
+            return d
+        time.sleep(0.05)
+    return None
 
 
 def _register_owner():
@@ -57,8 +70,7 @@ class TestMiddlewareDataAudit:
         # POST /api/clients (mutation métier) → journalisé génériquement par le middleware.
         r = client.post("/api/clients", headers=owner["headers"], json={"name": "Acme"})
         assert r.status_code == 200, r.text
-        log = db.audit_logs.find_one(
-            {"organization_id": owner["org_id"], "action": "client.create"})
+        log = _wait_audit({"organization_id": owner["org_id"], "action": "client.create"})
         assert log is not None
         assert log["category"] == "data"
         assert log["actor_email"] == owner["email"]
@@ -140,6 +152,7 @@ class TestExportAndFilters:
 
     def test_filter_by_category(self, owner):
         client.post("/api/clients", headers=owner["headers"], json={"name": "Acme"})  # data
+        _wait_audit({"organization_id": owner["org_id"], "action": "client.create"})
         r = client.get("/api/org/audit-logs?category=data", headers=owner["headers"])
         assert r.status_code == 200
         assert all(l["category"] == "data" for l in r.json()["logs"])
@@ -184,8 +197,7 @@ class TestCoverageFixes:
         # DELETE /api/files/{id} (préfixe ajouté à l'allowlist) → journalisé même sur 404 (échec).
         r = client.delete(f"/api/files/{_uuid.uuid4()}", headers=owner["headers"])
         assert r.status_code == 404
-        log = db.audit_logs.find_one(
-            {"organization_id": owner["org_id"], "action": "file.delete"})
+        log = _wait_audit({"organization_id": owner["org_id"], "action": "file.delete"})
         assert log is not None and log["outcome"] == "failure"
 
     def test_audit_endpoints_require_mfa_when_org_enforces(self, owner):
@@ -208,6 +220,7 @@ class TestCoverageFixes:
 
     def test_export_truncation_header_present(self, owner):
         client.post("/api/clients", headers=owner["headers"], json={"name": "Acme"})
+        _wait_audit({"organization_id": owner["org_id"], "action": "client.create"})
         r = client.get("/api/org/audit-logs/export?format=csv", headers=owner["headers"])
         assert r.status_code == 200
         assert r.headers.get("X-Audit-Export-Truncated") == "false"
