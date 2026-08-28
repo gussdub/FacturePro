@@ -22,6 +22,9 @@ const RECURRENCE_CONFIG = {
   annual:    { label: 'Annuelle', bg: '#f0fdf4', color: '#166534' },
 };
 
+// Normalise pour une recherche insensible à la casse ET aux accents (é→e, ô→o…).
+const norm = (s) => (s ?? '').toString().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+
 const InvoicesPage = () => {
   const isMobile = useIsMobile();
   const [invoices, setInvoices] = useState([]);
@@ -35,6 +38,7 @@ const InvoicesPage = () => {
   const [success, setSuccess] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy] = useState('date_desc');
+  const [search, setSearch] = useState('');
   const [emailData, setEmailData] = useState({ to_email: '', cc: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState('');
@@ -67,6 +71,24 @@ const InvoicesPage = () => {
   const filteredInvoices = useMemo(() => {
     let list = [...invoices];
     if (filterStatus !== 'all') list = list.filter(i => i.status === filterStatus);
+    // Recherche rapide (client, n°, montant, date, statut) — insensible casse + accents.
+    const q = norm(search).trim();
+    if (q) {
+      list = list.filter(inv => {
+        const clientName = clients.find(c => c.id === inv.client_id)?.name || '';
+        const statusLabel = STATUS_CONFIG[inv.status]?.label || inv.status || '';
+        const dateStr = [inv.created_at, inv.issue_date, inv.due_date]
+          .filter(Boolean)
+          .map(d => { try { return d + ' ' + new Date(d).toLocaleDateString('fr-CA'); } catch { return d; } })
+          .join(' ');
+        const hay = norm([
+          inv.invoice_number, clientName, statusLabel,
+          inv.total, inv.total_cad, inv.subtotal,
+          formatCurrency(inv.total, inv.currency), dateStr,
+        ].filter(v => v !== undefined && v !== null && v !== '').join(' '));
+        return hay.includes(q);
+      });
+    }
     list.sort((a, b) => {
       if (sortBy === 'date_desc') return new Date(b.created_at) - new Date(a.created_at);
       if (sortBy === 'date_asc') return new Date(a.created_at) - new Date(b.created_at);
@@ -75,7 +97,7 @@ const InvoicesPage = () => {
       return 0;
     });
     return list;
-  }, [invoices, filterStatus, sortBy]);
+  }, [invoices, filterStatus, sortBy, search, clients]);
 
   const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Client inconnu';
 
@@ -273,6 +295,17 @@ const InvoicesPage = () => {
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
+          <input data-testid="search-invoices" type="text" value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Rechercher : client, n°, montant, date…"
+            style={{ ...inputStyle, width: '100%', paddingRight: search ? '32px' : undefined }} />
+          {search && (
+            <button type="button" onClick={() => setSearch('')} title="Effacer"
+              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
+                background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px', lineHeight: 1 }}>×</button>
+          )}
+        </div>
         <select data-testid="filter-status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
           style={{ ...inputStyle, width: 'auto', minWidth: '160px' }}>
           <option value="all">Tous les statuts</option>

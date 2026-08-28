@@ -11,6 +11,9 @@ const STATUS_CONFIG = {
   converted: { label: 'Convertie',  bg: '#f3e8ff', color: '#6b21a8', icon: '↗' },
 };
 
+// Normalise pour une recherche insensible à la casse ET aux accents (é→e, ô→o…).
+const norm = (s) => (s ?? '').toString().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+
 const QuotesPage = () => {
   const [quotes, setQuotes] = useState([]);
   const [clients, setClients] = useState([]);
@@ -23,6 +26,7 @@ const QuotesPage = () => {
   const [success, setSuccess] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [sortBy, setSortBy] = useState('date_desc');
+  const [search, setSearch] = useState('');
   const [emailData, setEmailData] = useState({ to_email: '', subject: '', message: '' });
   const [sending, setSending] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState('');
@@ -51,6 +55,24 @@ const QuotesPage = () => {
   const filteredQuotes = useMemo(() => {
     let list = [...quotes];
     if (filterStatus !== 'all') list = list.filter(q => q.status === filterStatus);
+    // Recherche rapide (client, n°, montant, date, statut) — insensible casse + accents.
+    const query = norm(search).trim();
+    if (query) {
+      list = list.filter(q => {
+        const clientName = clients.find(c => c.id === q.client_id)?.name || '';
+        const statusLabel = STATUS_CONFIG[q.status]?.label || q.status || '';
+        const dateStr = [q.created_at, q.issue_date, q.valid_until]
+          .filter(Boolean)
+          .map(d => { try { return d + ' ' + new Date(d).toLocaleDateString('fr-CA'); } catch { return d; } })
+          .join(' ');
+        const hay = norm([
+          q.quote_number, clientName, statusLabel,
+          q.total, q.total_cad, q.subtotal,
+          formatCurrency(q.total, q.currency), dateStr,
+        ].filter(v => v !== undefined && v !== null && v !== '').join(' '));
+        return hay.includes(query);
+      });
+    }
     list.sort((a, b) => {
       if (sortBy === 'date_desc') return new Date(b.created_at) - new Date(a.created_at);
       if (sortBy === 'date_asc') return new Date(a.created_at) - new Date(b.created_at);
@@ -59,7 +81,7 @@ const QuotesPage = () => {
       return 0;
     });
     return list;
-  }, [quotes, filterStatus, sortBy]);
+  }, [quotes, filterStatus, sortBy, search, clients]);
 
   const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Client inconnu';
 
@@ -235,6 +257,17 @@ const QuotesPage = () => {
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
+          <input data-testid="search-quotes" type="text" value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Rechercher : client, n°, montant, date…"
+            style={{ ...inputStyle, width: '100%', paddingRight: search ? '32px' : undefined }} />
+          {search && (
+            <button type="button" onClick={() => setSearch('')} title="Effacer"
+              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)',
+                background: 'none', border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '18px', lineHeight: 1 }}>×</button>
+          )}
+        </div>
         <select data-testid="filter-status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
           style={{ ...inputStyle, width: 'auto', minWidth: '160px' }}>
           <option value="all">Tous les statuts</option>
