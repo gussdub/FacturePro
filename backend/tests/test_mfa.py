@@ -43,7 +43,9 @@ def mfa_user():
 
 
 def _enable_mfa(u):
-    """Active la MFA pour l'utilisateur et retourne (secret, backup_codes)."""
+    """Active la MFA pour l'utilisateur et retourne (secret, backup_codes).
+    [Révocation de session] L'activation N'auto-révoque PAS (la révocation des autres sessions se fait
+    au clic « J'ai noté mes codes » côté front, via /logout-others) → le jeton courant reste valide."""
     r = client.post("/api/auth/mfa/setup", headers=u["headers"])
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]

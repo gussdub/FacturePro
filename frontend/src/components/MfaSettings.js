@@ -16,7 +16,7 @@ const input = {
 };
 
 const MfaSettings = () => {
-  const { user, role, refreshUser } = useAuth();
+  const { user, role, refreshUser, applyToken } = useAuth();
   const enabled = !!user?.mfa_enabled;
 
   const [setupData, setSetupData] = useState(null);   // {secret, otpauth_uri, qr_data_uri}
@@ -28,6 +28,19 @@ const MfaSettings = () => {
   const [busy, setBusy] = useState(false);
   const [orgError, setOrgError] = useState('');
   const [orgBusy, setOrgBusy] = useState(false);
+  const [sessionMsg, setSessionMsg] = useState('');
+  const [sessionBusy, setSessionBusy] = useState(false);
+
+  const logoutOtherSessions = async () => {
+    if (!window.confirm('Déconnecter toutes tes AUTRES sessions (autres appareils/onglets) ? Ta session actuelle reste active.')) return;
+    setSessionBusy(true); setSessionMsg('');
+    try {
+      const r = await axios.post(`${BACKEND_URL}/api/auth/logout-others`);
+      if (r.data?.access_token) await applyToken(r.data.access_token);
+      setSessionMsg('✓ Tes autres sessions ont été déconnectées.');
+    } catch (e) { setSessionMsg(e.response?.data?.detail || 'Erreur'); }
+    finally { setSessionBusy(false); }
+  };
 
   const toggleRequireMfa = async () => {
     setOrgBusy(true); setOrgError('');
@@ -54,9 +67,9 @@ const MfaSettings = () => {
       const r = await axios.post(`${BACKEND_URL}/api/auth/mfa/enable`, { code });
       setBackupCodes(r.data.backup_codes);
       setSetupData(null); setCode('');
-      // NE PAS rafraîchir l'utilisateur ici : sur l'écran d'enrôlement forcé (App.js), passer
-      // mfa_enabled=true démonterait aussitôt ce composant et ferait DISPARAÎTRE les codes de
-      // secours affichés une seule fois. On diffère refreshUser() au clic « J'ai noté mes codes ».
+      // Le jeton courant reste VALIDE ici (l'activation ne révoque pas encore) → les codes de secours
+      // s'affichent sans risque de 401. La révocation des autres sessions se fait au clic
+      // « J'ai noté mes codes » (voir ci-dessous), quand on rafraîchit de toute façon la session.
     } catch (e2) { setError(e2.response?.data?.detail || 'Code invalide'); }
     finally { setBusy(false); }
   };
@@ -65,9 +78,12 @@ const MfaSettings = () => {
     e.preventDefault();
     setBusy(true); setError('');
     try {
-      await axios.post(`${BACKEND_URL}/api/auth/mfa/disable`, { code: disarmCode });
+      const r = await axios.post(`${BACKEND_URL}/api/auth/mfa/disable`, { code: disarmCode });
       setShowDisable(false); setDisarmCode('');
-      await refreshUser();
+      // Désactiver révoque les autres sessions ; on bascule sur le jeton frais (refetch complet →
+      // met à jour mfa_enabled=false). Repli sur refreshUser si le backend ne renvoie pas de jeton.
+      if (r.data?.access_token) await applyToken(r.data.access_token);
+      else await refreshUser();
     } catch (e2) { setError(e2.response?.data?.detail || 'Code invalide'); }
     finally { setBusy(false); }
   };
@@ -96,7 +112,18 @@ const MfaSettings = () => {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontFamily: 'monospace', fontSize: 15 }}>
             {backupCodes.map((c) => <span key={c} style={{ background: 'white', border: '1px solid #d1fae5', borderRadius: 6, padding: '6px 10px', textAlign: 'center' }}>{c}</span>)}
           </div>
-          <button onClick={async () => { setBackupCodes(null); await refreshUser(); }} style={{ ...btn(false), marginTop: 12 }}>J'ai noté mes codes</button>
+          <button onClick={async () => {
+            setBackupCodes(null);
+            // Maintenant que les codes sont notés : on révoque les AUTRES sessions (referme la limite
+            // « activer la 2FA révoque les jetons déjà émis ») et on bascule la session courante sur
+            // le jeton frais renvoyé — puis refetch (mfa_enabled=true). Repli refreshUser si l'appel
+            // échoue (la 2FA reste activée ; l'utilisateur peut relancer via le bouton dédié).
+            try {
+              const r = await axios.post(`${BACKEND_URL}/api/auth/logout-others`);
+              if (r.data?.access_token) await applyToken(r.data.access_token);
+              else await refreshUser();
+            } catch { await refreshUser(); }
+          }} style={{ ...btn(false), marginTop: 12 }}>J'ai noté mes codes</button>
         </div>
       )}
 
@@ -196,6 +223,25 @@ const MfaSettings = () => {
           </label>
         </div>
       )}
+
+      {/* Sessions — déconnecter les autres appareils */}
+      <div style={{ marginTop: 28, paddingTop: 20, borderTop: '1px solid #e5e7eb' }}>
+        <h4 style={{ fontSize: 16, color: '#1f2937', margin: '0 0 4px' }}>Sessions actives</h4>
+        <p style={{ color: '#6b7280', fontSize: 13, marginTop: 0 }}>
+          Un doute sur un accès non autorisé ? Déconnecte toutes tes autres sessions (autres
+          appareils ou onglets). Ta session actuelle reste active.
+        </p>
+        {sessionMsg && (
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
+            padding: '8px 12px', margin: '10px 0', color: '#166534', fontSize: 13 }}>{sessionMsg}</div>
+        )}
+        <button onClick={logoutOtherSessions} disabled={sessionBusy} data-testid="logout-others-btn"
+          style={{ background: '#fff', color: '#b45309', border: '1px solid #fed7aa',
+            padding: '10px 18px', borderRadius: 8, cursor: sessionBusy ? 'wait' : 'pointer',
+            fontSize: 14, fontWeight: 600 }}>
+          {sessionBusy ? '...' : 'Déconnecter mes autres sessions'}
+        </button>
+      </div>
     </div>
   );
 };

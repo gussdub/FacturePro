@@ -49,7 +49,13 @@ export const AuthProvider = ({ children }) => {
     const id = axios.interceptors.response.use(
       (res) => res,
       (err) => {
-        if (err.response?.status === 401 && localStorage.getItem('token')) {
+        // On ne déconnecte QUE si le jeton qui a échoué est bien celui actuellement stocké. Sinon
+        // (multi-onglets : un autre onglet a déjà ré-émis un jeton frais valide dans le localStorage
+        // partagé), on n'efface PAS le jeton frais — on laisse cet onglet se resynchroniser.
+        const stored = localStorage.getItem('token');
+        const failedAuth = err.config?.headers?.Authorization;
+        if (err.response?.status === 401 && stored &&
+            (!failedAuth || failedAuth === `Bearer ${stored}`)) {
           localStorage.removeItem('token');
           setToken(null);
           setUser(null);
@@ -76,6 +82,17 @@ export const AuthProvider = ({ children }) => {
     axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
     await fetchUserAndOrg(access_token);
   };
+
+  // [Révocation de session] Bascule vers un jeton RÉ-ÉMIS (après « déconnecter les autres sessions »
+  // ou désactivation MFA, ou confirmation des codes de secours) sans re-login. Bascule COMPLÈTE :
+  // état + stockage + header + refetch — l'état `token` et le header restent toujours synchronisés
+  // (aucune divergence, donc refreshUser n'utilise jamais un jeton périmé).
+  const applyToken = useCallback(async (access_token) => {
+    localStorage.setItem('token', access_token);
+    axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+    setToken(access_token);
+    await fetchUserAndOrg(access_token);
+  }, [fetchUserAndOrg]);
 
   const login = async (email, password) => {
     try {
@@ -156,7 +173,7 @@ export const AuthProvider = ({ children }) => {
     <AuthContext.Provider value={{
       user, organization, permissions, role,
       token, login, completeMfaChallenge, register, acceptInvite, logout, refreshUser,
-      hasPermission,
+      applyToken, hasPermission,
       isAuthenticated: !!token,
     }}>
       {children}

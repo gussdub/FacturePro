@@ -2148,9 +2148,32 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
-def create_token(user_id: str) -> str:
-    payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(hours=24)}
+def create_token(user_id: str, token_version: int = None) -> str:
+    # [Révocation de session] Le JWT embarque `tv` = version de session de l'utilisateur. Un
+    # incrément de `users.token_version` invalide TOUS les jetons émis avant (les résolveurs
+    # comparent tv du jeton vs token_version en base). Si non fourni, on lit la version courante
+    # (défaut 0 → aucun logout de masse au déploiement : vieux jetons sans tv = 0 = champ absent).
+    if token_version is None:
+        u = db.users.find_one({"id": user_id}, {"_id": 0, "token_version": 1})
+        token_version = int((u or {}).get("token_version", 0) or 0)
+    payload = {"sub": user_id, "tv": token_version,
+               "exp": datetime.now(timezone.utc) + timedelta(hours=24)}
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def _revoke_user_sessions(user_id: str) -> None:
+    """Révoque TOUTES les sessions d'un utilisateur (incrémente token_version) → chaque JWT existant
+    devient invalide à sa prochaine requête (401 → déconnexion côté client)."""
+    db.users.update_one({"id": user_id}, {"$inc": {"token_version": 1}})
+
+
+def _reissue_after_revoke(user_id: str) -> str:
+    """Révoque les autres sessions ET renvoie un jeton FRAIS pour la session courante (elle reste
+    connectée). Incrément atomique + création du jeton avec la nouvelle version."""
+    doc = db.users.find_one_and_update(
+        {"id": user_id}, {"$inc": {"token_version": 1}},
+        projection={"_id": 0, "token_version": 1}, return_document=ReturnDocument.AFTER)
+    return create_token(user_id, int((doc or {}).get("token_version", 0) or 0))
 
 def clean_doc(doc):
     if doc and "_id" in doc:
@@ -3872,6 +3895,8 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         user = db.users.find_one({"id": user_id}, {"_id": 0})
         if not user:
             raise HTTPException(401, "User not found")
+        if payload.get("tv", 0) != int(user.get("token_version", 0) or 0):
+            raise HTTPException(401, "Session révoquée — reconnecte-toi")
         return User(**user)
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
@@ -3904,6 +3929,9 @@ def get_current_user_with_access(credentials: HTTPAuthorizationCredentials = Dep
     user = db.users.find_one({"id": user_id}, {"_id": 0})
     if not user or not user.get("is_active", True):
         raise HTTPException(401, "User not found or inactive")
+    # [Révocation de session] jeton périmé si sa version diffère de celle en base.
+    if payload.get("tv", 0) != int(user.get("token_version", 0) or 0):
+        raise HTTPException(401, "Session révoquée — reconnecte-toi")
 
     org = _get_org_for_user(user)
 
@@ -4452,6 +4480,7 @@ def remove_member(
         {"id": user_id},
         {"$unset": {"organization_id": "", "role": ""}}
     )
+    _revoke_user_sessions(user_id)  # [Révocation] le membre retiré perd l'accès immédiatement
     _audit("org.member.remove", request=request, actor_user_id=current_user.id,
            actor_email=current_user.email, organization_id=current_user.organization_id,
            category="admin", target_type="user", target_id=user_id,
@@ -7217,6 +7246,7 @@ def reset_password(request: dict, req: Request):
         {"$set": {"hashed_password": hash_password(new_password)}}
     )
     db.password_resets.delete_one({"_id": rec["_id"]})  # usage unique
+    _revoke_user_sessions(rec["user_id"])  # [Révocation] un reset de mdp invalide toutes les sessions
     _u = db.users.find_one({"id": rec["user_id"]}, {"_id": 0, "email": 1, "organization_id": 1})
     _audit("auth.password.reset", request=req, actor_user_id=rec["user_id"],
            actor_email=(_u or {}).get("email"), organization_id=(_u or {}).get("organization_id"),
@@ -7337,6 +7367,10 @@ def mfa_enable(body: dict, request: Request, current_user: CurrentUser = Depends
                   "enabled_at": datetime.now(timezone.utc).isoformat()}})
     _audit("mfa.enable", request=request, actor_user_id=current_user.id,
            actor_email=current_user.email, organization_id=current_user.organization_id)
+    # [Révocation] La révocation des AUTRES sessions se fait APRÈS que l'utilisateur a confirmé avoir
+    # noté ses codes de secours (le front appelle /api/auth/logout-others à ce moment) : ainsi le
+    # jeton courant reste valide tant que les codes (affichés une seule fois) sont à l'écran — pas de
+    # 401 intermédiaire qui déconnecterait et ferait perdre les codes.
     return {"enabled": True, "backup_codes": backup_codes}
 
 
@@ -7350,7 +7384,19 @@ def mfa_disable(body: dict, request: Request, current_user: CurrentUser = Depend
     db.user_mfa.delete_one({"user_id": current_user.id})
     _audit("mfa.disable", request=request, actor_user_id=current_user.id,
            actor_email=current_user.email, organization_id=current_user.organization_id)
-    return {"enabled": False}
+    # [Révocation] désactiver la 2FA révoque les autres sessions ; la courante reçoit un jeton frais.
+    fresh = _reissue_after_revoke(current_user.id)
+    return {"enabled": False, "access_token": fresh}
+
+
+@app.post("/api/auth/logout-others")
+def logout_other_sessions(request: Request, current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Déconnecte TOUTES les autres sessions de l'utilisateur (appareils/onglets) et garde la session
+    courante active via un jeton frais. Utile après un doute sur un accès non autorisé."""
+    fresh = _reissue_after_revoke(current_user.id)
+    _audit("auth.sessions.revoked_others", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id, category="auth")
+    return {"access_token": fresh}
 
 
 @app.post("/api/auth/mfa/challenge", response_model=Token)
@@ -7426,6 +7472,7 @@ def reset_member_mfa(user_id: str, request: Request, current_user: CurrentUser =
     if not target:
         raise HTTPException(404, "Membre introuvable")
     db.user_mfa.delete_one({"user_id": user_id})
+    _revoke_user_sessions(user_id)  # [Révocation] tue les sessions live du membre réinitialisé
     _audit("org.member.mfa_reset", request=request, actor_user_id=current_user.id,
            actor_email=current_user.email, organization_id=org["id"], category="admin",
            target_type="user", target_id=user_id)
