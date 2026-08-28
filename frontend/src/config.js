@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-api.onrender.com';
+// Repli aligné sur le backend ACTIF (Render) — l'ancien facturepro-api.onrender.com (backend Emergent
+// obsolète) était périmé. Doit rester identique à l'origine backend autorisée dans la CSP (vercel.json,
+// connect-src/img-src) : en prod, REACT_APP_BACKEND_URL est défini sur Vercel et prime.
+export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'https://facturepro-backend-dkvn.onrender.com';
 
 export const FACTUREPRO_LOGO_FILE_ID = '6b96d4e4-c7c0-45f1-b6c9-1019ab1ef3bd';
 

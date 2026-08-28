@@ -7084,6 +7084,30 @@ async def _audit_mutations_mw(request, call_next):
     return response
 
 
+# En-têtes de sécurité HTTP (audit Loi 25) appliqués à TOUTES les réponses de l'API. HSTS force
+# HTTPS (ignoré sur HTTP local, donc inoffensif en dev) ; nosniff empêche le MIME-sniffing ; DENY
+# bloque le clickjacking (l'API sert du JSON + des fichiers consommés en fetch/img/blob, jamais
+# framés en cross-origin) ; Referrer-Policy limite la fuite d'URL ; Permissions-Policy neutralise
+# des API navigateur inutiles. Pas de CSP ici (elle vit sur le document servi par le frontend, pour
+# ne pas casser les endpoints fichiers/PDF).
+_SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+}
+
+
+@app.middleware("http")
+async def _security_headers_mw(request, call_next):
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        if k not in response.headers:
+            response.headers[k] = v
+    return response
+
+
 @app.on_event("shutdown")
 async def _drain_audit_bg_tasks():
     """Au redéploiement (SIGTERM Render), on laisse les écritures d'audit détachées se terminer
