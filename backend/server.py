@@ -864,6 +864,10 @@ def _sanitize_cell(value):
     empilés comme « \\t=cmd » ou « ==2 »). Tolerates None."""
     if value is None:
         return ""
+    # Nombres / booléens / dates : aucun préfixe d'injection CSV possible → renvoyés tels quels
+    # (csv.writer les sérialise). Évite un AttributeError sur .lstrip pour les cellules non-texte.
+    if not isinstance(value, str):
+        return value
     # Strip only regular spaces so that a leading tab is still detectable
     stripped = value.lstrip(" ")
     changed = False
@@ -7613,6 +7617,153 @@ def export_audit_logs(response: Response, format: str = "csv",
     return Response(content=data, media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="journal-audit.csv"',
                              "Cache-Control": "no-store", **trunc_headers})
+
+
+# ─── Portabilité des données (Loi 25, art. 27) ───
+_EXPORT_COLLECTIONS = [
+    # (collection, générer un CSV en plus du JSON)
+    ("clients", True), ("invoices", True), ("quotes", True), ("products", True),
+    ("employees", True), ("expenses", True), ("company_settings", False),
+    ("chart_of_accounts", False), ("journal_entries", False),
+    ("bank_imports", False), ("bank_transactions", False), ("payment_transactions", False),
+    ("mileage_trips", False), ("mileage_favorites", False), ("mileage_vehicles", False),
+    ("mileage_rate_reminders", False), ("mileage_places", False),
+]
+_EXPORT_FILES_MAX_BYTES = 50 * 1024 * 1024  # plafond des binaires inclus (protège la RAM Render)
+
+
+def _safe_zip_name(s):
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", (s or "").strip())[:80]
+    return s or "sans-nom"
+
+
+def _docs_to_csv_bytes(docs):
+    """CSV (BOM Excel) d'une liste de docs : entêtes = union ordonnée des clés, cellules assainies
+    (_sanitize_cell), valeurs list/dict encodées en JSON. La fidélité complète est dans les JSON ;
+    le CSV est un confort tableur."""
+    import json as _json
+    if not docs:
+        return "﻿".encode("utf-8")
+    keys, seen = [], set()
+    for d in docs:
+        for k in d.keys():
+            if k not in seen:
+                seen.add(k); keys.append(k)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([_sanitize_cell(k) for k in keys])  # en-têtes assainis aussi (nom de champ = cellule)
+    for d in docs:
+        row = []
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, (list, dict)):
+                v = _json.dumps(v, ensure_ascii=False, default=str)
+            row.append(_sanitize_cell("" if v is None else v))
+        w.writerow(row)
+    return ("﻿" + buf.getvalue()).encode("utf-8")
+
+
+def _build_org_export_zip(current_user):
+    """Construit le ZIP d'export complet de l'organisation dans un fichier temporaire (déversé sur
+    disque au-delà de 8 Mo → mémoire bornée, pas de triple copie du ZIP en RAM). N'inclut JAMAIS de
+    secret (mots de passe, MFA, jetons). Binaires (logos + reçus) plafonnés.
+    Retourne (fichier positionné à 0, taille en octets) ; l'appelant DOIT le fermer."""
+    import json as _json
+    import zipfile
+    import tempfile
+    scope = _org_scope(current_user)
+    org_id = current_user.organization_id
+    buf = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+    manifest = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        def _dump(name, obj):
+            z.writestr(f"json/{name}.json", _json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+        for coll, do_csv in _EXPORT_COLLECTIONS:
+            docs = list(db[coll].find(scope, {"_id": 0}))
+            _dump(coll, docs)
+            if do_csv:
+                z.writestr(f"csv/{coll}.csv", _docs_to_csv_bytes(docs))
+            manifest.append(f"  json/{coll}.json ({len(docs)} enregistrement(s))")
+        # Métadonnées fichiers (SANS le binaire)
+        file_docs = list(db.files.find({**scope, "is_deleted": {"$ne": True}}, {"_id": 0, "data": 0}))
+        _dump("files", file_docs)
+        # Organisation (champs Stripe retirés)
+        org = db.organizations.find_one({"id": org_id}, {"_id": 0}) or {}
+        org = {k: v for k, v in org.items() if not k.lower().startswith("stripe")}
+        _dump("organization", org)
+        # Membres — JAMAIS de mot de passe ni de MFA (collections séparées non interrogées)
+        members = list(db.users.find(
+            {"organization_id": org_id},
+            {"_id": 0, "id": 1, "email": 1, "role": 1, "is_active": 1,
+             "created_at": 1, "created_by_user_id": 1}))
+        _dump("members", members)
+        # Invitations — jeton d'accès retiré
+        invs = list(db.invitations.find({"organization_id": org_id}, {"_id": 0, "token": 0}))
+        _dump("invitations", invs)
+        # Binaires (logos + reçus) sous plafond
+        total, included, truncated = 0, 0, False
+        for f in db.files.find({**scope, "is_deleted": {"$ne": True}}):
+            data = f.get("data")
+            if data is None:
+                continue
+            b = bytes(data)
+            if total + len(b) > _EXPORT_FILES_MAX_BYTES:
+                truncated = True
+                continue
+            total += len(b); included += 1
+            z.writestr(f"fichiers/{f.get('id')}_{_safe_zip_name(f.get('original_filename') or f.get('id'))}", b)
+        readme = [
+            "Export de vos données FacturePro — portabilité (Loi 25, art. 27)",
+            f"Organisation : {org.get('name') or org_id}",
+            f"Généré le (UTC) : {datetime.now(timezone.utc).isoformat()}",
+            "",
+            "Formats : JSON (fidélité complète, lisible par machine) + CSV (principales colonnes,",
+            "pour tableur) + fichiers/ (vos logos et reçus téléversés).",
+            "",
+            "Contenu :",
+        ] + manifest + [
+            f"  json/files.json ({len(file_docs)} fichier(s) — métadonnées)",
+            "  json/organization.json, json/members.json, json/invitations.json",
+            f"  fichiers/ : {included} fichier(s) inclus" + (
+                f" — TRONQUÉ (plafond {_EXPORT_FILES_MAX_BYTES // (1024 * 1024)} Mo atteint ; "
+                "les binaires restants restent accessibles dans l'application)" if truncated else ""),
+            "",
+            "Exclus pour votre sécurité : mots de passe, secrets de double authentification, jetons",
+            "d'accès. Le journal d'audit dispose de son propre export (Paramètres → Journal d'audit).",
+        ]
+        z.writestr("LISEZMOI.txt", "\n".join(readme))
+    size = buf.tell()
+    buf.seek(0)
+    return buf, size
+
+
+@app.get("/api/org/export")
+def export_org_data(request: Request,
+                    current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Portabilité (Loi 25 art. 27) : ZIP de TOUTES les données de l'organisation (JSON + CSV +
+    fichiers). Propriétaire seulement. Secrets exclus. no-store + journalisé."""
+    _audit_require_owner(current_user)
+    _enforce_org_mfa(current_user)  # même gate MFA org que l'export du journal d'audit
+    tmp, size = _build_org_export_zip(current_user)
+    _audit("data.export", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", metadata={"bytes": size})
+    fname = f"donnees-facturepro-{_today_local_isodate()}.zip"
+
+    def _iter():
+        try:
+            while True:
+                chunk = tmp.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            tmp.close()
+
+    return StreamingResponse(
+        _iter(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                 "Content-Length": str(size), "Cache-Control": "no-store"})
 
 # ─── Clients CRUD ───
 @app.get("/api/clients")

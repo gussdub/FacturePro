@@ -34,6 +34,24 @@ const SettingsPage = () => {
   const canViewSettings = hasPermission('settings:read');
   const canEditSettings = hasPermission('settings:write');
 
+  const [exporting, setExporting] = useState(false);
+  const exportData = useCallback(async () => {
+    setExporting(true);
+    try {
+      const r = await axios.get(`${BACKEND_URL}/api/org/export`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: 'application/zip' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `donnees-facturepro-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e.response?.data?.detail || "Erreur lors de l'export");
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
   const fetchOrgData = useCallback(async () => {
     setOrgLoading(true);
     try {
@@ -223,7 +241,24 @@ const SettingsPage = () => {
       )}
 
       {activeTab === 'audit' && currentUserRole === 'owner' && (
-        <div style={{ padding: '8px 0' }}><AuditLog /></div>
+        <div style={{ padding: '8px 0' }}>
+          {/* Portabilité des données (Loi 25, art. 27) */}
+          <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: '1px solid #e5e7eb' }}>
+            <h3 style={{ fontSize: 18, color: '#1f2937', margin: '0 0 4px' }}>Portabilité des données</h3>
+            <p style={{ color: '#6b7280', fontSize: 14, marginTop: 0 }}>
+              Télécharge toutes les données de ton organisation dans un format ouvert et réutilisable
+              (JSON + CSV + tes fichiers) — clients, factures, soumissions, dépenses, comptabilité,
+              banque, membres… Les secrets (mots de passe, double authentification) sont exclus.
+            </p>
+            <button onClick={exportData} disabled={exporting} data-testid="export-data-btn"
+              style={{ background: exporting ? '#9ca3af' : '#00A08C', color: 'white', border: 'none',
+                padding: '10px 18px', borderRadius: 8, cursor: exporting ? 'wait' : 'pointer',
+                fontSize: 14, fontWeight: 600 }}>
+              {exporting ? 'Préparation du fichier…' : 'Exporter toutes mes données (.zip)'}
+            </button>
+          </div>
+          <AuditLog />
+        </div>
       )}
 
       {activeTab === 'team' && hasPermission('team:manage') && (
