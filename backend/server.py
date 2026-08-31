@@ -3910,8 +3910,8 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             raise HTTPException(401, "Invalid token")
         user_id = payload.get("sub")
         user = db.users.find_one({"id": user_id}, {"_id": 0})
-        if not user:
-            raise HTTPException(401, "User not found")
+        if not user or not user.get("is_active", True):  # [Désactivation] parité avec le résolveur d'accès
+            raise HTTPException(401, "User not found or inactive")
         if payload.get("tv", 0) != int(user.get("token_version", 0) or 0):
             raise HTTPException(401, "Session révoquée — reconnecte-toi")
         return User(**user)
@@ -4074,11 +4074,12 @@ def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)
             "members": [],                        # trombinoscope masqué tant que non-enrôlé
         }
 
+    # Inclut les membres désactivés (avec is_active) pour permettre leur réactivation depuis l'UI.
     members_cursor = db.users.find(
-        {"organization_id": current_user.organization_id, "is_active": {"$ne": False}},
-        {"_id": 0, "id": 1, "email": 1, "role": 1, "created_at": 1}
+        {"organization_id": current_user.organization_id},
+        {"_id": 0, "id": 1, "email": 1, "role": 1, "created_at": 1, "is_active": 1}
     )
-    members = list(members_cursor)
+    members = [{**m, "is_active": m.get("is_active", True)} for m in members_cursor]
 
     return {
         "organization": {
@@ -4398,6 +4399,7 @@ def accept_invite(body: dict, request: Request):
                 "organization_id": inv["organization_id"],
                 "role": inv["role"],
                 "pipeda_consent_at": now,
+                "is_active": True,  # ré-onboarding = réactivation explicite (sinon membre fantôme verrouillé)
             }}
         )
         user_id = user["id"]
@@ -4505,6 +4507,52 @@ def remove_member(
     return
 
 
+def _get_org_member_or_404(user_id, current_user):
+    """Cible un membre de l'org du user courant, ou 404. Bloque l'action sur le propriétaire
+    et sur soi-même (anti-lockout)."""
+    target = db.users.find_one({"id": user_id, "organization_id": current_user.organization_id})
+    if not target:
+        raise HTTPException(404, "Membre introuvable")
+    org = db.organizations.find_one({"id": current_user.organization_id}, {"_id": 0})
+    if org and org.get("owner_id") == user_id:
+        raise HTTPException(400, "Le propriétaire ne peut pas être désactivé")
+    if user_id == current_user.id:
+        raise HTTPException(400, "Vous ne pouvez pas vous désactiver vous-même")
+    return target
+
+
+@app.post("/api/org/members/{user_id}/deactivate", status_code=204)
+def deactivate_member(user_id: str, request: Request,
+                      current_user: CurrentUser = Depends(require_permission("team:manage"))):
+    """Désactive (suspend) un membre : is_active=False + révocation immédiate de ses sessions.
+    Réversible via reactivate. Le membre reste dans l'org (contrairement à remove)."""
+    target = _get_org_member_or_404(user_id, current_user)
+    db.users.update_one({"id": user_id, "organization_id": current_user.organization_id},
+                        {"$set": {"is_active": False}})
+    _revoke_user_sessions(user_id)  # coupe l'accès des jetons déjà émis
+    _audit("org.member.deactivate", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="user", target_id=user_id,
+           target_label=target.get("email"))
+    return
+
+
+@app.post("/api/org/members/{user_id}/reactivate", status_code=204)
+def reactivate_member(user_id: str, request: Request,
+                      current_user: CurrentUser = Depends(require_permission("team:manage"))):
+    """Réactive un membre précédemment désactivé (is_active=True). Il pourra se reconnecter."""
+    target = db.users.find_one({"id": user_id, "organization_id": current_user.organization_id})
+    if not target:
+        raise HTTPException(404, "Membre introuvable")
+    db.users.update_one({"id": user_id, "organization_id": current_user.organization_id},
+                        {"$set": {"is_active": True}})
+    _audit("org.member.reactivate", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="user", target_id=user_id,
+           target_label=target.get("email"))
+    return
+
+
 # ─── Self-service email edit + Ownership transfer (T19) ───
 
 class UpdateEmailRequest(BaseModel):
@@ -4595,11 +4643,19 @@ def transfer_ownership(
     if result.matched_count == 0:
         raise HTTPException(409, "Le propriétaire a changé pendant l'opération, réessayez")
 
-    # Step 2 — promote new owner
-    db.users.update_one(
-        {"id": body.new_owner_user_id},
+    # Step 2 — promote new owner, CONDITIONNEL sur is_active (ferme le TOCTOU avec deactivate :
+    # si le nouveau propriétaire a été désactivé entre le garde 4634 et ce swap, on ROLLBACK le
+    # owner_id → jamais d'org verrouillée avec un propriétaire is_active=False).
+    promo = db.users.update_one(
+        {"id": body.new_owner_user_id, "organization_id": current_user.organization_id,
+         "is_active": {"$ne": False}},
         {"$set": {"role": "owner"}}
     )
+    if promo.matched_count == 0:
+        db.organizations.update_one(
+            {"id": current_user.organization_id, "owner_id": body.new_owner_user_id},
+            {"$set": {"owner_id": current_user.id}})  # rollback du swap
+        raise HTTPException(409, "Le nouveau propriétaire a été désactivé pendant l'opération, réessayez")
     # Step 3 — demote old owner to accountant
     db.users.update_one(
         {"id": current_user.id},
@@ -7234,6 +7290,13 @@ def login(credentials: UserLogin, request: Request):
         raise HTTPException(401, "Incorrect email or password")
 
     _login_clear(email_input, ip)  # succès → réinitialise le compteur d'échecs
+    # [Désactivation de compte] un membre désactivé ne peut pas se connecter (message clair : il a
+    # prouvé le mot de passe, donc pas de fuite d'énumération). Placé avant le défi MFA.
+    if not user.get("is_active", True):
+        _audit("auth.login.failure", request=request, actor_user_id=user["id"],
+               actor_email=user.get("email"), organization_id=user.get("organization_id"),
+               outcome="failure", category="auth", metadata={"reason": "deactivated"})
+        raise HTTPException(403, "Compte désactivé. Contactez le propriétaire de l'organisation.")
     # [MFA] Si la double authentification est activée, on ne délivre PAS encore le JWT d'accès :
     # on renvoie un jeton pré-auth court à échanger via /api/auth/mfa/challenge (code TOTP/secours).
     if _mfa_enabled(user["id"]):
@@ -7466,6 +7529,12 @@ def mfa_challenge(body: dict, request: Request):
     user = db.users.find_one({"id": user_id}, {"_id": 0})
     if not user:
         raise HTTPException(401, "Utilisateur introuvable")
+    # [Désactivation] parité avec login : un compte désactivé ne peut pas obtenir de jeton via le 2e facteur.
+    if not user.get("is_active", True):
+        _audit("auth.login.failure", request=request, actor_user_id=user["id"],
+               actor_email=user.get("email"), organization_id=user.get("organization_id"),
+               outcome="failure", category="auth", metadata={"reason": "deactivated"})
+        raise HTTPException(403, "Compte désactivé. Contactez le propriétaire de l'organisation.")
     _audit("auth.login", request=request, actor_user_id=user["id"], actor_email=user.get("email"),
            organization_id=user.get("organization_id"), category="auth", metadata={"mfa": True})
     return Token(access_token=create_token(user_id), user=User(**user))

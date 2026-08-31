@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
-import { Trash2, UserPlus, X as XIcon, Pencil, Crown, ShieldOff } from 'lucide-react';
+import { Trash2, UserPlus, X as XIcon, Pencil, Crown, ShieldOff, Ban, RotateCcw } from 'lucide-react';
 import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
@@ -686,6 +686,27 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
     }
   };
 
+  const deactivateMember = async (userId, email) => {
+    if (!window.confirm(
+      `Désactiver ${email} ?\n\nSon accès est coupé immédiatement (sessions révoquées) et ` +
+      `il ne pourra plus se connecter. Ses données restent intactes. Réversible.`)) return;
+    try {
+      await axios.post(`${BACKEND_URL}/api/org/members/${userId}/deactivate`);
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
+  const reactivateMember = async (userId, email) => {
+    try {
+      await axios.post(`${BACKEND_URL}/api/org/members/${userId}/reactivate`);
+      onRefresh();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Erreur');
+    }
+  };
+
   const resetMemberMfa = async (userId, email) => {
     if (!window.confirm(
       `Réinitialiser la double authentification de ${email} ?\n\n` +
@@ -804,6 +825,10 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                   marginLeft: 8, fontSize: 11, background: '#00A08C', color: '#fff',
                   padding: '2px 6px', borderRadius: 4,
                 }}>Propriétaire</span>}
+                {m.is_active === false && <span style={{
+                  marginLeft: 8, fontSize: 11, background: '#fef3c7', color: '#92400e',
+                  padding: '2px 6px', borderRadius: 4,
+                }}>Désactivé</span>}
                 {m.id === currentUserId && (
                   <button onClick={() => promptEditEmail(m.email)}
                           title="Modifier mon email"
@@ -822,14 +847,16 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                 ) : (
                   <select value={m.role || 'viewer'}
                           onChange={e => changeMemberRole(m.id, e.target.value)}
-                          style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 4 }}>
+                          disabled={m.is_active === false}
+                          style={{ padding: 6, border: '1px solid #d1d5db', borderRadius: 4,
+                                   opacity: m.is_active === false ? 0.5 : 1 }}>
                     <option value="accountant">Comptable</option>
                     <option value="viewer">Lecteur</option>
                   </select>
                 )}
               </td>
               <td style={{ padding: 10 }}>
-                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && (
+                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && m.is_active !== false && (
                   <button onClick={() => transferOwnership(m.id, m.email)}
                           data-testid={`transfer-ownership-btn-${m.id}`}
                           style={{
@@ -840,7 +867,7 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                     <Crown size={14} /> Transférer propriété
                   </button>
                 )}
-                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && (
+                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && m.is_active !== false && (
                   <button onClick={() => resetMemberMfa(m.id, m.email)}
                           data-testid={`reset-mfa-btn-${m.id}`}
                           title="Réinitialiser la 2FA de ce membre (perte de téléphone + codes de secours)"
@@ -851,6 +878,30 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                           }}>
                     <ShieldOff size={14} /> Réinitialiser la 2FA
                   </button>
+                )}
+                {isCurrentUserOwner && !isOwner(m.id) && m.id !== currentUserId && (
+                  m.is_active === false ? (
+                    <button onClick={() => reactivateMember(m.id, m.email)}
+                            data-testid={`reactivate-btn-${m.id}`}
+                            style={{
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              color: '#047857', display: 'flex', alignItems: 'center',
+                              gap: 4, marginBottom: 4,
+                            }}>
+                      <RotateCcw size={14} /> Réactiver
+                    </button>
+                  ) : (
+                    <button onClick={() => deactivateMember(m.id, m.email)}
+                            data-testid={`deactivate-btn-${m.id}`}
+                            title="Suspendre l'accès de ce membre (réversible)"
+                            style={{
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              color: '#b45309', display: 'flex', alignItems: 'center',
+                              gap: 4, marginBottom: 4,
+                            }}>
+                      <Ban size={14} /> Désactiver
+                    </button>
+                  )
                 )}
                 {!isOwner(m.id) && m.id !== currentUserId && (
                   <button onClick={() => removeMember(m.id, m.email)} style={{
