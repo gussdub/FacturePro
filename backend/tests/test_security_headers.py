@@ -1,7 +1,7 @@
 """Tests — en-têtes de sécurité HTTP (audit Loi 25).
 
 Backend : le middleware pose les en-têtes durcis sur TOUTES les réponses.
-Frontend : vercel.json applique les mêmes en-têtes + une CSP (Report-Only) au document servi."""
+Frontend : vercel.json applique les mêmes en-têtes + une CSP (enforcée) au document servi."""
 import json
 import os
 import sys
@@ -63,7 +63,8 @@ class TestVercelHeaders:
         assert "camera=()" in h["Permissions-Policy"]
 
     def test_csp_directives(self):
-        csp = self._csp()["Content-Security-Policy-Report-Only"]
+        # CSP désormais ENFORCÉE (plus en Report-Only) après vérification prod (0 violation).
+        csp = self._csp()["Content-Security-Policy"]
         assert "default-src 'self'" in csp
         assert "script-src 'self'" in csp
         assert "'unsafe-inline'" in csp and "https://fonts.googleapis.com" in csp   # styles inline + fonts
