@@ -143,6 +143,19 @@ def _build_tax_registrations(scope, client_id):
         client_doc = db.clients.find_one({"id": client_id, **scope}, {"_id": 0}) or {}
     return {"company": _take_regs(settings), "client": _take_regs(client_doc)}
 
+
+def _doc_client_info(doc, scope):
+    """client_info pour le RENDU d'un document émis (PDF / courriel). Préfère l'identité FIGÉE
+    (`client_snapshot`, posée lors de l'effacement Loi 25) afin de garder le nom/adresse sur les
+    factures et devis DÉJÀ ÉMIS même après anonymisation du client maître. Repli : lecture live
+    du client. Le courriel n'est jamais figé → après anonymisation le destinataire par défaut
+    reste vide (le contact est effacé)."""
+    live = db.clients.find_one({"id": doc.get("client_id"), **scope}, {"_id": 0})
+    snap = doc.get("client_snapshot")
+    if snap:
+        return {**(live or {}), **{k: v for k, v in snap.items() if v is not None}}
+    return live
+
 # ─── Expense categories ARC (feature #3 du spec expense-categories) ───
 
 EXPENSE_CATEGORY_GROUPS = {
@@ -7815,6 +7828,77 @@ def delete_client(client_id: str, current_user: CurrentUser = Depends(require_pe
         raise HTTPException(404, "Client not found")
     return {"message": "Client deleted"}
 
+
+# ─── Effacement Loi 25 (art. 28.1) — clients & employés ───
+_CLIENT_PII_CLEAR = ("email", "phone", "address", "city", "postal_code", "country",
+                     "bn_number", "gst_number", "qst_number", "hst_number", "neq_number")
+_EMPLOYEE_PII_CLEAR = ("email", "phone", "employee_number", "department")
+
+
+def _anon_suffix(subject_id):
+    return (subject_id or "").replace("-", "")[:4] or "0000"
+
+
+@app.post("/api/clients/{client_id}/erase")
+def erase_client(client_id: str, body: dict, request: Request,
+                 current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Effacement Loi 25 (art. 28.1) d'un client. Propriétaire seulement. Anonymise le client
+    (RP retirées) tout en CONSERVANT les documents financiers requis par la rétention fiscale ;
+    le nom/adresse sont FIGÉS sur les factures/devis déjà émis (client_snapshot). Si le client
+    n'a aucun document lié → suppression réelle. Irréversible ; confirmation par le nom exact."""
+    _audit_require_owner(current_user)
+    scope = _org_scope(current_user)
+    client = db.clients.find_one({"id": client_id, **scope}, {"_id": 0})
+    if not client:
+        raise HTTPException(404, "Client introuvable")
+    if client.get("anonymized"):
+        return {"outcome": "already_anonymized", "client_id": client_id}
+    confirm = (body.get("confirm_name") or "").strip().lower()
+    if not confirm or confirm != (client.get("name") or "").strip().lower():
+        raise HTTPException(400, "Confirmation incorrecte : saisir le nom exact du client.")
+    doc_q = {**scope, "client_id": client_id}
+    # Figer l'identité (nom + adresse) sur les documents DÉJÀ ÉMIS → garde le nom sur les factures/devis,
+    # ET effacer les numéros de taxes du CLIENT (RP) tout en gardant ceux de l'entreprise (requis).
+    snap = {"name": client.get("name") or "", "address": client.get("address") or "",
+            "city": client.get("city") or "", "postal_code": client.get("postal_code") or ""}
+    empty_regs = _take_regs({})
+
+    def _freeze_issued():
+        for coll in ("invoices", "quotes"):
+            db[coll].update_many(
+                {**scope, "client_id": client_id, "client_snapshot": {"$exists": False}},
+                {"$set": {"client_snapshot": snap}})
+            db[coll].update_many(
+                {**scope, "client_id": client_id},
+                {"$set": {"tax_registrations.client": empty_regs}})
+
+    _freeze_issued()
+    n_inv = db.invoices.count_documents(doc_q)
+    n_quo = db.quotes.count_documents(doc_q)
+    # Révoquer d'éventuels liens publics de soumission (cessation de diffusion).
+    q_ids = [q["id"] for q in db.quotes.find(doc_q, {"_id": 0, "id": 1})]
+    n_links = (db.quote_tokens.delete_many(
+        {**scope, "quote_id": {"$in": q_ids}}).deleted_count if q_ids else 0)
+    if n_inv == 0 and n_quo == 0:
+        db.clients.delete_one({"id": client_id, **scope})
+        _freeze_issued()  # filet anti-TOCTOU : fige tout doc inséré pendant l'effacement
+        outcome = "deleted"
+    else:
+        db.clients.update_one(
+            {"id": client_id, **scope},
+            {"$set": {"name": f"Client anonymisé #{_anon_suffix(client_id)}",
+                      "anonymized": True,
+                      "anonymized_at": datetime.now(timezone.utc).isoformat(),
+                      **{k: "" for k in _CLIENT_PII_CLEAR}}})
+        outcome = "anonymized"
+    _audit("data.erasure", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           target_type="client", target_id=client_id, category="admin",
+           metadata={"outcome": outcome, "invoices_retained": n_inv,
+                     "quotes_retained": n_quo, "quote_links_revoked": n_links})
+    return {"outcome": outcome, "client_id": client_id, "invoices_retained": n_inv,
+            "quotes_retained": n_quo, "quote_links_revoked": n_links}
+
 # ─── Products CRUD ───
 @app.get("/api/products")
 def get_products(current_user: CurrentUser = Depends(require_permission("products:read"))):
@@ -8210,7 +8294,7 @@ def process_recurring_invoices(current_user: CurrentUser = Depends(require_permi
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
     products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
     for inv in invoices:
-        client = db.clients.find_one({"id": inv.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
+        client = _doc_client_info(inv, _org_scope(current_user))  # préfère le nom figé (effacement Loi 25)
         to_email = (client or {}).get("email", "")
         if not to_email:
             errors.append(f"{inv.get('invoice_number')}: pas d'email client")
@@ -9847,6 +9931,10 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
     # Fallback for old quotes pre-snapshot: rebuild from current state.
     invoice_doc["tax_registrations"] = quote.get("tax_registrations") or \
         _build_tax_registrations(_org_scope(current_user), quote.get("client_id"))
+    # Si le client a été anonymisé (Loi 25), reporter l'identité figée pour garder le nom sur la facture
+    # convertie ; ses numéros de taxes ont déjà été effacés à la source dans le tax_registrations du devis.
+    if quote.get("client_snapshot"):
+        invoice_doc["client_snapshot"] = quote["client_snapshot"]
     db.invoices.insert_one(invoice_doc)
     db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "converted"}})
     return clean_doc(invoice_doc)
@@ -9910,6 +9998,44 @@ def delete_employee(employee_id: str, current_user: CurrentUser = Depends(requir
     if result.matched_count == 0:
         raise HTTPException(404, "Employee not found")
     return {"message": "Employee deleted"}
+
+
+@app.post("/api/employees/{employee_id}/erase")
+def erase_employee(employee_id: str, body: dict, request: Request,
+                   current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Effacement Loi 25 (art. 28.1) d'un employé. Propriétaire seulement. Anonymise l'employé
+    (RP retirées) ; l'attribution fiscale (dépenses, carnet de route) est conservée via employee_id.
+    Si aucun document lié → suppression réelle. Irréversible ; confirmation par le nom exact."""
+    _audit_require_owner(current_user)
+    scope = _org_scope(current_user)
+    emp = db.employees.find_one({"id": employee_id, **scope}, {"_id": 0})
+    if not emp:
+        raise HTTPException(404, "Employé introuvable")
+    if emp.get("anonymized"):
+        return {"outcome": "already_anonymized", "employee_id": employee_id}
+    confirm = (body.get("confirm_name") or "").strip().lower()
+    if not confirm or confirm != (emp.get("name") or "").strip().lower():
+        raise HTTPException(400, "Confirmation incorrecte : saisir le nom exact de l'employé.")
+    n_exp = db.expenses.count_documents({**scope, "employee_id": employee_id})
+    n_trips = db.mileage_trips.count_documents({**scope, "employee_id": employee_id})
+    if n_exp == 0 and n_trips == 0:
+        db.employees.delete_one({"id": employee_id, **scope})
+        outcome = "deleted"
+    else:
+        db.employees.update_one(
+            {"id": employee_id, **scope},
+            {"$set": {"name": f"Employé anonymisé #{_anon_suffix(employee_id)}",
+                      "is_active": False, "anonymized": True,
+                      "anonymized_at": datetime.now(timezone.utc).isoformat(),
+                      **{k: "" for k in _EMPLOYEE_PII_CLEAR}}})
+        outcome = "anonymized"
+    _audit("data.erasure", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           target_type="employee", target_id=employee_id, category="admin",
+           metadata={"outcome": outcome, "expenses_retained": n_exp,
+                     "mileage_trips_retained": n_trips})
+    return {"outcome": outcome, "employee_id": employee_id,
+            "expenses_retained": n_exp, "mileage_trips_retained": n_trips}
 
 # ─── Expenses CRUD ───
 @app.get("/api/expense-categories")
@@ -11716,7 +11842,7 @@ def send_invoice_reminder(invoice_id: str, body: dict, current_user: CurrentUser
     if not invoice:
         raise HTTPException(404, "Invoice not found")
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": invoice.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
+    client_info = _doc_client_info(invoice, _org_scope(current_user))
     to_email = body.get("to_email") or (client_info or {}).get("email")
     if not to_email:
         raise HTTPException(400, "Adresse email du destinataire requise")
@@ -12107,7 +12233,7 @@ def get_quote_pdf(quote_id: str, current_user: CurrentUser = Depends(require_per
     if not quote:
         raise HTTPException(404, "Quote not found")
     settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": quote.get("client_id"), **scope}, {"_id": 0})
+    client_info = _doc_client_info(quote, scope)
     products = list(db.products.find(scope, {"_id": 0}))
 
     pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
@@ -12129,7 +12255,7 @@ def get_invoice_pdf(invoice_id: str, current_user: CurrentUser = Depends(require
     if not invoice:
         raise HTTPException(404, "Invoice not found")
     settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": invoice.get("client_id"), **scope}, {"_id": 0})
+    client_info = _doc_client_info(invoice, scope)
     products = list(db.products.find(scope, {"_id": 0}))
 
     pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
@@ -12196,7 +12322,7 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     if not quote:
         raise HTTPException(404, "Quote not found")
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": quote.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
+    client_info = _doc_client_info(quote, _org_scope(current_user))
     products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
 
     to_list, cc_list = _resolve_email_recipients(body, (client_info or {}).get("email"))
@@ -12236,7 +12362,7 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = 
     if not invoice:
         raise HTTPException(404, "Invoice not found")
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
-    client_info = db.clients.find_one({"id": invoice.get("client_id"), **_org_scope(current_user)}, {"_id": 0})
+    client_info = _doc_client_info(invoice, _org_scope(current_user))
     products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
 
     to_list, cc_list = _resolve_email_recipients(body, (client_info or {}).get("email"))

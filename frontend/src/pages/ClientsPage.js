@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BACKEND_URL } from '../config';
+import { useAuth } from '../context/AuthContext';
 import TaxNumberInput from '../components/TaxNumberInput';
 
 const ClientsPage = () => {
+  const { role } = useAuth();
+  const isOwner = role === 'owner';
   const [clients, setClients] = useState([]);
   const [filteredClients, setFilteredClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +84,29 @@ const ClientsPage = () => {
     }
   };
 
+  // Effacement Loi 25 (art. 28.1)
+  const [eraseTarget, setEraseTarget] = useState(null);
+  const [eraseText, setEraseText] = useState('');
+  const [erasing, setErasing] = useState(false);
+  const doErase = async () => {
+    if (!eraseTarget) return;
+    setErasing(true); setError('');
+    try {
+      const r = await axios.post(`${BACKEND_URL}/api/clients/${eraseTarget.id}/erase`,
+        { confirm_name: eraseText });
+      const o = r.data.outcome;
+      setSuccess(o === 'deleted'
+        ? 'Client supprimé (aucun document lié).'
+        : `Client anonymisé — ${r.data.invoices_retained} facture(s) et ${r.data.quotes_retained} soumission(s) conservées (rétention fiscale), nom gardé sur les documents émis.`);
+      setEraseTarget(null); setEraseText('');
+      fetchClients();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Erreur lors de l'effacement");
+    } finally {
+      setErasing(false);
+    }
+  };
+
   const closeForm = () => {
     setShowForm(false); setEditingClient(null);
     setFormData({ name: '', email: '', phone: '', address: '', city: '', postal_code: '', country: '', bn_number: '', gst_number: '', qst_number: '', hst_number: '', neq_number: '' });
@@ -144,7 +170,13 @@ const ClientsPage = () => {
               background: 'white', border: '1px solid #e5e7eb', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937', margin: 0 }}>{client.name}</h3>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', color: '#1f2937', margin: 0 }}>
+                  {client.name}
+                  {client.anonymized && (
+                    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#6b7280',
+                      background: '#f3f4f6', padding: '2px 8px', borderRadius: 10 }}>anonymisé (Loi 25)</span>
+                  )}
+                </h3>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button onClick={() => handleEdit(client)} data-testid={`edit-client-${client.id}`} style={{
                     background: '#f0f9ff', color: '#0369a1', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
@@ -152,6 +184,12 @@ const ClientsPage = () => {
                   <button onClick={() => handleDelete(client.id)} data-testid={`delete-client-${client.id}`} style={{
                     background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
                   }}>Supprimer</button>
+                  {isOwner && !client.anonymized && (
+                    <button onClick={() => { setEraseTarget(client); setEraseText(''); }}
+                      data-testid={`erase-client-${client.id}`} title="Effacement Loi 25 (art. 28.1)" style={{
+                      background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
+                    }}>Effacer (Loi 25)</button>
+                  )}
                 </div>
               </div>
               <div style={{ fontSize: '14px', color: '#6b7280', lineHeight: '1.6' }}>
@@ -169,6 +207,40 @@ const ClientsPage = () => {
         <div style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '40px', textAlign: 'center' }}>
           <h3 style={{ color: '#374151', margin: '0 0 8px 0' }}>Aucun client trouve</h3>
           <p style={{ color: '#6b7280', margin: 0 }}>Aucun client ne correspond a "{searchTerm}"</p>
+        </div>
+      )}
+
+      {/* Effacement Loi 25 (art. 28.1) Modal */}
+      {eraseTarget && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: '16px' }}>
+          <div style={{ background: 'white', borderRadius: '16px', maxWidth: '520px', width: '100%', padding: '24px' }}>
+            <h3 style={{ margin: '0 0 12px 0', color: '#1f2937' }}>Effacer les renseignements personnels (Loi 25)</h3>
+            <p style={{ color: '#374151', fontSize: 14, lineHeight: 1.6, margin: '0 0 12px 0' }}>
+              Cette action est <strong>irréversible</strong>. Les coordonnées et numéros de taxes de
+              <strong> {eraseTarget.name} </strong> seront effacés et le client sera anonymisé.
+            </p>
+            <ul style={{ color: '#6b7280', fontSize: 13, lineHeight: 1.6, margin: '0 0 16px 18px', padding: 0 }}>
+              <li>Les factures et soumissions déjà émises sont <strong>conservées</strong> (rétention fiscale ~6 ans).</li>
+              <li>Le <strong>nom</strong> est gardé sur ces documents déjà émis.</li>
+              <li>Si le client n'a aucun document lié, il est <strong>supprimé</strong> complètement.</li>
+            </ul>
+            <label style={{ display: 'block', fontSize: 13, color: '#374151', marginBottom: 6 }}>
+              Pour confirmer, saisir le nom exact du client :
+            </label>
+            <input type="text" value={eraseText} onChange={(e) => setEraseText(e.target.value)}
+              data-testid="erase-confirm-input" placeholder={eraseTarget.name}
+              style={{ width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, marginBottom: 16, boxSizing: 'border-box' }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => { setEraseTarget(null); setEraseText(''); }} disabled={erasing} style={{
+                background: '#f3f4f6', color: '#374151', border: 'none', padding: '10px 16px', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}>Annuler</button>
+              <button onClick={doErase} data-testid="erase-confirm-btn"
+                disabled={erasing || eraseText.trim().toLowerCase() !== (eraseTarget.name || '').trim().toLowerCase()}
+                style={{ background: erasing ? '#9ca3af' : '#c2410c', color: 'white', border: 'none', padding: '10px 16px', borderRadius: 8,
+                  cursor: erasing ? 'wait' : 'pointer', fontSize: 14, opacity: (eraseText.trim().toLowerCase() !== (eraseTarget.name || '').trim().toLowerCase()) ? 0.5 : 1 }}>
+                {erasing ? 'Effacement…' : 'Effacer définitivement'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
