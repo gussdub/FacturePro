@@ -6,6 +6,7 @@ import { ScanLine, Paperclip, Edit, AlertTriangle, Car } from 'lucide-react';
 import ReceiptScanConsentModal from '../components/ReceiptScanConsentModal';
 import { useAuth } from '../context/AuthContext';
 import useIsMobile from '../hooks/useIsMobile';
+import { pickDroppedReceipts, dragHasFiles } from '../utils/receiptDrop';
 
 function taxCodeLabel(cat, entityType) {
   if (!cat) return '';
@@ -76,6 +77,19 @@ const ExpensesPage = () => {
   const [batchCreating, setBatchCreating] = useState(false);
   const [needsConsent, setNeedsConsent] = useState(false);
   const [consentAt, setConsentAt] = useState(null);
+  // Glisser-déposer de reçus (ordinateur). dragDepth = compteur : dragleave se déclenche aussi en
+  // passant sur un enfant, un simple booléen ferait clignoter le voile.
+  const [dragDepth, setDragDepth] = useState(0);
+  const [pendingDrop, setPendingDrop] = useState(null); // File[] en attente de confirmation
+  // Verrous SYNCHRONES (refs) : un état React n'est pas encore à jour entre deux clics rapprochés,
+  // et les deux gestionnaires partagent la même closure → sans ref, la garde est contournée et le
+  // lot part deux fois (quota facturé en double).
+  const consentInFlightRef = useRef(false);
+  const batchInFlightRef = useRef(false);
+  const pendingDropRef = useRef(null);
+  const [consentSubmitting, setConsentSubmitting] = useState(false);
+  // Toujours passer par ce setter : garde le miroir synchrone aligné sur l'état.
+  const setPendingDropSafe = (files) => { pendingDropRef.current = files; setPendingDrop(files); };
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [filters, setFilters] = useState({
     q: '', category_code: '', date_from: '', date_to: '', amount_min: '', amount_max: ''
@@ -128,6 +142,28 @@ const ExpensesPage = () => {
     axios.get(`${BACKEND_URL}/api/auth/me`).then(r => {
       setConsentAt(r.data?.receipt_ocr_consent_at || null);
     }).catch(() => {});
+  }, []);
+
+  // ─── Glisser-déposer de reçus (ordinateur ; aucun événement drag sur mobile tactile) ───
+  // ⚠️ CE HOOK DOIT RESTER AU-DESSUS du `if (loading) return ...` : un hook appelé après un retour
+  // anticipé viole les règles des hooks (« Rendered more hooks than during the previous render »
+  // au 2e rendu → page blanche). Le build CI ne l'attrape PAS ici (package.json sans eslintConfig).
+  // Filet au niveau de la fenêtre : (1) sans preventDefault, lâcher un fichier À CÔTÉ de la zone
+  // fait NAVIGUER le navigateur vers ce fichier → l'app est quittée et le travail en cours perdu ;
+  // (2) un drag qui se termine hors de la page laisserait sinon le voile collé (dragDepth > 0).
+  useEffect(() => {
+    const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+    const onWinDragOver = (e) => { if (hasFiles(e)) e.preventDefault(); };
+    const onWinDrop = (e) => { if (hasFiles(e)) e.preventDefault(); setDragDepth(0); };
+    const onWinDragEnd = () => setDragDepth(0);
+    window.addEventListener('dragover', onWinDragOver);
+    window.addEventListener('drop', onWinDrop);
+    window.addEventListener('dragend', onWinDragEnd);
+    return () => {
+      window.removeEventListener('dragover', onWinDragOver);
+      window.removeEventListener('drop', onWinDrop);
+      window.removeEventListener('dragend', onWinDragEnd);
+    };
   }, []);
 
   const fetchData = async () => {
@@ -394,15 +430,28 @@ const ExpensesPage = () => {
   };
 
   const acceptConsent = async () => {
+    if (consentInFlightRef.current) return;   // 2e clic ignoré AVANT tout await (anti double-scan)
+    consentInFlightRef.current = true;
+    setConsentSubmitting(true);
     try {
       const r = await axios.post(`${BACKEND_URL}/api/auth/me/receipt-ocr-consent`);
       setConsentAt(r.data?.receipt_ocr_consent_at);
       setNeedsConsent(false);
-      // ouvrir directement le file picker
-      setTimeout(() => scanInputRef.current?.click(), 0);
+      // Consommation ATOMIQUE des fichiers déposés (la ref, pas l'état : closure potentiellement périmée)
+      const files = pendingDropRef.current;
+      setPendingDropSafe(null);
+      if (files) {
+        startBatchScan(files);              // enchaîne sur les fichiers déposés
+      } else {
+        setTimeout(() => scanInputRef.current?.click(), 0);   // flux bouton : ouvrir le file picker
+      }
     } catch {
       setScanError("Erreur d'enregistrement du consentement.");
       setNeedsConsent(false);
+      setPendingDropSafe(null);
+    } finally {
+      consentInFlightRef.current = false;
+      setConsentSubmitting(false);
     }
   };
 
@@ -495,20 +544,38 @@ const ExpensesPage = () => {
     });
   };
 
-  const handleReceiptBatchScan = async (e) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
-    if (files.length === 0) return;
+  /** Garde partagée par le sélecteur de fichiers ET le glisser-déposer. */
+  const _batchScanBlocked = (files) => {
+    if (files.length === 0) return true;
     if (batchScan) {
       // Batch review deja ouvert — evite d'ecraser les rows en cours (orphelin des file_id deja uploades)
       setScanError('Termine ou annule le lot en cours avant d\'en lancer un nouveau.');
-      return;
+      return true;
     }
-    setScanError(null);
     if (files.length > 20) {
       setScanError('Max 20 fichiers par lot');
+      return true;
+    }
+    return false;
+  };
+
+  const handleReceiptBatchScan = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    await startBatchScan(files);
+  };
+
+  /** Lance le scan d'un lot de fichiers (sélecteur ou glisser-déposer). */
+  const startBatchScan = async (files) => {
+    setScanError(null);
+    // Verrou synchrone : `batchScan` lu depuis une closure périmée peut valoir null alors qu'un lot
+    // vient d'être lancé → sans ce ref, le même lot pourrait partir 2× (quota facturé en double).
+    if (batchInFlightRef.current) {
+      setScanError('Termine ou annule le lot en cours avant d\'en lancer un nouveau.');
       return;
     }
+    if (_batchScanBlocked(files)) return;
+    batchInFlightRef.current = true;
     // Init rows in scanning state
     const rows = files.map(f => ({
       id: _uuid(),
@@ -541,6 +608,56 @@ const ExpensesPage = () => {
         _updateRow(row.id, { status: 'error', error: msg });
       }
     }));
+  };
+
+  // Ne réagir qu'à un glisser de FICHIERS (pas à une sélection de texte / un élément de la page).
+  const _dragHasFiles = (e) => dragHasFiles(e.dataTransfer);
+
+  // Dépôt neutralisé dès qu'un dialogue a la main : sinon un glisser au-dessus du formulaire de
+  // dépense, de l'import CSV, du carnet, de la revue de lot ou d'une modale de scan déclencherait
+  // un scan inattendu — ou écraserait silencieusement une liste déjà en attente de confirmation.
+  const dropDisabled = Boolean(
+    batchScan || needsConsent || pendingDrop || showForm || showImport || showLogbook
+  );
+
+  const onPageDragEnter = (e) => {
+    if (!_dragHasFiles(e) || dropDisabled) return;
+    e.preventDefault();
+    setDragDepth(d => d + 1);
+  };
+  const onPageDragOver = (e) => {
+    if (!_dragHasFiles(e)) return;
+    e.preventDefault();               // indispensable : sans ça le navigateur ouvre le fichier
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  };
+  const onPageDragLeave = (e) => {
+    if (!_dragHasFiles(e)) return;
+    setDragDepth(d => Math.max(0, d - 1));
+  };
+  const onPageDrop = (e) => {
+    if (!_dragHasFiles(e)) return;
+    e.preventDefault();
+    setDragDepth(0);
+    if (dropDisabled) return;         // un dialogue a la main → on ignore le dépôt
+    setScanError(null);
+    const { files, error } = pickDroppedReceipts(e.dataTransfer.files);
+    if (error) {
+      setScanError(error);
+      return;
+    }
+    if (_batchScanBlocked(files)) return;
+    setPendingDropSafe(files);        // confirmation avant de consommer le quota de scans
+  };
+
+  const confirmPendingDrop = () => {
+    const files = pendingDrop;
+    if (!files) return;
+    if (consentAt) {
+      setPendingDropSafe(null);
+      startBatchScan(files);
+    } else {
+      setNeedsConsent(true);          // pendingDrop conservé : acceptConsent enchaînera le scan
+    }
   };
 
   const retryRow = async (rowId) => {
@@ -629,6 +746,7 @@ const ExpensesPage = () => {
     await Promise.allSettled(toDelete.map(fid =>
       axios.delete(`${BACKEND_URL}/api/files/${fid}`)));
     setBatchScan(null);
+    batchInFlightRef.current = false;   // lot refermé → un nouveau dépôt est de nouveau possible
   };
 
   const createBatch = async () => {
@@ -682,6 +800,7 @@ const ExpensesPage = () => {
     const successCount = toCreate.length - failed.length;
     if (failed.length === 0) {
       setBatchScan(null);
+      batchInFlightRef.current = false;  // lot refermé → un nouveau dépôt est de nouveau possible
       setSuccess(`${successCount} dépense${successCount > 1 ? 's' : ''} créée${successCount > 1 ? 's' : ''}`);
       fetchData();
     } else {
@@ -708,7 +827,28 @@ const ExpensesPage = () => {
   };
 
   return (
-    <div data-testid="expenses-page">
+    <div data-testid="expenses-page"
+         onDragEnter={onPageDragEnter} onDragOver={onPageDragOver}
+         onDragLeave={onPageDragLeave} onDrop={onPageDrop}>
+      {/* Voile de dépôt (ordinateur). pointerEvents:none → c'est bien la page qui reçoit le drop. */}
+      {dragDepth > 0 && !dropDisabled && (
+        <div data-testid="receipt-dropzone-overlay"
+             style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: isMobile ? 0 : '280px',
+                      zIndex: 80, pointerEvents: 'none',
+                      background: 'rgba(0,160,140,0.10)', border: '3px dashed #00A08C',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: '24px 32px',
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.15)', textAlign: 'center' }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🧾</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: '#1f2937' }}>
+              Déposez vos reçus ici
+            </div>
+            <div style={{ color: '#6b7280', fontSize: 13, marginTop: 4 }}>
+              JPG, PNG, WEBP, GIF ou PDF — jusqu'à 20 à la fois
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? '16px' : '0', marginBottom: '24px' }}>
         <div>
@@ -729,7 +869,7 @@ const ExpensesPage = () => {
               padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 14,
               fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
             }}
-            title="Scanner un reçu avec extraction automatique">
+            title="Scanner un reçu avec extraction automatique — tu peux aussi glisser-déposer tes reçus sur la page">
             <ScanLine size={16} /> Scanner reçu
           </button>
           <input
@@ -1400,7 +1540,42 @@ const ExpensesPage = () => {
       {needsConsent && (
         <ReceiptScanConsentModal
           onAccept={acceptConsent}
-          onCancel={() => setNeedsConsent(false)} />
+          submitting={consentSubmitting}
+          onCancel={() => { setNeedsConsent(false); setPendingDropSafe(null); }} />
+      )}
+
+      {/* Confirmation avant de lancer un lot déposé : un scan consomme le quota mensuel. */}
+      {pendingDrop && !needsConsent && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 90,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div data-testid="drop-confirm-modal"
+               style={{ background: '#fff', borderRadius: 16, padding: 24, maxWidth: 460, width: '100%' }}>
+            <h3 style={{ margin: '0 0 8px', color: '#1f2937' }}>
+              Scanner {pendingDrop.length} reçu{pendingDrop.length > 1 ? 's' : ''} ?
+            </h3>
+            <p style={{ color: '#6b7280', fontSize: 14, lineHeight: 1.6, margin: '0 0 12px' }}>
+              L'extraction automatique consomme {pendingDrop.length} scan
+              {pendingDrop.length > 1 ? 's' : ''} de ton quota mensuel. Tu pourras vérifier et
+              corriger chaque dépense avant de la créer.
+            </p>
+            <ul style={{ color: '#6b7280', fontSize: 13, margin: '0 0 16px 18px', padding: 0,
+                         maxHeight: 120, overflow: 'auto' }}>
+              {pendingDrop.map((f, i) => <li key={i}>{f.name}</li>)}
+            </ul>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setPendingDropSafe(null)}
+                      style={{ background: '#f3f4f6', color: '#374151', border: 'none',
+                               padding: '10px 16px', borderRadius: 8, cursor: 'pointer' }}>
+                Annuler
+              </button>
+              <button onClick={confirmPendingDrop} data-testid="drop-confirm-btn"
+                      style={{ background: '#00A08C', color: '#fff', border: 'none',
+                               padding: '10px 16px', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>
+                Scanner
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {batchScan && (

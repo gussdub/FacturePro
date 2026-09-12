@@ -1,7 +1,10 @@
 import React from "react";
 import { X } from "lucide-react";
 
-export default function ReceiptScanConsentModal({ onAccept, onCancel }) {
+// `submitting` désactive les actions pendant l'enregistrement du consentement : sans ça, un
+// double-clic (backend Render free tier = jusqu'à 30-60 s au premier hit, donc aucun retour visuel)
+// relançait DEUX fois le lot déposé → quota de scans facturé en double.
+export default function ReceiptScanConsentModal({ onAccept, onCancel, submitting = false }) {
   return (
     <div style={overlay} onClick={onCancel}>
       <div onClick={(e) => e.stopPropagation()} style={modal}>
@@ -26,8 +29,12 @@ export default function ReceiptScanConsentModal({ onAccept, onCancel }) {
           Ce consentement n'est demandé qu'une fois.
         </p>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-          <button onClick={onCancel} style={btnGray}>Annuler</button>
-          <button onClick={onAccept} style={btnPrimary}>J'accepte</button>
+          <button onClick={onCancel} disabled={submitting} style={btnGray}>Annuler</button>
+          <button onClick={onAccept} disabled={submitting} data-testid="consent-accept-btn"
+                  style={{ ...btnPrimary, opacity: submitting ? 0.6 : 1,
+                           cursor: submitting ? 'wait' : 'pointer' }}>
+            {submitting ? 'Enregistrement…' : "J'accepte"}
+          </button>
         </div>
       </div>
     </div>
