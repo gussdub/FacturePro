@@ -70,10 +70,6 @@ const ExpensesPage = () => {
   const scanInputRef = useRef(null);
   // Cache des taux historiques par date (figés) — évite les fetch redondants
   const historicalRatesRef = useRef({});
-  // ⚠️ Dette préexistante : le setter n'était appelé nulle part → scanLoading vaut TOUJOURS false,
-  // donc l'overlay « scan en cours » et le `disabled` du bouton sont inertes. Setter retiré (le
-  // linter le signalait) ; le nettoyage de cette UI morte est à traiter à part, pas dans ce commit.
-  const [scanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
   const [batchScan, setBatchScan] = useState(null); // { rows: [...] } | null
@@ -866,7 +862,6 @@ const ExpensesPage = () => {
           <button
             type="button"
             onClick={handleScanClick}
-            disabled={scanLoading}
             style={{
               background: "#fff", color: "#00A08C", border: "1.5px solid #00A08C",
               padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 14,
@@ -1518,15 +1513,6 @@ const ExpensesPage = () => {
         </div>
       )}
 
-      {scanLoading && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-                       display: "flex", flexDirection: "column",
-                       alignItems: "center", justifyContent: "center", zIndex: 1200,
-                       color: "#fff" }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>⏳</div>
-          <p>Analyse du reçu en cours…</p>
-        </div>
-      )}
       {scanError && (
         <div style={{ position: "fixed", bottom: 24, left: "50%",
                        transform: "translateX(-50%)", background: "#fee2e2",
