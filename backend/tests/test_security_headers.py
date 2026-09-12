@@ -69,7 +69,11 @@ class TestVercelHeaders:
         assert "script-src 'self'" in csp
         assert "'unsafe-inline'" in csp and "https://fonts.googleapis.com" in csp   # styles inline + fonts
         assert "https://fonts.gstatic.com" in csp                                    # fichiers de police
-        assert "frame-ancestors 'none'" in csp                                       # anti-clickjacking
+        # 'self' et NON 'none' : un document blob: (aperçu PDF d'un reçu / d'un relevé) hérite de la
+        # CSP de la page et Safari REFUSE alors de l'encadrer (« does not appear in the
+        # frame-ancestors directive ») → iframe blanc. 'self' garde l'anti-clickjacking tiers.
+        assert "frame-ancestors 'self'" in csp
+        assert "frame-ancestors 'none'" not in csp
         assert "object-src 'none'" in csp and "base-uri 'self'" in csp
         # le backend doit être autorisé pour connect (fetch/axios) ET img (logos cross-origin)
         assert csp.count("https://facturepro-backend-dkvn.onrender.com") >= 2
