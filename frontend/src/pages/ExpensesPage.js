@@ -70,7 +70,10 @@ const ExpensesPage = () => {
   const scanInputRef = useRef(null);
   // Cache des taux historiques par date (figés) — évite les fetch redondants
   const historicalRatesRef = useRef({});
-  const [scanLoading, setScanLoading] = useState(false);
+  // ⚠️ Dette préexistante : le setter n'était appelé nulle part → scanLoading vaut TOUJOURS false,
+  // donc l'overlay « scan en cours » et le `disabled` du bouton sont inertes. Setter retiré (le
+  // linter le signalait) ; le nettoyage de cette UI morte est à traiter à part, pas dans ce commit.
+  const [scanLoading] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [receiptScan, setReceiptScan] = useState(null); // { fileId, extraction, blobUrl } | null
   const [batchScan, setBatchScan] = useState(null); // { rows: [...] } | null
