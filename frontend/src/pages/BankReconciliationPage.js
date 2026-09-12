@@ -4,6 +4,7 @@ import { GitMerge, Plus, FileText, Trash2, Pencil } from "lucide-react";
 import { BACKEND_URL } from "../config";
 import BankImportWizard from "../components/BankImportWizard";
 import BankMatchingScreen from "../components/BankMatchingScreen";
+import BankStatementButton from "../components/BankStatementButton";
 
 export default function BankReconciliationPage() {
   const [imports, setImports] = useState([]);
@@ -146,7 +147,12 @@ export default function BankReconciliationPage() {
                     <td style={{ padding: 10, color: imp.closed_at ? "#6b7280" : "#059669" }}>
                       {imp.closed_at ? "Fermé" : "Ouvert"}
                     </td>
-                    <td style={{ padding: 10, textAlign: "right" }}>
+                    <td style={{ padding: 10, textAlign: "right", whiteSpace: "nowrap" }}
+                        onClick={(e) => e.stopPropagation()}>
+                      {imp.has_statement_file && (
+                        <BankStatementButton importId={imp.id} source={imp.source}
+                                             bankLabel={imp.bank_label} variant="icon" />
+                      )}
                       <button onClick={(e) => deleteImport(imp, e)} disabled={deletingId === imp.id}
                               title="Supprimer cet import"
                               style={{ background: "none", border: "none", padding: 4,

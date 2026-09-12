@@ -6,6 +6,7 @@ import BankSuggestionsActions from "./BankSuggestionsActions";
 import BankCreateExpenseModal from "./BankCreateExpenseModal";
 import BankCreateInvoiceModal from "./BankCreateInvoiceModal";
 import BankManualSearchModal from "./BankManualSearchModal";
+import BankStatementButton from "./BankStatementButton";
 
 const fmt = (n) => Number(n || 0).toFixed(2);
 
@@ -175,6 +176,12 @@ export default function BankMatchingScreen({ importId, onBack }) {
         {imp.bank_label} — {(imp.imported_at || "").slice(0, 10)}
         {isClosed && <Lock size={16} style={{ color: "#6b7280" }} title="Fermé (lecture seule)" />}
       </h2>
+      {imp.has_statement_file && (
+        <div style={{ margin: "0 0 12px" }}>
+          <BankStatementButton importId={imp.id} source={imp.source}
+                               bankLabel={imp.bank_label} variant="button" />
+        </div>
+      )}
       <div style={{ marginBottom: 16 }}>
         <div style={{ height: 8, background: "#e5e7eb", borderRadius: 4, overflow: "hidden" }}>
           <div style={{ height: "100%", width: `${pct}%`,

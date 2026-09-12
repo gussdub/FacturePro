@@ -5689,7 +5689,9 @@ def _ledger_pdf_load_logo(org_id):
         logo_url = settings.get("logo_url") or ""
         if logo_url.startswith("/api/files/"):
             file_id = logo_url.rsplit("/", 1)[-1]
-            record = db.files.find_one({"id": file_id, "is_deleted": False})
+            # purpose='logo' exigé (liste blanche, comme le GET public) : logo_url est modifiable par
+            # l'utilisateur et ne doit jamais faire embarquer un reçu/relevé dans un PDF généré.
+            record = db.files.find_one({"id": file_id, "purpose": "logo", "is_deleted": False})
             if record and "data" in record:
                 return RLImage(io.BytesIO(bytes(record["data"])),
                                width=1.0 * inch, height=1.0 * inch)
@@ -7800,7 +7802,7 @@ def _build_org_export_zip(current_user):
             f"Généré le (UTC) : {datetime.now(timezone.utc).isoformat()}",
             "",
             "Formats : JSON (fidélité complète, lisible par machine) + CSV (principales colonnes,",
-            "pour tableur) + fichiers/ (vos logos et reçus téléversés).",
+            "pour tableur) + fichiers/ (vos logos, reçus téléversés et relevés bancaires importés).",
             "",
             "Contenu :",
         ] + manifest + [
@@ -8562,8 +8564,42 @@ def _extract_bank_rows_from_pdf(pdf_bytes, organization_id, file_hash):
     return rows
 
 
+_BANK_STATEMENT_MIMES = {
+    "pdf": "application/pdf",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "csv": "text/csv",
+}
+
+
+def _store_statement_file(current_user, raw, filename, source):
+    """Conserve le relevé ORIGINAL téléversé (binaire inline dans db.files, comme les reçus) afin
+    de pouvoir le rouvrir/télécharger depuis le rapprochement sans retourner sur le site bancaire.
+    Best-effort : un échec de stockage ne doit JAMAIS faire échouer l'import lui-même."""
+    if not raw:
+        return None
+    try:
+        file_id = str(uuid.uuid4())
+        db.files.insert_one({
+            "id": file_id,
+            "organization_id": current_user.organization_id,
+            "created_by_user_id": current_user.id,
+            "user_id": current_user.id,  # legacy
+            "data": raw,
+            "mime_type": _BANK_STATEMENT_MIMES.get(source, "application/octet-stream"),
+            "original_filename": filename,
+            "size_bytes": len(raw),
+            "purpose": "bank_statement",
+            "is_deleted": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return file_id
+    except Exception:
+        print("WARN store_statement_file failed")  # jamais de secret ni de contenu loggé
+        return None
+
+
 def _persist_bank_import(current_user, parsed, file_hash, bank_label, filename,
-                         mapping_id=None, source="csv"):
+                         mapping_id=None, source="csv", raw=None):
     """Crée le bank_import + les bank_transactions + auto-match. Partagé CSV et PDF
     pour garantir un pipeline aval identique. Retourne la réponse d'import complète."""
     now = datetime.now(timezone.utc).isoformat()
@@ -8578,6 +8614,7 @@ def _persist_bank_import(current_user, parsed, file_hash, bank_label, filename,
         "bank_label": label,
         "filename": filename,
         "file_hash": file_hash,
+        "statement_file_id": _store_statement_file(current_user, raw, filename, source),
         "row_count": len(parsed),
         "skipped_rows": 0,
         "source": source,
@@ -8658,7 +8695,7 @@ async def create_bank_import(
             raise HTTPException(409, "Aperçu du relevé expiré — relance l'analyse avant d'importer.")
         result = _persist_bank_import(
             current_user, parsed, file_hash, bank_label, file.filename or "releve.pdf",
-            mapping_id=None, source="pdf")
+            mapping_id=None, source="pdf", raw=raw)
         _delete_pdf_extraction(current_user.organization_id, file_hash)
         return result
 
@@ -8702,7 +8739,7 @@ async def create_bank_import(
         current_user, parsed, file_hash,
         bank_label or mapping_doc.get("bank_label"),
         file.filename or ("import.xlsx" if is_xlsx else "import.csv"),
-        mapping_id=mapping_id, source=src)
+        mapping_id=mapping_id, source=src, raw=raw)
 
 
 def _import_with_live_counts(imp):
@@ -8715,6 +8752,9 @@ def _import_with_live_counts(imp):
     out["matched_count"] = counts["matched"]
     out["ignored_count"] = counts["ignored"]
     out["unmatched_count"] = counts["unmatched"]
+    # Le relevé original n'est conservé que depuis la feature « voir l'original » : les imports
+    # antérieurs n'en ont pas → le frontend masque le bouton plutôt que d'offrir un 404.
+    out["has_statement_file"] = bool(imp.get("statement_file_id"))
     return out
 
 
@@ -9450,6 +9490,42 @@ def close_bank_import(import_id: str,
     return Response(status_code=204)
 
 
+@app.get("/api/bank/imports/{import_id}/statement")
+def get_bank_statement_file(import_id: str, request: Request, download: bool = False,
+                            current_user: CurrentUser = Depends(require_permission("bank:read"))):
+    """Sert le relevé ORIGINAL téléversé pour cet import (PDF/CSV/XLSX) — évite de retourner
+    sur le site de la banque. Authentifié + scopé org + purpose=bank_statement (jamais public :
+    un relevé est un document hautement sensible). no-store : pas de cache disque."""
+    imp = db.bank_imports.find_one({"id": import_id, **_org_scope(current_user)}, {"_id": 0})
+    if not imp:
+        raise HTTPException(404, "Import introuvable")
+    file_id = imp.get("statement_file_id")
+    if not file_id:
+        raise HTTPException(404, "Relevé original non conservé pour cet import (import antérieur)")
+    record = db.files.find_one({
+        "id": file_id,
+        "purpose": "bank_statement",
+        "is_deleted": False,
+        **_org_scope(current_user),
+    })
+    if not record:
+        raise HTTPException(404, "Relevé original introuvable")
+    # Document sensible → tracé au journal d'audit (qui a consulté quel relevé, et quand).
+    _audit("bank.statement.view", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           category="admin", target_type="bank_import", target_id=import_id,
+           metadata={"download": bool(download)})
+    # Nom assaini : jamais de guillemet/CRLF dans Content-Disposition (injection d'en-tête).
+    fname = _safe_zip_name(record.get("original_filename") or f"releve-{import_id}")
+    disp = "attachment" if download else "inline"
+    return StreamingResponse(
+        io.BytesIO(bytes(record["data"])),
+        media_type=record.get("mime_type") or "application/octet-stream",
+        headers={"Content-Disposition": f'{disp}; filename="{fname}"',
+                 "Cache-Control": "private, no-store"},
+    )
+
+
 @app.delete("/api/bank/imports/{import_id}")
 def delete_bank_import(import_id: str, force: bool = False,
                        current_user: CurrentUser = Depends(require_permission("bank:write"))):
@@ -9482,6 +9558,11 @@ def delete_bank_import(import_id: str, force: bool = False,
                 {"$set": {"bank_transaction_id": None}})
     db.bank_transactions.delete_many(
         {"import_id": import_id, **_org_scope(current_user)})
+    # cascade : le relevé original ne survit pas à son import (soft-delete, cohérent avec les reçus)
+    if imp.get("statement_file_id"):
+        db.files.update_one(
+            {"id": imp["statement_file_id"], "purpose": "bank_statement", **_org_scope(current_user)},
+            {"$set": {"is_deleted": True}})
     db.bank_imports.delete_one({"id": import_id, **_org_scope(current_user)})
     return Response(status_code=204)
 
@@ -9597,9 +9678,13 @@ def get_receipt_file(file_id: str,
 def delete_file_endpoint(file_id: str,
                           current_user: CurrentUser = Depends(require_permission("expenses:write"))):
     """Soft-delete d'un fichier. Utilisé pour cleanup orphelins côté frontend
-    si l'utilisateur ferme le modal sans sauver."""
+    si l'utilisateur ferme le modal sans sauver.
+    LISTE BLANCHE `purpose='receipt'` (fail-closed) : ce chemin ne vise QUE des reçus fraîchement
+    téléversés. Sans ce filtre, un membre `expenses:write` pouvait détruire (sans retour possible)
+    un relevé bancaire dont l'id fuit via statement_file_id (exposé à `bank:read`). La suppression
+    d'un relevé passe exclusivement par DELETE /api/bank/imports/{id}."""
     res = db.files.update_one(
-        {"id": file_id, "is_deleted": False, **_org_scope(current_user)},
+        {"id": file_id, "purpose": "receipt", "is_deleted": False, **_org_scope(current_user)},
         {"$set": {"is_deleted": True}},
     )
     if res.matched_count == 0:
@@ -10268,8 +10353,11 @@ def update_expense(expense_id: str, expense_data: dict, current_user: CurrentUse
         old_fid = current.get("receipt_file_id")
         new_fid = expense_data.get("receipt_file_id")
         if old_fid and old_fid != new_fid:
+            # LISTE BLANCHE : ne cascade que sur un reçu (ou un fichier legacy tagué 'logo'), JAMAIS
+            # sur un 'bank_statement'. receipt_file_id est saisi par le client : sans ce filtre, un
+            # PUT pointant sur un relevé puis un PUT à null détruisait le relevé (sans bank:write).
             db.files.update_one(
-                {"id": old_fid, **_org_scope(current_user)},
+                {"id": old_fid, "purpose": {"$in": ["receipt", "logo"]}, **_org_scope(current_user)},
                 {"$set": {"is_deleted": True}},
             )
     db.expenses.update_one({"id": expense_id, **_org_scope(current_user)}, {"$set": expense_data})
@@ -10343,8 +10431,10 @@ def delete_expense(expense_id: str, current_user: CurrentUser = Depends(require_
         _release_mileage_trips(expense_id, _org_scope(current_user))
     # Feature #8 — cascade soft-delete du receipt file
     if exp and exp.get("receipt_file_id"):
+        # Même liste blanche que le swap : un relevé bancaire n'est jamais détruit via une dépense.
         db.files.update_one(
-            {"id": exp["receipt_file_id"], **_org_scope(current_user)},
+            {"id": exp["receipt_file_id"], "purpose": {"$in": ["receipt", "logo"]},
+             **_org_scope(current_user)},
             {"$set": {"is_deleted": True}},
         )
     # [GL P2 — T9] Contre-passation auto de l'écriture de charge (§5.7), opt-in par
@@ -11780,9 +11870,12 @@ def download_file(file_id: str):
     record = db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
     if not record:
         raise HTTPException(404, "File not found")
-    if record.get("purpose") == "receipt":
-        # Garde défensive explicite : un reçu (PII) n'est JAMAIS servi ici, même s'il était
-        # référencé comme logo_url. Il n'est accessible que via /api/receipts/{id} (authentifié).
+    if record.get("purpose") != "logo":
+        # Garde défensive en LISTE BLANCHE (fail-closed) : seul un fichier explicitement tagué
+        # 'logo' peut être servi publiquement. Une liste noire ('receipt') laissait passer tout
+        # nouveau purpose sensible — ex. 'bank_statement' (relevés bancaires), qu'un utilisateur
+        # pourrait rendre public en pointant SON logo_url dessus. Les reçus restent servis par
+        # /api/receipts/{id} et les relevés par /api/bank/imports/{id}/statement (authentifiés).
         raise HTTPException(404, "File not found")
     owner = record.get("user_id")
     ref = db.company_settings.find_one({"logo_url": f"/api/files/{file_id}"}, {"_id": 0, "user_id": 1})
@@ -12027,7 +12120,9 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         try:
             if logo_url.startswith('/api/files/'):
                 file_id = logo_url.split('/')[-1]
-                record = db.files.find_one({"id": file_id, "is_deleted": False})
+                # purpose='logo' exigé (liste blanche) : logo_url est modifiable par l'utilisateur et
+                # ne doit jamais faire embarquer un reçu/relevé bancaire dans une facture générée.
+                record = db.files.find_one({"id": file_id, "purpose": "logo", "is_deleted": False})
                 if record and "data" in record:
                     logo_buf = io.BytesIO(bytes(record["data"]))
                     logo_elem = RLImage(logo_buf, width=1.2*inch, height=1.2*inch)
@@ -13755,7 +13850,13 @@ def seed_data():
                     continue
                 _f = db.files.find_one(
                     {"id": _fid}, {"_id": 0, "user_id": 1, "organization_id": 1, "purpose": 1})
-                if not _f or _f.get("purpose") == "receipt":
+                # LISTE BLANCHE fail-closed : `purpose` est PORTEUR DE SÉCURITÉ (liste blanche du GET
+                # public, aiguillage /api/receipts vs /api/bank/.../statement, cascade de suppression).
+                # Comme receipt_url est saisi par le client et peut pointer un fichier ARBITRAIRE, on ne
+                # re-tague QUE des fichiers sans purpose ou 'logo' non référencé — jamais un purpose
+                # sensible ('bank_statement'), sinon un relevé deviendrait lisible via /api/receipts
+                # (expenses:read) et invisible pour son propre endpoint.
+                if not _f or _f.get("purpose") not in (None, "", "logo"):
                     continue
                 _set = {"purpose": "receipt"}
                 # organization_id posé seulement s'il est ABSENT ET que le fichier appartient bien à
@@ -13766,7 +13867,8 @@ def seed_data():
                     if _owner and _owner.get("organization_id") == _oid:
                         _set["organization_id"] = _oid
                 _rcpt += db.files.update_one(
-                    {"id": _fid, "purpose": {"$ne": "receipt"}}, {"$set": _set}).modified_count
+                    {"id": _fid, "purpose": {"$in": [None, "", "logo"]}},
+                    {"$set": _set}).modified_count
             if _rcpt:
                 print(f"Backfill: {_rcpt} db.files re-tagged purpose=receipt (reçus manuels)")
         except Exception as _e:  # noqa: BLE001 — non bloquant
