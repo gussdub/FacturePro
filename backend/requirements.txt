@@ -3,7 +3,7 @@ uvicorn[standard]
 pymongo[srv]
 python-dotenv
 bcrypt
-PyJWT
+PyJWT[crypto]   # [SSO] extra "crypto" = cryptography, INDISPENSABLE pour valider les ID tokens RS256
 reportlab
 resend
 python-multipart

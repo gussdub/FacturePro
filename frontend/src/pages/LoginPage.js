@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import { BACKEND_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
 import FactureProLogo from '../components/FactureProLogo';
@@ -13,6 +15,13 @@ const LoginPage = () => {
   const [loading, setLoading] = useState(false);
   const [mfaToken, setMfaToken] = useState(null);   // [MFA] jeton pré-auth quand le 2e facteur est requis
   const [mfaCode, setMfaCode] = useState('');
+  // [SSO] on n'affiche que les fournisseurs RÉELLEMENT configurés côté serveur (sinon aucun bouton).
+  const [ssoProviders, setSsoProviders] = useState([]);
+  useEffect(() => {
+    axios.get(`${BACKEND_URL}/api/auth/oidc/providers`)
+      .then(r => setSsoProviders(r.data?.providers || []))
+      .catch(() => setSsoProviders([]));
+  }, []);
   const { login, completeMfaChallenge, register } = useAuth();
   // En dessous de 1024px (mobile + tablette) on masque le hero marketing et on
   // passe le formulaire en pleine largeur centré. Le desktop garde le split 50/50.
@@ -219,6 +228,29 @@ const LoginPage = () => {
                 }}>
                   Mot de passe oublie ?
                 </button>
+              </div>
+            )}
+
+            {isLogin && !mfaToken && ssoProviders.length > 0 && (
+              <div style={{ marginTop: '20px' }} data-testid="sso-buttons">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 14px' }}>
+                  <div style={{ flex: 1, height: 1, background: '#e5e7eb' }} />
+                  <span style={{ color: '#9ca3af', fontSize: 12 }}>ou</span>
+                  <div style={{ flex: 1, height: 1, background: '#e5e7eb' }} />
+                </div>
+                {ssoProviders.map(p => (
+                  <a key={p.id} href={`${BACKEND_URL}/api/auth/oidc/${p.id}/start`}
+                     data-testid={`sso-btn-${p.id}`}
+                     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              height: 46, marginBottom: 8, borderRadius: 12, fontSize: 15,
+                              fontWeight: 600, color: '#374151', background: '#fff',
+                              border: '1.5px solid #d1d5db', textDecoration: 'none' }}>
+                    Continuer avec {p.label}
+                  </a>
+                ))}
+                <p style={{ color: '#9ca3af', fontSize: 12, textAlign: 'center', margin: '4px 0 0' }}>
+                  Le SSO relie un compte existant — il n'en crée pas.
+                </p>
               </div>
             )}
 

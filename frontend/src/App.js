@@ -18,6 +18,7 @@ import BankReconciliationPage from './pages/BankReconciliationPage';
 import LedgerPage from './pages/LedgerPage';
 import AcceptInvitePage from './pages/AcceptInvitePage';
 import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
+import SsoCallbackPage from './pages/SsoCallbackPage';
 import MfaSettings from './components/MfaSettings';
 
 function App() {
@@ -49,6 +50,10 @@ function App() {
   }
   if (window.location.pathname === '/cgu') {
     return <TermsPage />;
+  }
+  // Retour de connexion SSO (OIDC) — publique : l'utilisateur n'est pas encore authentifié.
+  if (window.location.pathname === '/sso/callback') {
+    return <SsoCallbackPage />;
   }
 
   if (!isAuthenticated) {

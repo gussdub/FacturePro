@@ -3,7 +3,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import stripe
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, RedirectResponse
+from urllib.parse import urlencode
 from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import OperationFailure, DuplicateKeyError
 import os
@@ -7542,6 +7543,233 @@ def mfa_challenge(body: dict, request: Request):
     return Token(access_token=create_token(user_id), user=User(**user))
 
 
+# ══════════════ SSO / OIDC (Google, Microsoft) — LIAISON DE COMPTE UNIQUEMENT ══════════════
+# Décisions de conception (assumées) :
+#  - LIAISON SEULE : un courriel inconnu est REFUSÉ. Le SSO ne crée jamais de compte ni d'org
+#    (sinon on contournerait l'inscription/invitation et le consentement qui va avec).
+#  - `email_verified` OBLIGATOIRE : sans ça, un IdP laxiste permettrait de prendre le contrôle
+#    d'un compte en déclarant simplement son courriel.
+#  - Le SSO NE CONTOURNE PAS la 2FA : si TOTP est activé, on renvoie mfa_required comme au login
+#    par mot de passe — sinon le SSO serait une 2e porte sautant le second facteur.
+#  - `is_active` et `token_version` honorés : le jeton n'est créé qu'à l'ÉCHANGE (donc après
+#    re-vérification), jamais figé pendant l'aller-retour.
+#  - Le JWT ne transite JAMAIS par une URL (historique/journaux) : la redirection ne porte qu'un
+#    code d'échange à USAGE UNIQUE et à TTL court, échangé ensuite par POST.
+_OIDC_PROVIDERS = {
+    "google": {
+        "label": "Google",
+        "discovery": "https://accounts.google.com/.well-known/openid-configuration",
+        "client_id": os.environ.get("GOOGLE_OIDC_CLIENT_ID", ""),
+        "client_secret": os.environ.get("GOOGLE_OIDC_CLIENT_SECRET", ""),
+    },
+}
+# MICROSOFT VOLONTAIREMENT ABSENT (revue adversariale) : relier un compte par le COURRIEL est sûr
+# chez Google (qui exige la preuve de propriété du domaine) mais PAS chez Entra ID — n'importe qui
+# crée un tenant gratuit et y déclare le courriel d'autrui (vulnérabilité « nOAuth », Microsoft
+# recommande d'identifier par sub/oid+tid, jamais par email). S'ajoutaient deux blocages : l'issuer
+# de découverte /common est un gabarit « {tenantid} » (validation impossible) et Entra n'émet pas
+# email_verified. Microsoft ne reviendra qu'avec une liaison sur (iss, sub) établie lors d'une
+# étape de liaison AUTHENTIFIÉE — chantier distinct.
+PUBLIC_BACKEND_URL = os.environ.get(
+    "PUBLIC_BACKEND_URL", "https://facturepro-backend-dkvn.onrender.com").rstrip("/")
+PUBLIC_FRONTEND_URL = os.environ.get("PUBLIC_FRONTEND_URL", "https://facturepro.ca").rstrip("/")
+_OIDC_STATE_TTL = 600      # 10 min pour compléter l'aller-retour chez le fournisseur
+_OIDC_EXCHANGE_TTL = 60    # 60 s pour échanger le code contre le jeton
+_oidc_meta_cache = {}      # provider -> (expire_ts, discovery_doc)
+_oidc_jwk_cache = {}       # provider -> PyJWKClient
+
+
+def _oidc_enabled(cfg):
+    return bool(cfg.get("client_id") and cfg.get("client_secret"))
+
+
+def _oidc_provider_or_404(provider):
+    cfg = _OIDC_PROVIDERS.get(provider)
+    if not cfg or not _oidc_enabled(cfg):
+        raise HTTPException(404, "Fournisseur SSO non configuré")
+    return cfg
+
+
+def _oidc_discovery(provider):
+    """Document de découverte OIDC, mis en cache 1 h (endpoints + issuer + jwks_uri)."""
+    cfg = _oidc_provider_or_404(provider)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    hit = _oidc_meta_cache.get(provider)
+    if hit and hit[0] > now_ts:
+        return hit[1]
+    r = httpx.get(cfg["discovery"], timeout=10)
+    r.raise_for_status()
+    doc = r.json()
+    _oidc_meta_cache[provider] = (now_ts + 3600, doc)
+    return doc
+
+
+def _oidc_jwks(provider, jwks_uri):
+    if provider not in _oidc_jwk_cache:
+        _oidc_jwk_cache[provider] = jwt.PyJWKClient(jwks_uri)
+    return _oidc_jwk_cache[provider]
+
+
+def _oidc_redirect_uri(provider):
+    return f"{PUBLIC_BACKEND_URL}/api/auth/oidc/{provider}/callback"
+
+
+_OIDC_BIND_COOKIE = "fp_oidc_bind"
+
+
+def _oidc_bind_hash(value):
+    return hashlib.sha256((value or "").encode()).hexdigest()
+
+
+def _oidc_expired(value):
+    """Vrai si l'échéance est dépassée. MongoDB renvoie des datetimes SANS fuseau : les comparer
+    directement à un `datetime.now(timezone.utc)` (avec fuseau) lève un TypeError et casserait
+    TOUT le flux SSO. On normalise donc en UTC avant comparaison."""
+    if not value:
+        return True
+    if getattr(value, "tzinfo", None) is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value < datetime.now(timezone.utc)
+
+
+def _oidc_fail(reason):
+    """Retour au frontend avec un code d'erreur NEUTRE (jamais de détail exploitable)."""
+    return RedirectResponse(f"{PUBLIC_FRONTEND_URL}/sso/callback?error={reason}", status_code=302)
+
+
+@app.get("/api/auth/oidc/providers")
+def list_oidc_providers():
+    """Fournisseurs réellement configurés — le frontend n'affiche que ces boutons."""
+    return {"providers": [{"id": k, "label": v["label"]}
+                          for k, v in _OIDC_PROVIDERS.items() if _oidc_enabled(v)]}
+
+
+@app.get("/api/auth/oidc/{provider}/start")
+def oidc_start(provider: str):
+    cfg = _oidc_provider_or_404(provider)
+    doc = _oidc_discovery(provider)
+    state = secrets.token_urlsafe(32)   # anti-CSRF, usage unique
+    nonce = secrets.token_urlsafe(32)   # anti-rejeu de l'ID token
+    # Liaison au NAVIGATEUR initiateur : sans elle, un attaquant peut faire consommer SON callback
+    # dans le navigateur de la victime (login CSRF / fixation de session), ou rejouer un code capté.
+    bind = secrets.token_urlsafe(32)
+    db.oidc_states.insert_one({
+        "state": state, "nonce": nonce, "provider": provider,
+        "bind_hash": _oidc_bind_hash(bind),
+        "expires_at": datetime.now(timezone.utc) + timedelta(seconds=_OIDC_STATE_TTL),
+    })
+    params = {
+        "client_id": cfg["client_id"],
+        "redirect_uri": _oidc_redirect_uri(provider),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "nonce": nonce,
+        "prompt": "select_account",
+    }
+    resp = RedirectResponse(f"{doc['authorization_endpoint']}?{urlencode(params)}", status_code=302)
+    # SameSite=None (avec Secure) est OBLIGATOIRE ici : l'échange final est un XHR CROSS-SITE
+    # (facturepro.ca -> backend onrender.com) ; en "lax" le cookie ne serait pas envoyé et tout
+    # échange échouerait. Cookie non-session, HttpOnly : il ne sert qu'à lier le navigateur.
+    resp.set_cookie(_OIDC_BIND_COOKIE, bind, max_age=_OIDC_STATE_TTL, httponly=True,
+                    secure=True, samesite="none", path="/")
+    return resp
+
+
+@app.get("/api/auth/oidc/{provider}/callback")
+def oidc_callback(provider: str, request: Request,
+                  code: str = None, state: str = None, error: str = None):
+    bind = request.cookies.get(_OIDC_BIND_COOKIE, "")
+    if error or not code or not state:
+        return _oidc_fail("refus_fournisseur")
+    cfg = _OIDC_PROVIDERS.get(provider)
+    if not cfg or not _oidc_enabled(cfg):
+        return _oidc_fail("fournisseur_inconnu")
+    # état consommé ATOMIQUEMENT → un même state ne peut pas servir deux fois
+    st = db.oidc_states.find_one_and_delete({"state": state, "provider": provider})
+    if not st or _oidc_expired(st.get("expires_at")):
+        return _oidc_fail("etat_invalide")
+    # Le callback DOIT arriver dans le navigateur qui a lancé /start.
+    if not bind or not secrets.compare_digest(_oidc_bind_hash(bind), st.get("bind_hash") or ""):
+        return _oidc_fail("navigateur_different")
+    try:
+        doc = _oidc_discovery(provider)
+        tr = httpx.post(doc["token_endpoint"], timeout=15, data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": _oidc_redirect_uri(provider),
+            "client_id": cfg["client_id"],
+            "client_secret": cfg["client_secret"],
+        })
+        tr.raise_for_status()
+        id_token = tr.json().get("id_token")
+    except Exception:
+        print("WARN oidc token exchange failed")   # jamais de secret ni de code dans les logs
+        return _oidc_fail("echange_impossible")
+    if not id_token:
+        return _oidc_fail("echange_impossible")
+    try:
+        key = _oidc_jwks(provider, doc["jwks_uri"]).get_signing_key_from_jwt(id_token)
+        claims = jwt.decode(id_token, key.key, algorithms=["RS256"],
+                            audience=cfg["client_id"], issuer=doc["issuer"])
+    except Exception:
+        return _oidc_fail("jeton_invalide")
+    if claims.get("nonce") != st.get("nonce"):
+        return _oidc_fail("nonce_invalide")
+    email = (claims.get("email") or "").strip().lower()
+    if not email or claims.get("email_verified") is not True:
+        return _oidc_fail("courriel_non_verifie")
+
+    user = db.users.find_one({"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}},
+                             {"_id": 0})
+    if not user:
+        _audit("auth.login.failure", request=request, actor_email=email, outcome="failure",
+               category="auth", metadata={"reason": "sso_compte_inconnu", "provider": provider})
+        return _oidc_fail("compte_inconnu")
+    if not user.get("is_active", True):
+        _audit("auth.login.failure", request=request, actor_user_id=user["id"], actor_email=email,
+               organization_id=user.get("organization_id"), outcome="failure", category="auth",
+               metadata={"reason": "deactivated", "provider": provider})
+        return _oidc_fail("compte_desactive")
+
+    # Code d'échange à USAGE UNIQUE : on ne stocke QUE l'identité, le jeton est forgé à l'échange
+    # (token_version frais + is_active re-vérifié à ce moment-là).
+    xcode = secrets.token_urlsafe(32)
+    db.oidc_exchanges.insert_one({
+        "code": xcode, "user_id": user["id"], "provider": provider,
+        "bind_hash": st.get("bind_hash"),   # seul CE navigateur pourra échanger le code
+        "expires_at": datetime.now(timezone.utc) + timedelta(seconds=_OIDC_EXCHANGE_TTL),
+    })
+    return RedirectResponse(f"{PUBLIC_FRONTEND_URL}/sso/callback?c={xcode}", status_code=302)
+
+
+@app.post("/api/auth/oidc/exchange")
+def oidc_exchange(body: dict, request: Request, response: Response):
+    """Échange le code à usage unique contre le vrai JWT (ou le défi 2FA). Le JWT n'a donc jamais
+    transité par une URL."""
+    c = (body.get("code") or "").strip()
+    rec = db.oidc_exchanges.find_one_and_delete({"code": c}) if c else None
+    if not rec or _oidc_expired(rec.get("expires_at")):
+        raise HTTPException(400, "Code d'échange invalide ou expiré")
+    # Un code capté (historique, Referer, extension) est INUTILISABLE ailleurs : il faut le cookie.
+    bind = request.cookies.get(_OIDC_BIND_COOKIE, "")
+    if not bind or not secrets.compare_digest(_oidc_bind_hash(bind), rec.get("bind_hash") or ""):
+        raise HTTPException(400, "Code d'échange invalide ou expiré")
+    user = db.users.find_one({"id": rec["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(401, "Utilisateur introuvable")
+    if not user.get("is_active", True):
+        raise HTTPException(403, "Compte désactivé. Contactez le propriétaire de l'organisation.")
+    response.delete_cookie(_OIDC_BIND_COOKIE, path="/")   # liaison consommée
+    # [MFA] le SSO ne saute PAS le second facteur
+    if _mfa_enabled(user["id"]):
+        return {"mfa_required": True, "mfa_token": _create_mfa_pending_token(user["id"])}
+    _audit("auth.login", request=request, actor_user_id=user["id"], actor_email=user.get("email"),
+           organization_id=user.get("organization_id"), category="auth",
+           metadata={"method": "sso", "provider": rec.get("provider")})
+    return Token(access_token=create_token(user["id"]), user=User(**user))
+
+
 @app.post("/api/org/require-mfa")
 def set_org_require_mfa(body: dict, request: Request, current_user: CurrentUser = Depends(get_current_user_with_access)):
     """[MFA] Imposer (ou lever) la double authentification pour TOUS les membres de l'organisation.
@@ -13784,6 +14012,11 @@ def seed_data():
         _safe_index(db.password_resets, "token_hash", "password_resets.token_hash")
         _safe_index(db.password_resets, "expires_at", "password_resets.ttl", expireAfterSeconds=0)
         _safe_index(db.login_attempts, "updated_at", "login_attempts.ttl", expireAfterSeconds=3600)
+        # [SSO] purge automatique des états CSRF et des codes d'échange + unicité (usage unique)
+        _safe_index(db.oidc_states, "state", "oidc_states.state", unique=True)
+        _safe_index(db.oidc_states, "expires_at", "oidc_states.ttl", expireAfterSeconds=0)
+        _safe_index(db.oidc_exchanges, "code", "oidc_exchanges.code", unique=True)
+        _safe_index(db.oidc_exchanges, "expires_at", "oidc_exchanges.ttl", expireAfterSeconds=0)
         # [MFA] état double authentification (secret TOTP + codes de secours), 1 doc par user.
         _safe_index(db.user_mfa, "user_id", "user_mfa.user_id", unique=True)
         # [Journal d'audit — Loi 25] index de requête (org + tri par date, filtres) + TTL 12 mois.
