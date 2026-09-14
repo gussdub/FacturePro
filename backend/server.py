@@ -23,6 +23,7 @@ import io
 import csv
 import base64
 import re
+import html as _html
 from dotenv import load_dotenv
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch, mm
@@ -4160,20 +4161,24 @@ def _send_invitation_email(to_email: str, org_name: str, token: str):
         # org_name proviennent de user-supplied company_name — escape pour éviter
         # l'injection HTML dans le corps et le sujet de l'email.
         safe_org_name = html_escape(org_name)
-        html = f"""
-        <p>Bonjour,</p>
-        <p>Vous êtes invité(e) à rejoindre <strong>{safe_org_name}</strong> sur FacturePro.</p>
-        <p><a href="{link}" style="background:#00A08C;color:#fff;padding:10px 20px;
-           text-decoration:none;border-radius:6px;display:inline-block;">
-           Accepter l'invitation</a></p>
-        <p style="color:#6b7280;font-size:12px">Ce lien expire dans 7 jours.
-           Si le bouton ne fonctionne pas, copie ce lien : <br/>{link}</p>
-        """
+        html, text = _brand_email(
+            heading="Invitation à rejoindre une organisation",
+            paragraphs=[
+                "Bonjour,",
+                f"Vous êtes invité(e) à rejoindre <strong>{safe_org_name}</strong> sur FacturePro.",
+            ],
+            button=("Accepter l'invitation", link),
+            footer_note=("Ce lien expire dans 7 jours. Si le bouton ne fonctionne pas, "
+                         f"copiez ce lien dans votre navigateur :<br>{html_escape(link)}"),
+        )
         resend.Emails.send({
             "from": sender,
             "to": to_email,
-            "subject": f"Invitation à rejoindre {safe_org_name} sur FacturePro",
+            # Le sujet est du TEXTE : on y met le nom brut, pas la version échappée (sinon
+            # « Ma Cie & Fils » s'afficherait « Ma Cie &amp; Fils » dans la boîte de réception).
+            "subject": f"Invitation à rejoindre {org_name} sur FacturePro",
             "html": html,
+            "text": text,
         })
         return True
     except Exception as e:
@@ -6946,6 +6951,168 @@ def _reset_token_hash(token: str) -> str:
     return hashlib.sha256((token or "").encode()).hexdigest()
 
 
+# ══════════════════ Gabarit de courriel aux couleurs de FacturePro ══════════════════
+# Contraintes propres au COURRIEL (différentes du web) :
+#  - mise en page en <table> + styles INLINE : Outlook/Gmail ignorent <style> et flexbox/grid ;
+#  - aucune police distante (Google Fonts ne se charge pas) → pile de polices système ;
+#  - AUCUNE image distante ni SVG inline : Gmail bloque les images par défaut et supprime le SVG.
+#    Le logo est donc reconstruit en HTML/CSS pur (dégradé remplacé par un aplat : Outlook ne sait
+#    pas faire de dégradé) → il s'affiche partout, sans rien à télécharger.
+#  - CONTRASTE mesuré : blanc sur #00A08C = 3,28:1 → réservé aux GROS textes (seuil 3:1). Pour du
+#    petit texte blanc il faut #00796B (5,32:1). Corps de texte : #1F2937 sur blanc = 14,7:1.
+_BRAND_TEAL = "#00A08C"
+_BRAND_TEAL_DARK = "#00796B"      # seule teinte teal acceptable sous du PETIT texte blanc
+_BRAND_INK = "#1F2937"
+_BRAND_MUTED = "#6B7280"
+_BRAND_FONTS = ("-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif")
+
+
+def _brand_email(heading: str, paragraphs, code: str = None, footer_note: str = None,
+                 button: tuple = None):
+    """Construit (html, texte) d'un courriel transactionnel de marque.
+
+    Réservé aux courriels envoyés PAR FacturePro à ses utilisateurs. Les courriels envoyés au
+    nom du client (facture/soumission/rappel à SES clients) ne doivent PAS porter cette marque.
+
+    CONTRAT D'ÉCHAPPEMENT (à respecter, sinon injection HTML dans le courriel) :
+      - `heading`, `paragraphs`, `footer_note` : fragments HTML, l'APPELANT échappe toute donnée
+        utilisateur qu'il y insère (ils acceptent volontairement du balisage : <strong>, <a>…).
+      - `code` et `button` : données brutes, échappées ICI — l'appelant ne doit pas les échapper.
+      - L'URL de `button` doit être une constante du code ou une URL construite par nous
+        (schéma http/https) : elle n'est pas validée, seulement échappée en attribut.
+    Retourne aussi une version TEXTE : elle améliore la délivrabilité et sert aux lecteurs d'écran
+    et aux clients en texte seul.
+    """
+    body_html = "".join(
+        f'<tr><td style="padding:0 32px 16px;font-family:{_BRAND_FONTS};font-size:15px;'
+        f'line-height:1.6;color:{_BRAND_INK}">{p}</td></tr>'
+        for p in paragraphs
+    )
+    code_html = ""
+    if code:
+        # `code` est une donnée brute (jeton) → échappée ICI, jamais à la charge de l'appelant.
+        # La version texte plus bas garde le code BRUT (pas d'entités HTML à recopier).
+        code_html = (
+            '<tr><td style="padding:0 32px 20px">'
+            '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
+            f'font-size:15px;color:{_BRAND_INK};background:#F3F4F6;border:1px solid #E5E7EB;'
+            'border-radius:10px;padding:14px 16px;word-break:break-all;letter-spacing:0.3px">'
+            f'{_html.escape(code, quote=False)}</div></td></tr>'
+        )
+    btn_html = ""
+    if button:
+        btn_label, btn_url = button
+        # Bouton « bulletproof » à BORDURES, et non à padding. La bordure fait partie de la
+        # boîte du <a> : elle est donc CLIQUABLE, et le moteur Word d'Outlook honore les
+        # bordures sur un élément inline (il ignore padding et inline-block). Mettre le padding
+        # sur le <td> donnerait bien la pastille sous Outlook, mais un <td> n'est pas un lien :
+        # la cible retomberait à la boîte du texte (148x18 au lieu de 200x45) dans TOUS les
+        # clients — mesuré. Ici la pastille entière est cliquable partout.
+        # Fond _BRAND_TEAL_DARK : blanc sur #00796B = 5,32:1 (conforme 4,5:1), alors que blanc
+        # sur #00A08C ne fait que 3,28:1 — insuffisant pour un libellé de bouton.
+        btn_html = (
+            '<tr><td style="padding:4px 32px 24px">'
+            '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+            f'<td align="center" bgcolor="{_BRAND_TEAL_DARK}" '
+            f'style="background:{_BRAND_TEAL_DARK};border-radius:10px">'
+            f'<a href="{_html.escape(btn_url, quote=True)}" '
+            f'style="display:inline-block;background:{_BRAND_TEAL_DARK};border-radius:10px;'
+            f'border:13px solid {_BRAND_TEAL_DARK};border-left-width:26px;'
+            f'border-right-width:26px;font-family:{_BRAND_FONTS};'
+            'font-size:15px;font-weight:700;line-height:18px;color:#FFFFFF;'
+            'text-decoration:none">'
+            f'{_html.escape(btn_label, quote=False)}</a>'
+            '</td></tr></table></td></tr>'
+        )
+    note_html = ""
+    if footer_note:
+        note_html = (
+            f'<tr><td style="padding:0 32px 24px;font-family:{_BRAND_FONTS};font-size:13px;'
+            f'line-height:1.6;color:{_BRAND_MUTED}">{footer_note}</td></tr>'
+        )
+    html = f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F3F4F6">
+<!-- lang aussi ICI : Gmail/Outlook.com suppriment l'élément racine et son lang="fr", mais
+     conservent l'attribut sur une table — sinon un lecteur d'écran lit le français avec une voix
+     anglaise (et épelle le code de récupération avec les noms de lettres anglais). -->
+<table role="presentation" lang="fr" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background:#F3F4F6;padding:24px 12px">
+<tr><td align="center">
+  <!-- « Ghost table » MSO : le moteur Word d'Outlook ignore max-width, donc la carte s'étirerait
+       à toute la largeur du volet de lecture (lignes de 200 caractères). Le bloc conditionnel
+       lui impose 600px en dur ; les autres clients ne le voient pas et restent fluides. -->
+  <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0"
+      border="0"><tr><td><![endif]-->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="max-width:600px;width:100%;background:#FFFFFF;border-radius:16px;overflow:hidden;
+                box-shadow:0 1px 3px rgba(0,0,0,0.08)">
+    <!-- En-tête de marque : logo en HTML/CSS (aucune image à charger) -->
+    <tr><td bgcolor="{_BRAND_TEAL}" style="background:{_BRAND_TEAL};padding:28px 32px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="padding-right:12px">
+          <!-- Marque en table (pas de div + line-height : le moteur Word d'Outlook le rend mal).
+               Le glyphe teal sur carré blanc est l'inversion du logo (carré teal + pastille) :
+               sur une bande teal, un carré teal disparaîtrait. border-radius tombe en carré
+               sous Outlook — dégradation acceptable, la marque reste lisible. -->
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0"
+                 width="44" height="44" style="width:44px;height:44px"><tr>
+            <!-- aria-hidden : « FacturePro » est juste à côté, le glyphe n'ajoute rien et
+                 serait lu « signe dollar, FacturePro ». -->
+            <td align="center" valign="middle" bgcolor="#FFFFFF" aria-hidden="true"
+                style="background:#FFFFFF;border-radius:12px;width:44px;height:44px;
+                       font-family:{_BRAND_FONTS};font-size:24px;font-weight:700;
+                       color:{_BRAND_TEAL}">$</td>
+          </tr></table>
+        </td>
+        <td style="font-family:{_BRAND_FONTS};color:#FFFFFF;font-size:24px;font-weight:700;
+                   letter-spacing:-0.2px">FacturePro</td>
+      </tr></table>
+    </td></tr>
+    <!-- Vrai titre de niveau 1 : une cellule stylée n'est pas un titre, donc inatteignable à
+         la navigation par titres (touche H de NVDA, rotor VoiceOver). margin:0 est indispensable,
+         sinon Outlook et Gmail appliquent leurs marges de titre par défaut. -->
+    <tr><td style="padding:28px 32px 12px">
+      <h1 style="margin:0;font-family:{_BRAND_FONTS};font-size:20px;font-weight:700;
+                 color:{_BRAND_INK}">{heading}</h1></td></tr>
+    {body_html}
+    {code_html}
+    {btn_html}
+    {note_html}
+    <tr><td style="padding:20px 32px;background:#F9FAFB;border-top:1px solid #E5E7EB;
+                   font-family:{_BRAND_FONTS};font-size:12px;line-height:1.6;color:{_BRAND_MUTED}">
+      FacturePro inc. — Québec, Canada<br>
+      <a href="https://facturepro.ca/privacy" style="color:{_BRAND_TEAL_DARK}">Confidentialité</a>
+      <span aria-hidden="true">&nbsp;·&nbsp;</span>
+      <a href="https://facturepro.ca/cgu" style="color:{_BRAND_TEAL_DARK}">Conditions</a>
+    </td></tr>
+  </table>
+  <!--[if mso]></td></tr></table><![endif]-->
+</td></tr></table></body></html>"""
+    def _to_text(fragment: str) -> str:
+        """Fragment HTML → texte lisible. L'ordre compte : on coupe les <br> en sauts de ligne,
+        on retire les balises, PUIS on décode les entités. Décoder avant de retirer les balises
+        transformerait un « &lt;b&gt; » légitime du contenu en balise, qui serait supprimée.
+        Sans le décodage, un nom comme « Tremblay & Fils » s'afficherait « Tremblay &amp; Fils »
+        dans les clients en texte seul."""
+        t = re.sub(r"<br\s*/?>", "\n", fragment, flags=re.I)
+        t = re.sub(r"<[^>]+>", "", t)
+        return _html.unescape(t).strip()
+
+    # Paragraphes séparés par une ligne vide (sinon ils se collent en un bloc illisible).
+    blocks = [_to_text(heading)] + [_to_text(p) for p in paragraphs]
+    if code:
+        blocks.append(code)                       # jeton BRUT : copiable tel quel
+    if button:
+        blocks.append(f"{button[0]} : {button[1]}")
+    if footer_note:
+        blocks.append(_to_text(footer_note))
+    blocks.append("FacturePro inc. — Québec, Canada\n"
+                  "https://facturepro.ca/privacy · https://facturepro.ca/cgu")
+    return html, "\n\n".join(blocks)
+
+
 def _send_password_reset_email(to_email: str, token: str) -> bool:
     """Envoie le code de réinitialisation par COURRIEL via Resend. Le jeton n'est JAMAIS renvoyé
     dans la réponse HTTP (sinon prise de contrôle de compte). Best-effort, ne lève pas."""
@@ -6954,20 +7121,25 @@ def _send_password_reset_email(to_email: str, token: str) -> bool:
         return False
     try:
         resend.api_key = os.environ.get("RESEND_API_KEY")
+        html, text = _brand_email(
+            heading="Réinitialisation de votre mot de passe",
+            paragraphs=[
+                "Bonjour,",
+                "Vous avez demandé la réinitialisation de votre mot de passe. "
+                "Voici votre code de récupération :",
+                "Copiez-le dans l'application pour choisir un nouveau mot de passe. "
+                "<strong>Ce code expire dans 1 heure.</strong>",
+            ],
+            code=token,
+            footer_note="Si vous n'êtes pas à l'origine de cette demande, ignorez ce courriel : "
+                        "votre mot de passe actuel reste valide et aucune action n'est requise.",
+        )
         resend.Emails.send({
             "from": SENDER_EMAIL,
             "to": [to_email],
             "subject": "Réinitialisation de votre mot de passe FacturePro",
-            "html": (
-                "<p>Bonjour,</p>"
-                "<p>Vous avez demandé la réinitialisation de votre mot de passe. "
-                "Voici votre code de récupération :</p>"
-                f"<p style=\"font-family:monospace;font-size:15px;background:#f3f4f6;"
-                f"padding:12px;border-radius:8px;word-break:break-all\">{token}</p>"
-                "<p>Copiez ce code dans l'application pour choisir un nouveau mot de passe. "
-                "Il expire dans 1 heure. Si vous n'êtes pas à l'origine de cette demande, "
-                "ignorez ce courriel.</p>"
-            ),
+            "html": html,
+            "text": text,
         })
         return True
     except Exception as e:
@@ -13020,17 +13192,27 @@ async def check_trial_expiry(request: Request):
         try:
             trial_end = datetime.fromisoformat(u["trial_end_date"])
             days_left = max(0, (trial_end - now).days)
+            body_html, body_text = _brand_email(
+                heading="Votre essai gratuit expire bientôt",
+                paragraphs=[
+                    # company_name est saisi par l'utilisateur -> ÉCHAPPÉ (avant, il était
+                    # inséré brut dans le markup : injection HTML dans le courriel).
+                    f"Bonjour {_html.escape(str(u.get('company_name') or ''))},",
+                    f"Votre essai gratuit de <strong>FacturePro</strong> expire dans "
+                    f"<strong>{days_left} jour{'s' if days_left != 1 else ''}</strong>.",
+                    "Pour continuer à profiter de toutes les fonctionnalités (factures, "
+                    "soumissions, suivi des paiements, etc.), abonnez-vous dès maintenant "
+                    "pour seulement <strong>15 $/mois CAD</strong>.",
+                ],
+                button=("S'abonner maintenant", "https://facturepro.ca/subscription"),
+                footer_note="Merci de faire confiance à FacturePro !",
+            )
             params = {
                 "from": SENDER_EMAIL,
                 "to": [u["email"]],
-                "subject": "FacturePro — Votre essai gratuit expire bientot",
-                "html": f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-<h2 style="color:#1f2937">Bonjour {u.get('company_name', '')},</h2>
-<p>Votre essai gratuit de <strong>FacturePro</strong> expire dans <strong>{days_left} jour{'s' if days_left != 1 else ''}</strong>.</p>
-<p>Pour continuer a profiter de toutes les fonctionnalites (factures, soumissions, suivi des paiements, etc.), abonnez-vous des maintenant pour seulement <strong>15 $/mois CAD</strong>.</p>
-<p style="margin:24px 0"><a href="https://facturepro.ca/subscription" style="background:#00A08C;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600">S'abonner maintenant</a></p>
-<p style="color:#6b7280;font-size:13px">Merci de faire confiance a FacturePro!</p>
-</div>"""
+                "subject": "FacturePro — Votre essai gratuit expire bientôt",
+                "html": body_html,
+                "text": body_text,
             }
             resend.Emails.send(params)
             db.trial_notifications.insert_one({
@@ -13041,7 +13223,12 @@ async def check_trial_expiry(request: Request):
             })
             sent += 1
         except Exception as e:
-            print(f"Trial notification error for {u.get('email')}: {e}")
+            # Étiquette NEUTRE : ce try couvre le gabarit, l'envoi Resend ET l'insert Mongo —
+            # « Resend error » enverrait le diagnostic sur une fausse piste. Le message
+            # d'exception est volontairement omis (il peut contenir l'adresse) ; l'id interne
+            # suffit à retrouver l'organisation (écart type audit Loi 25).
+            print(f"[trial-expiry] echec notification user={u.get('id')} "
+                  f"type={type(e).__name__}")
     return {"notified": sent, "total_eligible": len(users_to_notify)}
 
 
@@ -13089,19 +13276,26 @@ async def check_mileage_rate_update(request: Request):
         if not owner or not owner.get("email"):
             continue
         try:
+            body_html, body_text = _brand_email(
+                heading=f"Taux d'allocation automobile {year}",
+                paragraphs=[
+                    f"Le taux d'allocation automobile de l'ARC pour <strong>{year}</strong> "
+                    "n'est pas encore configuré dans <strong>FacturePro</strong>.",
+                    "Vérifiez le taux officiel sur "
+                    f'<a href="https://www.canada.ca" style="color:{_BRAND_TEAL_DARK}">canada.ca</a> '
+                    "(allocations pour frais d'automobile), puis mettez à jour l'application.",
+                    f"En attendant, le calcul d'allocation du carnet de route pour {year} "
+                    "est <strong>bloqué</strong> avec un message explicite — aucun montant "
+                    "n'est deviné.",
+                ],
+                footer_note="Ce rappel est automatique et ne sera envoyé qu'une fois par année.",
+            )
             params = {
                 "from": SENDER_EMAIL,
                 "to": [owner["email"]],
-                "subject": f"FacturePro — Taux d'allocation automobile ARC {year} a confirmer",
-                "html": (
-                    f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-<h2 style="color:#1f2937">Taux d'allocation automobile {year}</h2>
-<p>Le taux d'allocation automobile de l'ARC pour <strong>{year}</strong> n'est pas encore configure dans <strong>FacturePro</strong>.</p>
-<p>Verifiez le taux officiel sur <a href="https://www.canada.ca">canada.ca</a> (allocations pour frais d'automobile), puis mettez a jour l'application.</p>
-<p>En attendant, le calcul d'allocation du carnet de route pour {year} est <strong>bloque</strong> avec un message explicite — aucun montant n'est devine.</p>
-<p style="color:#6b7280;font-size:13px">Ce rappel est automatique et ne sera envoye qu'une fois par annee.</p>
-</div>"""
-                ),
+                "subject": f"FacturePro — Taux d'allocation automobile ARC {year} à confirmer",
+                "html": body_html,
+                "text": body_text,
             }
             resend.Emails.send(params)
             now_iso = datetime.now(timezone.utc).isoformat()

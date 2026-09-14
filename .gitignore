@@ -51,6 +51,8 @@ __pycache__/
 *pyc*
 venv/
 .venv/
+.venv-test/
+graphify-out/
 
 # Development tools
 chainlit.md
