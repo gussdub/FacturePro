@@ -74,3 +74,78 @@ class TestStatusMapping:
     def test_statuts_terminaux(self):
         """Seuls ces deux-là doivent poser terminated_at (la purge de rétention s'en servira)."""
         assert server_module._STRIPE_TERMINAL == {"canceled", "incomplete_expired"}
+
+
+class TestAccessGate:
+    @staticmethod
+    def _call(org, user):
+        """Renvoie None si l'accès est accordé, le code HTTP s'il est refusé."""
+        try:
+            server_module._check_subscription_active(org, user)
+            return None
+        except HTTPException as e:
+            return e.status_code
+
+    def _org(self, **kw):
+        base = {"subscription_status": "active"}
+        base.update(kw)
+        return base
+
+    def _end_in(self, days):
+        return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+
+    def test_acces_autorise_6_jours_apres_la_fin(self):
+        """Grâce de 7 j : un webhook manqué ne doit pas bloquer un bon payeur."""
+        org = self._org(subscription_current_period_end=self._end_in(-6))
+        assert self._call(org, {"email": "a@b.test"}) is None
+
+    def test_acces_refuse_8_jours_apres_la_fin(self):
+        """Et l'accès se ferme TOUT SEUL : c'est ce qui corrige le défaut d'origine."""
+        org = self._org(subscription_current_period_end=self._end_in(-8))
+        assert self._call(org, {"email": "a@b.test"}) == 402
+
+    def test_active_sans_date_est_refuse(self):
+        """INVARIANT. Un statut qui ouvre l'accès DOIT porter une date, sinon le bug d'accès
+        éternel revient par la porte arrière."""
+        assert self._call(self._org(), {"email": "a@b.test"}) == 402
+
+    def test_past_due_garde_l_acces_pendant_la_periode_payee(self):
+        org = self._org(subscription_status="past_due",
+                        subscription_current_period_end=self._end_in(3))
+        assert self._call(org, {"email": "a@b.test"}) is None
+
+    def test_canceled_garde_l_acces_jusqua_la_fin_payee(self):
+        """CGU art. 10 : « la résiliation prend effet à la fin de la période en cours »."""
+        org = self._org(subscription_status="canceled",
+                        subscription_current_period_end=self._end_in(3))
+        assert self._call(org, {"email": "a@b.test"}) is None
+
+    def test_suspended_refuse_meme_avec_une_date_valide(self):
+        org = self._org(subscription_status="suspended",
+                        subscription_current_period_end=self._end_in(30))
+        assert self._call(org, {"email": "a@b.test"}) == 402
+
+    def test_statut_inconnu_refuse(self):
+        org = self._org(subscription_status="chose_inconnue",
+                        subscription_current_period_end=self._end_in(30))
+        assert self._call(org, {"email": "a@b.test"}) == 402
+
+    def test_compte_exempte_jamais_bloque(self):
+        """Le propriétaire ne doit JAMAIS pouvoir se verrouiller hors de son propre produit."""
+        org = self._org(subscription_status="suspended",
+                        subscription_current_period_end=self._end_in(-999))
+        assert self._call(org, {"email": server_module.EXEMPT_USERS[0]}) is None
+
+    def test_essai_non_echu_autorise(self):
+        org = {"subscription_status": "trial", "trial_ends_at": self._end_in(5)}
+        assert self._call(org, {"email": "a@b.test"}) is None
+
+    def test_essai_echu_refuse(self):
+        org = {"subscription_status": "trial", "trial_ends_at": self._end_in(-1)}
+        assert self._call(org, {"email": "a@b.test"}) == 402
+
+    def test_date_naive_de_mongo_ne_leve_pas(self):
+        """Mongo rend des datetimes naïfs : comparer naïf et aware lève un TypeError."""
+        naive = (datetime.now(timezone.utc) + timedelta(days=3)).replace(tzinfo=None).isoformat()
+        org = self._org(subscription_current_period_end=naive)
+        assert self._call(org, {"email": "a@b.test"}) is None

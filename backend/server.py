@@ -2346,21 +2346,46 @@ def _synthesize_solo_org_from_user(user: dict) -> dict:
 
 
 def _check_subscription_active(org: dict, user: dict):
-    """Vérifie l'état d'abonnement au niveau org (avec exempt email fallback).
-    Raise HTTPException(402) si l'org est expirée et le user n'est pas exempt."""
+    """Vérifie l'état d'abonnement au niveau org. Lève HTTPException(402) si l'accès a expiré.
+
+    INVARIANT CENTRAL : tout statut qui ACCORDE l'accès doit porter une date de fin. Avant ce
+    correctif, `subscription_status="active"` était un booléen ÉTERNEL : un paiement unique
+    donnait un accès permanent, et une résiliation Stripe n'était jamais apprise. Ancrer l'accès
+    sur une date qui expire d'elle-même est ce qui ferme cette classe de défaut — un webhook
+    manqué ne peut plus produire un accès infini.
+    """
     if user.get("email") in EXEMPT_USERS:
-        return
+        return  # en PREMIER et sans condition : ne jamais se verrouiller hors de son produit
     sub_status = org.get("subscription_status", "trial")
-    trial_end = org.get("trial_ends_at")
-    if sub_status == "trial" and trial_end:
+    now = datetime.now(timezone.utc)
+
+    if sub_status == "trial":
+        trial_end = org.get("trial_ends_at")
+        if not trial_end:
+            return  # essai sans date : comportement historique conservé
         try:
-            trial_end_dt = datetime.fromisoformat(trial_end)
-            if datetime.now(timezone.utc) > trial_end_dt:
-                sub_status = "expired"
+            if now <= _as_utc(datetime.fromisoformat(trial_end)):
+                return
         except Exception:
-            pass
-    if sub_status == "expired":
+            return  # date illisible : ne pas bloquer sur la foi d'une donnée corrompue
         raise HTTPException(402, "Subscription expired — please renew")
+
+    if sub_status in ("active", "past_due", "canceled"):
+        # past_due : Stripe retente le prélèvement, l'abonné n'est pas fautif.
+        # canceled : la période en cours est PAYÉE (CGU art. 10), l'accès court jusqu'au bout.
+        end = org.get("subscription_current_period_end")
+        if not end:
+            raise HTTPException(402, "Subscription expired — please renew")
+        try:
+            end_dt = _as_utc(datetime.fromisoformat(end))
+        except Exception:
+            raise HTTPException(402, "Subscription expired — please renew")
+        if now <= end_dt + timedelta(days=_SUBSCRIPTION_GRACE_DAYS):
+            return
+        raise HTTPException(402, "Subscription expired — please renew")
+
+    # `suspended` et tout statut inconnu -> fail-closed.
+    raise HTTPException(402, "Subscription expired — please renew")
 
 
 def _persist_solo_org_for_user(user: dict) -> dict:
