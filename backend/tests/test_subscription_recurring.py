@@ -276,3 +276,73 @@ class TestSubscriptionWebhooks:
     def test_type_inconnu_renvoie_200(self, wh):
         r = wh({"type": "invoice.will_be_due", "data": {"object": {}}})
         assert r.status_code == 200
+
+
+class TestVraisObjetsStripe:
+    """RÉGRESSION CRITIQUE. Dans stripe >= 15, StripeObject n'hérite plus de dict et n'a pas de
+    méthode .get() — or nos helpers utilisent .get(). Tous les autres tests de ce fichier
+    injectent des DICTS (via construct_event monkeypatché) et ne peuvent donc PAS détecter ce
+    défaut. Ces tests-ci passent de VRAIS objets Stripe, comme la production en reçoit.
+
+    Sans conversion, _subscription_period_end renvoie None -> l'org est écrite `active` sans date
+    -> _check_subscription_active lui refuse l'accès -> « j'ai payé et je suis bloqué »."""
+
+    @staticmethod
+    def _vrai_objet_stripe(period_end, status="active", sub_id="sub_reel", customer="cus_reel"):
+        from stripe._subscription import Subscription
+        return Subscription.construct_from({
+            "id": sub_id, "customer": customer, "status": status,
+            "items": {"data": [{"current_period_end": period_end}]},
+        }, "sk_test_dummy")
+
+    def test_stripe_object_na_pas_de_methode_get(self):
+        """La prémisse du défaut. Si ce test échoue un jour, c'est que la lib est revenue à un
+        StripeObject de type dict et que la conversion n'est peut-être plus nécessaire."""
+        obj = self._vrai_objet_stripe(1789000000)
+        assert not isinstance(obj, dict)
+        with pytest.raises(AttributeError):
+            obj.get("status")
+        assert obj["status"] == "active"   # l'accès par crochets fonctionne, lui
+
+    def test_period_end_est_none_sur_objet_brut(self):
+        """Documente le piège : le helper ne SAIT PAS lire un objet Stripe non converti."""
+        obj = self._vrai_objet_stripe(1789000000)
+        assert server_module._subscription_period_end(obj) is None
+
+    def test_conversion_rend_la_date_lisible(self):
+        obj = self._vrai_objet_stripe(1789000000)
+        converti = server_module._stripe_obj_to_dict(obj)
+        assert isinstance(converti, dict)
+        attendu = datetime.fromtimestamp(1789000000, timezone.utc).isoformat()
+        assert server_module._subscription_period_end(converti) == attendu
+
+    def test_conversion_est_un_noop_sur_un_dict(self):
+        """Les 36 autres tests passent des dicts : la conversion ne doit rien changer pour eux."""
+        d = _sub([1789000000])
+        assert server_module._stripe_obj_to_dict(d) == d
+
+    def test_apply_avec_un_vrai_objet_stripe_ecrit_bien_la_date(self):
+        """LE test qui compte : le chemin de production complet, avec un vrai objet Stripe.
+        Si _stripe_obj_to_dict était retiré de _apply_stripe_subscription, ce test échouerait
+        alors que tous les autres resteraient verts."""
+        import uuid as _uuid
+        oid = str(_uuid.uuid4())
+        ts = int((datetime.now(timezone.utc) + timedelta(days=25)).timestamp())
+        server_module.db.organizations.insert_one({
+            "id": oid, "name": "Test objet Stripe", "subscription_status": "trial",
+            "stripe_customer_id": "cus_objet_reel",
+        })
+        try:
+            obj = self._vrai_objet_stripe(ts, status="active", sub_id="sub_objet_reel",
+                                          customer="cus_objet_reel")
+            assert server_module._apply_stripe_subscription(obj) is True
+            o = server_module.db.organizations.find_one({"id": oid})
+            assert o["subscription_status"] == "active"
+            assert o.get("subscription_current_period_end"), (
+                "date de fin absente : l'org serait `active` sans date, donc REFUSÉE par la garde")
+            # Et l'org doit réellement passer la garde, pas seulement porter un champ.
+            server_module._check_subscription_active(o, {"email": "pas-exempte@b.test"})
+        finally:
+            server_module.db.organizations.delete_one({"id": oid})
+            server_module.db.users.update_many({"organization_id": oid},
+                                               {"$unset": {"subscription_status": ""}})
