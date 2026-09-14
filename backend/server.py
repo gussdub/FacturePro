@@ -8300,7 +8300,13 @@ def delete_client(client_id: str, current_user: CurrentUser = Depends(require_pe
     return {"message": "Client deleted"}
 
 
-# ─── Effacement Loi 25 (art. 28.1) — clients & employés ───
+# ─── Effacement des renseignements personnels (art. 23 et 28 P-39.1) — clients & employés ───
+# NOTE DE CITATION : ne PAS écrire « art. 28.1 » ici. L'art. 28.1 de la Loi sur la protection des
+# renseignements personnels dans le secteur privé (RLRQ, c. P-39.1) est le droit à la CESSATION DE
+# DIFFUSION et à la DÉSINDEXATION — il ne crée aucun droit à l'effacement en base. Le fondement
+# réel est l'art. 23 (détruire ou anonymiser lorsque les fins sont accomplies, sous réserve d'un
+# délai légal de conservation) et l'art. 28 (rectification, y compris lorsque la conservation
+# n'est pas autorisée par la loi). Erreur présente dans le commit 8c3f99b, corrigée le 2026-09-14.
 _CLIENT_PII_CLEAR = ("email", "phone", "address", "city", "postal_code", "country",
                      "bn_number", "gst_number", "qst_number", "hst_number", "neq_number")
 _EMPLOYEE_PII_CLEAR = ("email", "phone", "employee_number", "department")
@@ -8313,7 +8319,8 @@ def _anon_suffix(subject_id):
 @app.post("/api/clients/{client_id}/erase")
 def erase_client(client_id: str, body: dict, request: Request,
                  current_user: CurrentUser = Depends(get_current_user_with_access)):
-    """Effacement Loi 25 (art. 28.1) d'un client. Propriétaire seulement. Anonymise le client
+    """Effacement d'un client (art. 23 et 28 P-39.1 — PAS l'art. 28.1, cf. note ci-dessus).
+    Propriétaire seulement. Anonymise le client
     (RP retirées) tout en CONSERVANT les documents financiers requis par la rétention fiscale ;
     le nom/adresse sont FIGÉS sur les factures/devis déjà émis (client_snapshot). Si le client
     n'a aucun document lié → suppression réelle. Irréversible ; confirmation par le nom exact."""
@@ -10557,7 +10564,8 @@ def delete_employee(employee_id: str, current_user: CurrentUser = Depends(requir
 @app.post("/api/employees/{employee_id}/erase")
 def erase_employee(employee_id: str, body: dict, request: Request,
                    current_user: CurrentUser = Depends(get_current_user_with_access)):
-    """Effacement Loi 25 (art. 28.1) d'un employé. Propriétaire seulement. Anonymise l'employé
+    """Effacement d'un employé (art. 23 et 28 P-39.1 — PAS l'art. 28.1, cf. note ci-dessus).
+    Propriétaire seulement. Anonymise l'employé
     (RP retirées) ; l'attribution fiscale (dépenses, carnet de route) est conservée via employee_id.
     Si aucun document lié → suppression réelle. Irréversible ; confirmation par le nom exact."""
     _audit_require_owner(current_user)
