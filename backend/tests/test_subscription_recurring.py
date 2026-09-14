@@ -176,3 +176,37 @@ class TestAccessGate:
         assert self._call({"subscription_status": "active",
                            "subscription_current_period_end": valide},
                           {"email": "a@b.test"}) is None, "un abonné payant doit garder l'accès"
+
+
+class TestCheckoutSubscription:
+    def test_session_creee_en_mode_abonnement(self, monkeypatch):
+        captured = {}
+
+        def fake_create(**kw):
+            captured.update(kw)
+            class S:
+                id = "cs_test_123"
+                url = "https://checkout.stripe.test/cs_test_123"
+            return S()
+
+        monkeypatch.setattr(server_module.stripe.checkout.Session, "create", fake_create)
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        monkeypatch.setattr(server_module.db.payment_transactions, "insert_one", lambda d: None)
+
+        client = TestClient(server_module.app)
+        login = client.post("/api/auth/login",
+                            json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        assert login.status_code == 200, login.text
+        h = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        r = client.post("/api/subscription/create-checkout",
+                        json={"origin_url": "https://facturepro.ca"}, headers=h)
+        assert r.status_code == 200, r.text
+
+        assert captured["mode"] == "subscription", "doit être un abonnement, pas un paiement unique"
+        price = captured["line_items"][0]["price_data"]
+        assert price["recurring"] == {"interval": "month"}
+        assert price["unit_amount"] == int(server_module.SUBSCRIPTION_PRICE_CAD * 100)
+        # Les événements customer.subscription.* ne portent pas les métadonnées du checkout —
+        # il faut donc les recopier sur l'abonnement lui-même.
+        assert captured["subscription_data"]["metadata"]["organization_id"]
+        assert captured.get("customer_email")

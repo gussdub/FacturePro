@@ -13123,13 +13123,26 @@ def create_subscription_checkout(
             "price_data": {
                 "currency": "cad",
                 "unit_amount": int(SUBSCRIPTION_PRICE_CAD * 100),
+                # [Facturation] `recurring` est ce qui fait de ce prix un ABONNEMENT. Prix défini
+                # en ligne plutôt que via un objet Price du tableau de bord : pas d'étape manuelle,
+                # pas de dérive de configuration entre les modes test et production.
+                "recurring": {"interval": "month"},
                 "product_data": {"name": "Abonnement FacturePro"},
             },
             "quantity": 1,
         }],
-        mode="payment",
+        mode="subscription",
+        customer_email=current_user.email,
         success_url=success_url,
         cancel_url=cancel_url,
+        # [Facturation] Les événements customer.subscription.* ne transportent PAS les
+        # métadonnées de la session de checkout : ils portent celles de l'ABONNEMENT. On les
+        # recopie donc ici. Filet seulement — le routage principal se fait par
+        # stripe_subscription_id / stripe_customer_id stockés en base.
+        subscription_data={"metadata": {
+            "user_id": current_user.id,
+            "organization_id": current_user.organization_id,
+        }},
         metadata={
             "user_id": current_user.id,
             # Feature #11 — carry organization_id through Stripe so the webhook
