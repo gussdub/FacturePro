@@ -149,3 +149,30 @@ class TestAccessGate:
         naive = (datetime.now(timezone.utc) + timedelta(days=3)).replace(tzinfo=None).isoformat()
         org = self._org(subscription_current_period_end=naive)
         assert self._call(org, {"email": "a@b.test"}) is None
+
+    def test_trial_sans_date_autorise(self):
+        """Comportement historique délibérément conservé : un essai sans date n'est pas bloqué.
+        Documenté par un test pour qu'une inversion future soit visible."""
+        assert self._call({"subscription_status": "trial"}, {"email": "a@b.test"}) is None
+
+    def test_trial_date_illisible_autorise(self):
+        """On ne bloque pas un utilisateur sur la foi d'une donnée corrompue."""
+        assert self._call({"subscription_status": "trial", "trial_ends_at": "pas-une-date"},
+                          {"email": "a@b.test"}) is None
+
+    def test_trial_date_naive_comparee_sans_erreur(self):
+        naive = (datetime.now(timezone.utc) + timedelta(days=5)).replace(tzinfo=None).isoformat()
+        assert self._call({"subscription_status": "trial", "trial_ends_at": naive},
+                          {"email": "a@b.test"}) is None
+
+    def test_objet_datetime_de_mongo_sur_les_deux_branches(self):
+        """RÉGRESSION : pymongo peut rendre un objet datetime au lieu d'une chaîne ISO.
+        Avant le correctif, un essai ÉCHU obtenait l'accès (fromisoformat lève -> except -> return)
+        et un abonné PAYANT était refusé (fromisoformat lève -> 402). Les deux sont faux."""
+        echu = datetime.now(timezone.utc) - timedelta(days=300)
+        valide = datetime.now(timezone.utc) + timedelta(days=20)
+        assert self._call({"subscription_status": "trial", "trial_ends_at": echu},
+                          {"email": "a@b.test"}) == 402, "un essai échu doit être refusé"
+        assert self._call({"subscription_status": "active",
+                           "subscription_current_period_end": valide},
+                          {"email": "a@b.test"}) is None, "un abonné payant doit garder l'accès"

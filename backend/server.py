@@ -2345,6 +2345,19 @@ def _synthesize_solo_org_from_user(user: dict) -> dict:
     }
 
 
+def _parse_stored_dt(value):
+    """Date persistée -> datetime aware UTC. Lève si la valeur est inutilisable.
+
+    pymongo peut rendre un objet `datetime` (BSON) là où le code écrit une chaîne ISO, selon
+    l'écrivain. `datetime.fromisoformat` EXIGE une `str` et lève un TypeError sur un datetime :
+    la garde accordait alors l'accès à un essai échu (5 organisations réelles dans ce cas) et
+    refusait l'accès à un abonné ayant PAYÉ. On accepte donc les deux formes.
+    """
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    return _as_utc(datetime.fromisoformat(value))
+
+
 def _check_subscription_active(org: dict, user: dict):
     """Vérifie l'état d'abonnement au niveau org. Lève HTTPException(402) si l'accès a expiré.
 
@@ -2364,7 +2377,7 @@ def _check_subscription_active(org: dict, user: dict):
         if not trial_end:
             return  # essai sans date : comportement historique conservé
         try:
-            if now <= _as_utc(datetime.fromisoformat(trial_end)):
+            if now <= _parse_stored_dt(trial_end):
                 return
         except Exception:
             return  # date illisible : ne pas bloquer sur la foi d'une donnée corrompue
@@ -2377,7 +2390,7 @@ def _check_subscription_active(org: dict, user: dict):
         if not end:
             raise HTTPException(402, "Subscription expired — please renew")
         try:
-            end_dt = _as_utc(datetime.fromisoformat(end))
+            end_dt = _parse_stored_dt(end)
         except Exception:
             raise HTTPException(402, "Subscription expired — please renew")
         if now <= end_dt + timedelta(days=_SUBSCRIPTION_GRACE_DAYS):
