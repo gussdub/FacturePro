@@ -49,6 +49,32 @@ SUBSCRIPTION_PRICE_CAD = 15.00
 # L'accès expire TOUT SEUL après ce délai : c'est ce qui empêche un webhook manqué de redonner un
 # accès éternel, qui était exactement le défaut d'origine.
 _SUBSCRIPTION_GRACE_DAYS = 7
+
+
+def _subscription_period_end(sub: dict):
+    """Fin de la période payée d'un abonnement Stripe, en ISO 8601 UTC, ou None.
+
+    ⚠️ En API 2026-06-24.dahlia, `current_period_end` N'EST PLUS sur l'objet Subscription : il vit
+    sur chaque SubscriptionItem. Vérifié dans la lib installée :
+        grep current_period_end stripe/_subscription.py      -> aucun résultat
+        grep current_period_end stripe/_subscription_item.py  -> current_period_end: int
+    Lire `sub["current_period_end"]` renverrait None, l'org serait `active` SANS date, donc
+    REFUSÉE par _check_subscription_active juste après avoir payé. Ne pas « simplifier » ceci.
+
+    On prend le MAXIMUM des items (un abonnement peut en porter plusieurs) et on renvoie None
+    plutôt qu'un 0 silencieux si rien n'est lisible — l'appelant décide quoi faire d'un None.
+    """
+    try:
+        items = ((sub or {}).get("items") or {}).get("data") or []
+        ends = [it.get("current_period_end") for it in items if isinstance(it, dict)]
+        ends = [int(e) for e in ends if isinstance(e, (int, float))]
+        if not ends:
+            return None
+        return datetime.fromtimestamp(max(ends), timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
 SUPPORTED_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
 _exchange_rate_cache = {"rates": {}, "fetched_at": None}
 
