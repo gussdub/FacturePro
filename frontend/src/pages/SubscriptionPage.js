@@ -9,6 +9,7 @@ const SubscriptionPage = () => {
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
   const [pollingStatus, setPollingStatus] = useState(null);
 
   const fetchSubscription = useCallback(async () => {
@@ -67,6 +68,23 @@ const SubscriptionPage = () => {
     } catch (err) {
       alert(err.response?.data?.detail || 'Erreur lors de la creation de la session de paiement');
     } finally { setCheckoutLoading(false); }
+  };
+
+  // Portail client Stripe : changement de carte, factures et résiliation en libre-service.
+  // On n'affiche le bouton que si l'organisation a déjà un client Stripe (sinon l'API renvoie 409).
+  const handlePortal = async () => {
+    setPortalLoading(true);
+    try {
+      const res = await axios.post(`${BACKEND_URL}/api/subscription/portal`, {
+        return_url: `${window.location.origin}/subscription`,
+      });
+      window.location.href = res.data.url;
+    } catch (e) {
+      alert(e.response?.status === 409
+        ? "Aucun abonnement actif à gérer pour le moment."
+        : "Impossible d'ouvrir le portail de facturation. Réessaie dans un moment.");
+      setPortalLoading(false);
+    }
   };
 
   if (loading) {
@@ -135,9 +153,17 @@ const SubscriptionPage = () => {
           </p>
         )}
         {isActive && (
-          <p style={{ margin: 0, color: '#16a34a', fontSize: '13px' }}>
-            Votre abonnement est actif. Acces complet a toutes les fonctionnalites.
-          </p>
+          <>
+            <p style={{ margin: 0, color: '#16a34a', fontSize: '13px' }}>
+              Votre abonnement est actif. Acces complet a toutes les fonctionnalites.
+            </p>
+            <button onClick={handlePortal} disabled={portalLoading}
+                    style={{ background: '#00796B', color: '#fff', border: 'none',
+                             padding: '12px 24px', borderRadius: 8, fontWeight: 600,
+                             cursor: portalLoading ? 'wait' : 'pointer', marginTop: 12 }}>
+              {portalLoading ? 'Ouverture…' : 'Gérer mon abonnement'}
+            </button>
+          </>
         )}
 
         {subscription?.last_payment && (
