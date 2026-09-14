@@ -445,3 +445,103 @@ class TestCheckoutReutiliseLeClient:
         assert r.status_code == 200, r.text
         assert captured.get("customer_email")
         assert "customer" not in captured
+
+
+class TestCourseCheckoutEtWebhook:
+    """RÉGRESSION BLOQUANTE. Le polling du frontend et le webhook étaient gardés par le MÊME
+    drapeau tx.payment_status : le premier arrivé empêchait le second d'écrire la date de fin de
+    période, et l'org restait `active` SANS date -> refusée par la garde. Symptôme réel :
+    « j'ai payé et je suis bloqué », avec l'UI affichant « actif » en vert."""
+
+    @pytest.fixture
+    def contexte(self, monkeypatch):
+        import uuid as _uuid
+        oid = str(_uuid.uuid4())
+        sid = "cs_test_" + oid[:8]
+        ts = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
+        server_module.db.organizations.insert_one({
+            "id": oid, "name": "Test course", "subscription_status": "trial",
+        })
+        server_module.db.payment_transactions.insert_one({
+            "id": str(_uuid.uuid4()), "session_id": sid, "organization_id": oid,
+            "user_id": "u_course", "amount": 15.0, "currency": "cad",
+            "payment_status": "pending", "status": "initiated",
+        })
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        monkeypatch.setattr(server_module, "STRIPE_WEBHOOK_SECRET", "whsec_test_dummy")
+        # L'abonnement que Stripe renverrait, AVEC organization_id en métadonnée (c'est ce que
+        # pose subscription_data.metadata au checkout) et la date sur les ITEMS.
+        sub = {"id": "sub_course", "customer": "cus_course", "status": "active",
+               "metadata": {"organization_id": oid},
+               "items": {"data": [{"current_period_end": ts}]}}
+        monkeypatch.setattr(server_module.stripe.Subscription, "retrieve",
+                            staticmethod(lambda _id, **kw: sub))
+        client = TestClient(server_module.app)
+
+        def envoyer_webhook():
+            monkeypatch.setattr(server_module.stripe.Webhook, "construct_event",
+                                staticmethod(lambda body, sig, secret: {
+                                    "type": "checkout.session.completed",
+                                    "data": {"object": {
+                                        "id": sid, "payment_status": "paid",
+                                        "customer": "cus_course", "subscription": "sub_course",
+                                        "metadata": {"organization_id": oid},
+                                    }}}))
+            return client.post("/api/webhook/stripe", json={})
+
+        yield oid, sid, ts, envoyer_webhook
+        server_module.db.organizations.delete_one({"id": oid})
+        server_module.db.payment_transactions.delete_one({"session_id": sid})
+        server_module.db.users.delete_many({"organization_id": oid})
+
+    def test_webhook_seul_pose_la_date(self, contexte):
+        oid, sid, ts, envoyer = contexte
+        assert envoyer().status_code == 200
+        o = server_module.db.organizations.find_one({"id": oid})
+        assert o["subscription_status"] == "active"
+        assert o.get("subscription_current_period_end"), "date de fin absente"
+        server_module._check_subscription_active(o, {"email": "pas-exempte@b.test"})
+
+    def test_transaction_deja_payee_nempeche_pas_la_date(self, contexte):
+        """LE test du défaut : on simule le polling ayant déjà marqué la transaction `paid` et
+        écrit un statut sans date. Le webhook doit QUAND MÊME poser la date de fin."""
+        oid, sid, ts, envoyer = contexte
+        server_module.db.payment_transactions.update_one(
+            {"session_id": sid}, {"$set": {"payment_status": "paid", "status": "complete"}})
+        server_module.db.organizations.update_one(
+            {"id": oid}, {"$set": {"subscription_status": "active"}})
+        assert envoyer().status_code == 200
+        o = server_module.db.organizations.find_one({"id": oid})
+        assert o.get("subscription_current_period_end"), (
+            "le webhook a sauté sa branche parce que tx était déjà `paid` : l'org reste `active` "
+            "sans date, donc REFUSÉE par la garde alors que le client a payé")
+        server_module._check_subscription_active(o, {"email": "pas-exempte@b.test"})
+
+    def test_webhook_rejoue_reste_coherent(self, contexte):
+        oid, sid, ts, envoyer = contexte
+        envoyer(); envoyer()
+        o = server_module.db.organizations.find_one({"id": oid})
+        assert o["subscription_status"] == "active"
+        assert o.get("subscription_current_period_end")
+
+
+class TestWebhookRetries:
+    """Défaut IMPORTANT : un webhook qui lève une exception pendant le TRAITEMENT renvoyait 200,
+    donc Stripe considérait l'événement livré et ne le retentait JAMAIS."""
+
+    def test_exception_de_traitement_renvoie_500(self, monkeypatch):
+        """Sinon Stripe considère l'événement livré et ne le retente JAMAIS — or c'est la seule
+        source de rafraîchissement de la date de fin de période."""
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        monkeypatch.setattr(server_module, "STRIPE_WEBHOOK_SECRET", "whsec_test_dummy")
+        monkeypatch.setattr(server_module.stripe.Webhook, "construct_event",
+                            staticmethod(lambda body, sig, secret: {
+                                "type": "customer.subscription.updated",
+                                "data": {"object": _sub([1789000000], customer="cus_boom")}}))
+
+        def boom(sub):
+            raise RuntimeError("mongo indisponible")
+        monkeypatch.setattr(server_module, "_apply_stripe_subscription", boom)
+        client = TestClient(server_module.app)
+        r = client.post("/api/webhook/stripe", json={})
+        assert r.status_code == 500, "un échec de traitement doit faire retenter Stripe"

@@ -13223,20 +13223,38 @@ def check_subscription_status(
                 "paid_at": datetime.now(timezone.utc).isoformat()
             }}
         )
+    if session.payment_status == "paid":
+        # [Défaut BLOQUANT corrigé] Ce bloc s'exécute désormais à CHAQUE appel de polling où la
+        # session est payée, plutôt que d'être gardé par tx.payment_status != "paid" : ce polling
+        # et le webhook checkout.session.completed partageaient le MÊME drapeau, si bien que le
+        # premier arrivé (souvent ce polling, lancé immédiatement au retour de Stripe, avant le
+        # webhook qui met 1-3 s) empêchait l'autre d'écrire subscription_current_period_end -> org
+        # `active` SANS date -> refusée par _check_subscription_active malgré le paiement. On
+        # délègue à _apply_stripe_subscription (idempotent) plutôt que d'écrire "active" en dur.
         now_iso = datetime.now(timezone.utc).isoformat()
-        # Feature #11 — l'organisation est la source de vérité multi-tenant.
-        # On persiste stripe_customer_id (utile pour un futur customer portal).
-        org_update = {
-            "subscription_status": "active",
-            "subscription_started_at": now_iso,
-        }
         customer_id = getattr(session, "customer", None)
-        if customer_id:
-            org_update["stripe_customer_id"] = customer_id
-        db.organizations.update_one(
-            {"id": current_user.organization_id},
-            {"$set": org_update},
-        )
+        sub_id = getattr(session, "subscription", None)
+        sub_obj = None
+        if sub_id:
+            try:
+                sub_obj = stripe.Subscription.retrieve(sub_id)
+            except Exception as e:
+                print(f"[stripe] retrieve abonnement impossible type={type(e).__name__}")
+        applied = _apply_stripe_subscription(sub_obj) if sub_obj is not None else False
+        if not applied:
+            # Repli : pas d'abonnement Stripe applicable (session sans "subscription", retrieve en
+            # échec, ou routage impossible). Comportement historique préservé — mieux vaut un
+            # `active` sans date (transitoire, corrigé au webhook suivant) que rien du tout.
+            org_update = {
+                "subscription_status": "active",
+                "subscription_started_at": now_iso,
+            }
+            if customer_id:
+                org_update["stripe_customer_id"] = customer_id
+            db.organizations.update_one(
+                {"id": current_user.organization_id},
+                {"$set": org_update},
+            )
         # Miroir legacy sur db.users (transition — 4 semaines)
         db.users.update_one(
             {"id": current_user.id},
@@ -13330,6 +13348,21 @@ async def stripe_webhook(request: Request):
     sig = request.headers.get("Stripe-Signature", "")
     try:
         event = stripe.Webhook.construct_event(body, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        # Signature invalide / payload illisible : événement NON authentifié. On renvoie 200 —
+        # PAS 500 — pour ne jamais faire retenter Stripe un événement qu'on ne pourra de toute
+        # façon jamais vérifier (il ne le sera pas plus à la prochaine tentative). Jamais str(e) :
+        # peut contenir des fragments du corps/secret.
+        print(f"[stripe] webhook signature invalide type={type(e).__name__}")
+        return {"status": "error", "message": "invalid signature"}
+    # [Défaut IMPORTANT corrigé] À la différence du bloc de signature ci-dessus, une exception ICI
+    # (Mongo indisponible, etc.) DOIT faire retenter Stripe -> 500, pas 200. Sinon Stripe considère
+    # l'événement livré et ne le retente JAMAIS, alors que customer.subscription.updated est la
+    # SEULE source de rafraîchissement de subscription_current_period_end : un hoquet transitoire
+    # ferait perdre l'accès à un bon payeur 7 jours plus tard, sans trace exploitable. Ne pas
+    # confondre avec le cas « événement non routable » (_apply_stripe_subscription renvoie False,
+    # sans lever) : celui-là reste 200 volontairement, on ne saura jamais mieux le router plus tard.
+    try:
         if event["type"] == "checkout.session.completed":
             session_data = event["data"]["object"]
             if session_data.get("payment_status") == "paid":
@@ -13340,63 +13373,71 @@ async def stripe_webhook(request: Request):
                         {"session_id": session_id},
                         {"$set": {"payment_status": "paid", "status": "complete", "paid_at": datetime.now(timezone.utc).isoformat()}}
                     )
-                    metadata = session_data.get("metadata") or {}
-                    user_id = tx.get("user_id") or metadata.get("user_id")
-                    # Feature #11 — route paid status to the org (source of vérité
-                    # multi-tenant). Preferred key : metadata.organization_id,
-                    # fallback tx.organization_id, fallback lookup via user_id.
-                    organization_id = (
-                        metadata.get("organization_id")
-                        or tx.get("organization_id")
+                # [Défaut BLOQUANT corrigé] L'application de l'état d'abonnement à l'organisation
+                # ne dépend PLUS de tx.payment_status : ce flag ne sert plus qu'à l'idempotence de
+                # la TRANSACTION (ne jamais compter un paiement deux fois). Avant, ce bloc entier
+                # était gardé par le même `if tx.payment_status != "paid"` que le polling frontend
+                # (checkout-status) : le premier des deux arrivés marquait `tx` `paid`, et l'autre
+                # sautait alors toute sa branche — y compris le stripe.Subscription.retrieve qui
+                # pose subscription_current_period_end. Résultat mesuré : org `active` SANS date,
+                # refusée par _check_subscription_active alors que le client venait de payer.
+                metadata = session_data.get("metadata") or {}
+                user_id = (tx.get("user_id") if tx else None) or metadata.get("user_id")
+                # Feature #11 — route paid status to the org (source de vérité
+                # multi-tenant). Preferred key : metadata.organization_id,
+                # fallback tx.organization_id, fallback lookup via user_id.
+                organization_id = (
+                    metadata.get("organization_id")
+                    or (tx.get("organization_id") if tx else None)
+                )
+                if not organization_id and user_id:
+                    user_doc = db.users.find_one(
+                        {"id": user_id}, {"_id": 0, "organization_id": 1}
                     )
-                    if not organization_id and user_id:
-                        user_doc = db.users.find_one(
-                            {"id": user_id}, {"_id": 0, "organization_id": 1}
-                        )
-                        if user_doc:
-                            organization_id = user_doc.get("organization_id")
-                    now_iso = datetime.now(timezone.utc).isoformat()
+                    if user_doc:
+                        organization_id = user_doc.get("organization_id")
+                now_iso = datetime.now(timezone.utc).isoformat()
+                customer_id = session_data.get("customer")
+                # [Facturation] En mode abonnement, la session porte l'id de l'abonnement. On le
+                # récupère pour DÉLÉGUER à _apply_stripe_subscription, qui est idempotent, écrit
+                # le statut CARTOGRAPHIÉ (_map_stripe_status) et la date de fin, et gère
+                # terminated_at — au lieu de dupliquer cette logique ici avec un "active" en dur
+                # sans date (la racine du défaut ci-dessus).
+                sub_id = session_data.get("subscription")
+                sub_obj = None
+                if sub_id:
+                    try:
+                        sub_obj = stripe.Subscription.retrieve(sub_id)
+                    except Exception as e:
+                        print(f"[stripe] retrieve abonnement impossible type={type(e).__name__}")
+                applied = _apply_stripe_subscription(sub_obj) if sub_obj is not None else False
+                if not applied and organization_id:
+                    # Repli : pas d'abonnement Stripe applicable (session sans "subscription",
+                    # retrieve en échec, ou routage impossible faute de métadonnée). Comportement
+                    # historique préservé — couvre aussi l'ancien schéma de session sans abonnement
+                    # exercé par tests/test_organizations_integration.py:213.
                     org_update = {
                         "subscription_status": "active",
                         "subscription_started_at": now_iso,
                     }
-                    customer_id = session_data.get("customer")
                     if customer_id:
                         org_update["stripe_customer_id"] = customer_id
-                    # [Facturation] En mode abonnement, la session porte l'id de l'abonnement. On
-                    # le récupère pour obtenir le statut ET la date de fin de période — sans
-                    # laquelle la garde refuserait l'accès (invariant de _check_subscription_active).
-                    sub_id = session_data.get("subscription")
-                    sub_obj = None
-                    if sub_id:
-                        try:
-                            sub_obj = stripe.Subscription.retrieve(sub_id)
-                        except Exception as e:
-                            print(f"[stripe] retrieve abonnement impossible type={type(e).__name__}")
-                    if sub_obj is not None:
-                        sub_dict = _stripe_obj_to_dict(sub_obj)
-                        org_update["subscription_status"] = _map_stripe_status(sub_dict.get("status"))
-                        org_update["stripe_subscription_id"] = sub_id
-                        pe = _subscription_period_end(sub_dict)
-                        if pe:
-                            org_update["subscription_current_period_end"] = pe
-                    if organization_id:
-                        db.organizations.update_one(
-                            {"id": organization_id},
-                            {"$set": org_update},
-                        )
-                    if user_id:
-                        db.users.update_one(
-                            {"id": user_id},
-                            {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
-                        )
+                    db.organizations.update_one(
+                        {"id": organization_id},
+                        {"$set": org_update},
+                    )
+                if user_id:
+                    db.users.update_one(
+                        {"id": user_id},
+                        {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
+                    )
         elif event["type"] in ("customer.subscription.updated",
                                "customer.subscription.deleted"):
             _apply_stripe_subscription(event["data"]["object"] or {})
         return {"status": "ok"}
     except Exception as e:
-        print(f"Webhook error: {e}")
-        return {"status": "error", "message": str(e)}
+        print(f"[stripe] webhook echec traitement type={type(e).__name__}")
+        raise HTTPException(500, "Erreur de traitement du webhook")
 
 
 @app.post("/api/subscription/check-trial-expiry")
