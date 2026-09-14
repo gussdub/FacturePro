@@ -50,3 +50,27 @@ class TestSubscriptionPeriodEnd:
     def test_objet_malforme_renvoie_none(self):
         for bad in ({}, {"items": None}, {"items": {"data": [{}]}}, {"items": {"data": [{"current_period_end": None}]}}):
             assert server_module._subscription_period_end(bad) is None
+
+
+class TestStatusMapping:
+    @pytest.mark.parametrize("stripe_status,attendu", [
+        ("active", "active"),
+        ("trialing", "active"),
+        ("past_due", "past_due"),
+        ("canceled", "canceled"),
+        ("incomplete_expired", "suspended"),
+        ("incomplete", "suspended"),
+        ("unpaid", "suspended"),
+        ("paused", "suspended"),
+    ])
+    def test_les_huit_statuts_stripe(self, stripe_status, attendu):
+        assert server_module._map_stripe_status(stripe_status) == attendu
+
+    def test_statut_inconnu_ferme_l_acces(self):
+        """Une valeur future de Stripe, ou une donnée corrompue, ne doit JAMAIS ouvrir l'accès."""
+        for s in ("une_nouveaute_stripe_2027", "", None, 42):
+            assert server_module._map_stripe_status(s) == "suspended"
+
+    def test_statuts_terminaux(self):
+        """Seuls ces deux-là doivent poser terminated_at (la purge de rétention s'en servira)."""
+        assert server_module._STRIPE_TERMINAL == {"canceled", "incomplete_expired"}

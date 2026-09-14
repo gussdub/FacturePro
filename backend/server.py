@@ -75,6 +75,33 @@ def _subscription_period_end(sub: dict):
         return None
 
 
+# [Facturation] Cartographie EXHAUSTIVE des 8 statuts d'abonnement Stripe vers les nôtres. Un
+# statut non traité serait un trou silencieux, d'où le test paramétré qui couvre les 8.
+#   active / past_due / canceled -> l'accès est accordé jusqu'à la fin de la période PAYÉE + grâce
+#   suspended                    -> aucun accès, quelle que soit la date
+# `incomplete_expired` est volontairement mappé sur `suspended` et NON sur `canceled` : aucune
+# période n'a jamais été payée, il n'y a donc aucun accès à préserver.
+_STRIPE_STATUS_MAP = {
+    "active": "active",
+    "trialing": "active",
+    "past_due": "past_due",
+    "canceled": "canceled",
+    "incomplete": "suspended",
+    "incomplete_expired": "suspended",
+    "unpaid": "suspended",
+    "paused": "suspended",
+}
+# Statuts après lesquels l'abonnement est MORT : on horodate `terminated_at`, dont la purge de
+# rétention (Loi 25) a besoin pour dater la fermeture.
+_STRIPE_TERMINAL = {"canceled", "incomplete_expired"}
+
+
+def _map_stripe_status(stripe_status) -> str:
+    """Statut Stripe -> statut interne. Tout ce qui n'est pas explicitement connu est `suspended`
+    (fail-closed) : une valeur future de Stripe ne doit pas ouvrir l'accès par défaut."""
+    return _STRIPE_STATUS_MAP.get(stripe_status, "suspended")
+
+
 SUPPORTED_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
 _exchange_rate_cache = {"rates": {}, "fetched_at": None}
 
