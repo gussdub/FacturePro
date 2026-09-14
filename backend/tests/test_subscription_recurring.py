@@ -191,7 +191,9 @@ class TestCheckoutSubscription:
 
         monkeypatch.setattr(server_module.stripe.checkout.Session, "create", fake_create)
         monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
-        monkeypatch.setattr(server_module.db.payment_transactions, "insert_one", lambda d: None)
+        # NE PAS monkeypatcher db.payment_transactions.insert_one : pymongo renvoie un NOUVEL
+        # objet Collection a chaque acces d'attribut, donc le patch ne prend jamais et de vrais
+        # documents finissent en base de dev. On nettoie par session_id en fin de test.
 
         client = TestClient(server_module.app)
         login = client.post("/api/auth/login",
@@ -210,6 +212,7 @@ class TestCheckoutSubscription:
         # il faut donc les recopier sur l'abonnement lui-même.
         assert captured["subscription_data"]["metadata"]["organization_id"]
         assert captured.get("customer_email")
+        server_module.db.payment_transactions.delete_many({"session_id": "cs_test_123"})
 
 
 class TestSubscriptionWebhooks:
@@ -412,7 +415,9 @@ class TestCheckoutReutiliseLeClient:
 
         monkeypatch.setattr(server_module.stripe.checkout.Session, "create", fake_create)
         monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
-        monkeypatch.setattr(server_module.db.payment_transactions, "insert_one", lambda d: None)
+        # NE PAS monkeypatcher db.payment_transactions.insert_one : pymongo renvoie un NOUVEL
+        # objet Collection a chaque acces d'attribut, donc le patch ne prend jamais et de vrais
+        # documents finissent en base de dev. On nettoie par session_id en fin de test.
         c = TestClient(server_module.app)
         r = c.post("/api/auth/login",
                    json={"email": "gussdub@gmail.com", "password": "testpass123"})
@@ -435,6 +440,7 @@ class TestCheckoutReutiliseLeClient:
         finally:
             server_module.db.organizations.update_one(
                 {"id": oid}, {"$unset": {"stripe_customer_id": ""}})
+            server_module.db.payment_transactions.delete_many({"session_id": "cs_test_reuse"})
 
     def test_sans_client_existant_on_passe_le_courriel(self, monkeypatch):
         c, h, oid, captured = self._prepare(monkeypatch)
@@ -445,6 +451,7 @@ class TestCheckoutReutiliseLeClient:
         assert r.status_code == 200, r.text
         assert captured.get("customer_email")
         assert "customer" not in captured
+        server_module.db.payment_transactions.delete_many({"session_id": "cs_test_reuse"})
 
 
 class TestCourseCheckoutEtWebhook:
