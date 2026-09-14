@@ -210,3 +210,69 @@ class TestCheckoutSubscription:
         # il faut donc les recopier sur l'abonnement lui-même.
         assert captured["subscription_data"]["metadata"]["organization_id"]
         assert captured.get("customer_email")
+
+
+class TestSubscriptionWebhooks:
+    @pytest.fixture
+    def org(self):
+        oid = str(uuid.uuid4())
+        server_module.db.organizations.insert_one({
+            "id": oid, "name": "Test WH", "subscription_status": "trial",
+            "stripe_customer_id": "cus_wh_test",
+        })
+        yield oid
+        server_module.db.organizations.delete_one({"id": oid})
+
+    @pytest.fixture
+    def wh(self, monkeypatch):
+        """Monkeypatche construct_event, comme test_organizations_integration.py:213."""
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        monkeypatch.setattr(server_module, "STRIPE_WEBHOOK_SECRET", "whsec_test_dummy")
+        client = TestClient(server_module.app)
+
+        def post(payload):
+            monkeypatch.setattr(server_module.stripe.Webhook, "construct_event",
+                                staticmethod(lambda body, sig, secret: payload))
+            return client.post("/api/webhook/stripe", json={})
+        return post
+
+    def test_updated_applique_statut_et_date(self, org, wh):
+        ts = int((datetime.now(timezone.utc) + timedelta(days=20)).timestamp())
+        r = wh({"type": "customer.subscription.updated",
+                "data": {"object": _sub([ts], status="past_due", sub_id="sub_a",
+                                        customer="cus_wh_test")}})
+        assert r.status_code == 200, r.text
+        o = server_module.db.organizations.find_one({"id": org})
+        assert o["subscription_status"] == "past_due"
+        assert o["subscription_current_period_end"].startswith(
+            datetime.fromtimestamp(ts, timezone.utc).isoformat()[:10])
+        assert o["stripe_subscription_id"] == "sub_a"
+
+    def test_deleted_pose_canceled_et_terminated_at(self, org, wh):
+        ts = int((datetime.now(timezone.utc) + timedelta(days=5)).timestamp())
+        r = wh({"type": "customer.subscription.deleted",
+                "data": {"object": _sub([ts], status="canceled", customer="cus_wh_test")}})
+        assert r.status_code == 200
+        o = server_module.db.organizations.find_one({"id": org})
+        assert o["subscription_status"] == "canceled"
+        assert o.get("terminated_at")
+
+    def test_deleted_rejoue_ne_bouge_pas_terminated_at(self, org, wh):
+        """Stripe rejoue ses événements. Repousser terminated_at repousserait la purge Loi 25."""
+        ts = int((datetime.now(timezone.utc) + timedelta(days=5)).timestamp())
+        ev = {"type": "customer.subscription.deleted",
+              "data": {"object": _sub([ts], status="canceled", customer="cus_wh_test")}}
+        wh(ev)
+        premier = server_module.db.organizations.find_one({"id": org})["terminated_at"]
+        wh(ev)
+        assert server_module.db.organizations.find_one({"id": org})["terminated_at"] == premier
+
+    def test_client_inconnu_renvoie_200_sans_ecrire(self, wh):
+        """Un 500 ferait retenter Stripe indéfiniment."""
+        r = wh({"type": "customer.subscription.updated",
+                "data": {"object": _sub([1789000000], customer="cus_inexistant")}})
+        assert r.status_code == 200
+
+    def test_type_inconnu_renvoie_200(self, wh):
+        r = wh({"type": "invoice.will_be_due", "data": {"object": {}}})
+        assert r.status_code == 200

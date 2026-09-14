@@ -13217,6 +13217,71 @@ def check_subscription_status(
     }
 
 
+def _stripe_obj_to_dict(obj):
+    """Normalise un objet Stripe en dict pur, récursivement. No-op sur un dict.
+
+    [Facturation] Un événement/ressource Stripe RÉEL est un StripeObject, pas un dict : `.get()`
+    y lève AttributeError (stripe-python >= 15 n'hérite plus de dict — vérifié contre la version
+    épinglée du repo). Les tests passent des dicts bruts (construct_event monkeypatché, ou
+    littéraux) pour lesquels `hasattr(obj, "to_dict")` est faux -> ce helper ne change rien pour
+    eux. `.to_dict()` convertit récursivement (ex. items.data[*]) en dicts purs.
+    """
+    return obj.to_dict() if hasattr(obj, "to_dict") else obj
+
+
+def _apply_stripe_subscription(sub) -> bool:
+    """Applique un objet d'abonnement Stripe à l'organisation correspondante. Renvoie True si une
+    organisation a été trouvée et mise à jour.
+
+    Routage par `stripe_subscription_id` puis `stripe_customer_id` (stockés en base), puis en
+    dernier recours par `metadata.organization_id` — parce que les événements
+    customer.subscription.* ne portent PAS les métadonnées de la session de checkout.
+    """
+    sub = _stripe_obj_to_dict(sub)
+    sub_id = sub.get("id")
+    customer_id = sub.get("customer")
+    meta_org = (sub.get("metadata") or {}).get("organization_id")
+    org = None
+    for flt in ({"stripe_subscription_id": sub_id} if sub_id else None,
+                {"stripe_customer_id": customer_id} if customer_id else None,
+                {"id": meta_org} if meta_org else None):
+        if flt:
+            org = db.organizations.find_one(flt, {"_id": 0, "id": 1, "terminated_at": 1})
+            if org:
+                break
+    if not org:
+        # Pas de 500 : Stripe retenterait indéfiniment un événement qu'on ne saura jamais router.
+        print(f"[stripe] abonnement sans organisation connue sub={sub_id} cust={customer_id}")
+        return False
+
+    our_status = _map_stripe_status(sub.get("status"))
+    upd = {"subscription_status": our_status}
+    if sub_id:
+        upd["stripe_subscription_id"] = sub_id
+    if customer_id:
+        upd["stripe_customer_id"] = customer_id
+    period_end = _subscription_period_end(sub)
+    if period_end:
+        # Écrit sans condition : la valeur la plus récemment reçue de Stripe fait autorité, les
+        # webhooks pouvant arriver dans le désordre.
+        upd["subscription_current_period_end"] = period_end
+
+    set_on_first = {}
+    if sub.get("status") in _STRIPE_TERMINAL and not org.get("terminated_at"):
+        # MONOTONE : uniquement à la première écriture. Un événement rejoué ne doit pas repousser
+        # la date, sinon il repousse d'autant la purge de rétention (Loi 25).
+        set_on_first["terminated_at"] = datetime.now(timezone.utc).isoformat()
+
+    db.organizations.update_one({"id": org["id"]}, {"$set": {**upd, **set_on_first}})
+    # Miroir sur db.users : exigé par tests/test_organizations_integration.py:213.
+    # update_MANY et non update_one : le filtre porte sur l'organisation, qui peut compter
+    # plusieurs membres — un update_one n'en toucherait qu'un seul, arbitrairement, et les autres
+    # garderaient un statut miroir périmé.
+    db.users.update_many({"organization_id": org["id"]},
+                         {"$set": {"subscription_status": our_status}})
+    return True
+
+
 @app.post("/api/webhook/stripe")
 async def stripe_webhook(request: Request):
     if not STRIPE_API_KEY:
@@ -13262,6 +13327,23 @@ async def stripe_webhook(request: Request):
                     customer_id = session_data.get("customer")
                     if customer_id:
                         org_update["stripe_customer_id"] = customer_id
+                    # [Facturation] En mode abonnement, la session porte l'id de l'abonnement. On
+                    # le récupère pour obtenir le statut ET la date de fin de période — sans
+                    # laquelle la garde refuserait l'accès (invariant de _check_subscription_active).
+                    sub_id = session_data.get("subscription")
+                    sub_obj = None
+                    if sub_id:
+                        try:
+                            sub_obj = stripe.Subscription.retrieve(sub_id)
+                        except Exception as e:
+                            print(f"[stripe] retrieve abonnement impossible type={type(e).__name__}")
+                    if sub_obj is not None:
+                        sub_dict = _stripe_obj_to_dict(sub_obj)
+                        org_update["subscription_status"] = _map_stripe_status(sub_dict.get("status"))
+                        org_update["stripe_subscription_id"] = sub_id
+                        pe = _subscription_period_end(sub_dict)
+                        if pe:
+                            org_update["subscription_current_period_end"] = pe
                     if organization_id:
                         db.organizations.update_one(
                             {"id": organization_id},
@@ -13272,6 +13354,9 @@ async def stripe_webhook(request: Request):
                             {"id": user_id},
                             {"$set": {"subscription_status": "active", "subscription_started_at": now_iso}}
                         )
+        elif event["type"] in ("customer.subscription.updated",
+                               "customer.subscription.deleted"):
+            _apply_stripe_subscription(event["data"]["object"] or {})
         return {"status": "ok"}
     except Exception as e:
         print(f"Webhook error: {e}")
