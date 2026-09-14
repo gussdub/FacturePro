@@ -346,3 +346,102 @@ class TestVraisObjetsStripe:
             server_module.db.organizations.delete_one({"id": oid})
             server_module.db.users.update_many({"organization_id": oid},
                                                {"$unset": {"subscription_status": ""}})
+
+
+class TestBillingPortal:
+    def _client_headers(self):
+        c = TestClient(server_module.app)
+        r = c.post("/api/auth/login",
+                   json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        assert r.status_code == 200, r.text
+        return c, {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    def test_sans_client_stripe_renvoie_409(self, monkeypatch):
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        c, h = self._client_headers()
+        me = c.get("/api/auth/me", headers=h).json()
+        server_module.db.organizations.update_one(
+            {"id": me["organization_id"]}, {"$unset": {"stripe_customer_id": ""}})
+        r = c.post("/api/subscription/portal",
+                   json={"return_url": "https://facturepro.ca/subscription"}, headers=h)
+        assert r.status_code == 409, r.text
+
+    def test_renvoie_l_url_du_portail(self, monkeypatch):
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        captured = {}
+
+        def fake_create(**kw):
+            captured.update(kw)
+            return {"url": "https://billing.stripe.test/session"}
+
+        monkeypatch.setattr(server_module.stripe.billing_portal.Session, "create", fake_create)
+        c, h = self._client_headers()
+        me = c.get("/api/auth/me", headers=h).json()
+        server_module.db.organizations.update_one(
+            {"id": me["organization_id"]}, {"$set": {"stripe_customer_id": "cus_portal"}})
+        try:
+            r = c.post("/api/subscription/portal",
+                       json={"return_url": "https://facturepro.ca/subscription"}, headers=h)
+            assert r.status_code == 200, r.text
+            assert r.json()["url"] == "https://billing.stripe.test/session"
+            assert captured["customer"] == "cus_portal"
+        finally:
+            server_module.db.organizations.update_one(
+                {"id": me["organization_id"]}, {"$unset": {"stripe_customer_id": ""}})
+
+    def test_sans_return_url_renvoie_400(self, monkeypatch):
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        c, h = self._client_headers()
+        r = c.post("/api/subscription/portal", json={}, headers=h)
+        assert r.status_code == 400, r.text
+
+
+class TestCheckoutReutiliseLeClient:
+    """Sans cela, chaque réabonnement crée un Customer Stripe de plus et le portail client perd
+    l'historique de facturation des cycles précédents."""
+
+    def _prepare(self, monkeypatch):
+        captured = {}
+
+        def fake_create(**kw):
+            captured.update(kw)
+            class S:
+                id = "cs_test_reuse"
+                url = "https://checkout.stripe.test/x"
+            return S()
+
+        monkeypatch.setattr(server_module.stripe.checkout.Session, "create", fake_create)
+        monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
+        monkeypatch.setattr(server_module.db.payment_transactions, "insert_one", lambda d: None)
+        c = TestClient(server_module.app)
+        r = c.post("/api/auth/login",
+                   json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        assert r.status_code == 200, r.text
+        h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        me = c.get("/api/auth/me", headers=h).json()
+        return c, h, me["organization_id"], captured
+
+    def test_client_existant_reutilise_et_pas_de_courriel(self, monkeypatch):
+        c, h, oid, captured = self._prepare(monkeypatch)
+        server_module.db.organizations.update_one(
+            {"id": oid}, {"$set": {"stripe_customer_id": "cus_deja_la"}})
+        try:
+            r = c.post("/api/subscription/create-checkout",
+                       json={"origin_url": "https://facturepro.ca"}, headers=h)
+            assert r.status_code == 200, r.text
+            assert captured.get("customer") == "cus_deja_la"
+            assert "customer_email" not in captured, (
+                "Stripe refuse customer ET customer_email dans la même session")
+        finally:
+            server_module.db.organizations.update_one(
+                {"id": oid}, {"$unset": {"stripe_customer_id": ""}})
+
+    def test_sans_client_existant_on_passe_le_courriel(self, monkeypatch):
+        c, h, oid, captured = self._prepare(monkeypatch)
+        server_module.db.organizations.update_one(
+            {"id": oid}, {"$unset": {"stripe_customer_id": ""}})
+        r = c.post("/api/subscription/create-checkout",
+                   json={"origin_url": "https://facturepro.ca"}, headers=h)
+        assert r.status_code == 200, r.text
+        assert captured.get("customer_email")
+        assert "customer" not in captured

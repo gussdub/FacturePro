@@ -13117,6 +13117,14 @@ def create_subscription_checkout(
         raise HTTPException(400, "origin_url requis")
     success_url = f"{origin_url}/subscription?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin_url}/subscription"
+    # [Facturation] Réutiliser le Customer Stripe existant s'il y en a un : sinon Stripe en crée
+    # un NOUVEAU à chaque session (il ne déduplique pas par courriel), et le portail client
+    # perdrait l'historique de facturation des cycles précédents. On ne peut pas passer `customer`
+    # ET `customer_email` : l'API Stripe rejette la combinaison.
+    _org = db.organizations.find_one({"id": current_user.organization_id},
+                                     {"_id": 0, "stripe_customer_id": 1}) or {}
+    _cus = _org.get("stripe_customer_id")
+    identite = {"customer": _cus} if _cus else {"customer_email": current_user.email}
     session = stripe.checkout.Session.create(
         payment_method_types=["card"],
         line_items=[{
@@ -13132,7 +13140,7 @@ def create_subscription_checkout(
             "quantity": 1,
         }],
         mode="subscription",
-        customer_email=current_user.email,
+        **identite,
         success_url=success_url,
         cancel_url=cancel_url,
         # [Facturation] Les événements customer.subscription.* ne transportent PAS les
@@ -13166,6 +13174,34 @@ def create_subscription_checkout(
     }
     db.payment_transactions.insert_one(tx_doc)
     return {"url": session.url, "session_id": session.id}
+
+
+@app.post("/api/subscription/portal")
+def create_billing_portal_session(
+    body: dict,
+    current_user: CurrentUser = Depends(require_permission("billing:manage")),
+):
+    """Ouvre le portail client Stripe hébergé : l'abonné y change sa carte, télécharge ses
+    factures et résilie lui-même. C'est Stripe qui nous renvoie l'état par webhook."""
+    if not STRIPE_API_KEY:
+        raise HTTPException(500, "Stripe non configure")
+    return_url = (body.get("return_url") or "").strip()
+    if not return_url:
+        raise HTTPException(400, "return_url requis")
+    org = db.organizations.find_one({"id": current_user.organization_id},
+                                   {"_id": 0, "stripe_customer_id": 1})
+    customer_id = (org or {}).get("stripe_customer_id")
+    if not customer_id:
+        # 409 explicite : l'organisation n'a jamais souscrit, il n'y a pas de client Stripe.
+        raise HTTPException(409, "Aucun abonnement Stripe pour cette organisation")
+    try:
+        session = stripe.billing_portal.Session.create(customer=customer_id,
+                                                       return_url=return_url)
+    except Exception as e:
+        print(f"[stripe] portail impossible type={type(e).__name__}")  # jamais str(e) : fuite de clé
+        raise HTTPException(502, "Portail de facturation indisponible")
+    url = session["url"] if isinstance(session, dict) else session.url
+    return {"url": url}
 
 
 @app.get("/api/subscription/checkout-status/{session_id}")
