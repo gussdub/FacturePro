@@ -80,7 +80,19 @@ def _subscription_period_end(sub: dict):
 #   active / past_due / canceled -> l'accès est accordé jusqu'à la fin de la période PAYÉE + grâce
 #   suspended                    -> aucun accès, quelle que soit la date
 # `incomplete_expired` est volontairement mappé sur `suspended` et NON sur `canceled` : aucune
-# période n'a jamais été payée, il n'y a donc aucun accès à préserver.
+# période n'a jamais été payée, il n'y a donc aucun accès à préserver. Il figure quand même dans
+# _STRIPE_TERMINAL, qui sert un usage ORTHOGONAL (dater `terminated_at` pour la purge Loi 25).
+#
+# Les trois cas `suspended` ont tous la même racine — aucune période payée — et la doc Stripe le
+# confirme (stripe/_subscription.py, docstring de `status`) :
+#   incomplete          : le 1er paiement a échoué ;
+#   incomplete_expired  : le 1er paiement n'a pas abouti en 23 h -> statut TERMINAL ;
+#   paused              : « A subscription can only enter a `paused` status when a trial ends
+#                         without a payment method ». ⚠️ NE PAS confondre avec la « pause de
+#                         collecte » (pause_collection), qui laisse le statut INCHANGÉ à `active`
+#                         et continue d'émettre des factures. Une pause volontaire d'un client ne
+#                         passe donc jamais par ici et ne lui coupe pas l'accès.
+#   unpaid              : Stripe a épuisé ses tentatives de relance.
 _STRIPE_STATUS_MAP = {
     "active": "active",
     "trialing": "active",
