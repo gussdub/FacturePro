@@ -95,8 +95,26 @@ const SubscriptionPage = () => {
   const trialEnd = subscription?.trial_end_date || user?.trial_end_date;
   const isActive = status === 'active';
   const isTrial = status === 'trial';
+  const isPastDue = status === 'past_due';
+  const isCanceled = status === 'canceled';
+  const isSuspended = status === 'suspended';
   const isExpired = status === 'expired';
+  // L'organisation a un abonnement Stripe existant, même en difficulté : c'est ce qui doit
+  // conditionner l'accès au portail (corriger sa carte, voir ses factures), pas isActive seul —
+  // sinon un abonné past_due/canceled n'aurait aucun moyen de corriger son moyen de paiement.
+  const hasStripeSubscription = isActive || isPastDue || isCanceled;
   const trialDaysLeft = trialEnd ? Math.max(0, Math.ceil((new Date(trialEnd) - new Date()) / (1000 * 60 * 60 * 24))) : 0;
+
+  const STATUS_BADGE = {
+    active: { label: 'Actif', bg: '#f0fdf4', color: '#16a34a', border: '#bbf7d0' },
+    trial: { label: 'Essai gratuit', bg: '#fffbeb', color: '#92400e', border: '#fcd34d' },
+    past_due: { label: 'Paiement en retard', bg: '#fffbeb', color: '#92400e', border: '#fcd34d' },
+    canceled: { label: 'Résilié', bg: '#f4f4f5', color: '#52525b', border: '#e4e4e7' },
+    suspended: { label: 'Suspendu', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+    expired: { label: 'Expire', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  };
+  const statusBadge = STATUS_BADGE[status] || STATUS_BADGE.expired;
+  const showPricingCard = isTrial || isExpired || isSuspended;
 
   return (
     <div data-testid="subscription-page" style={{ maxWidth: '720px', margin: '0 auto' }}>
@@ -133,11 +151,11 @@ const SubscriptionPage = () => {
           <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#09090b', margin: 0, letterSpacing: '-0.02em' }}>Votre abonnement</h2>
           <span data-testid="subscription-status-badge" style={{
             padding: '4px 12px', borderRadius: '4px', fontWeight: '600', fontSize: '12px',
-            background: isActive ? '#f0fdf4' : isTrial ? '#fffbeb' : '#fef2f2',
-            color: isActive ? '#16a34a' : isTrial ? '#92400e' : '#dc2626',
-            border: `1px solid ${isActive ? '#bbf7d0' : isTrial ? '#fcd34d' : '#fecaca'}`
+            background: statusBadge.bg,
+            color: statusBadge.color,
+            border: `1px solid ${statusBadge.border}`
           }}>
-            {isActive ? 'Actif' : isTrial ? 'Essai gratuit' : 'Expire'}
+            {statusBadge.label}
           </span>
         </div>
 
@@ -153,17 +171,33 @@ const SubscriptionPage = () => {
           </p>
         )}
         {isActive && (
-          <>
-            <p style={{ margin: 0, color: '#16a34a', fontSize: '13px' }}>
-              Votre abonnement est actif. Acces complet a toutes les fonctionnalites.
-            </p>
-            <button onClick={handlePortal} disabled={portalLoading}
-                    style={{ background: '#00796B', color: '#fff', border: 'none',
-                             padding: '12px 24px', borderRadius: 8, fontWeight: 600,
-                             cursor: portalLoading ? 'wait' : 'pointer', marginTop: 12 }}>
-              {portalLoading ? 'Ouverture…' : 'Gérer mon abonnement'}
-            </button>
-          </>
+          <p style={{ margin: 0, color: '#16a34a', fontSize: '13px' }}>
+            Votre abonnement est actif. Acces complet a toutes les fonctionnalites.
+          </p>
+        )}
+        {isPastDue && (
+          <p style={{ margin: 0, color: '#92400e', fontSize: '13px' }}>
+            Votre dernier paiement a échoué, mais votre accès est maintenu pour l'instant. Mettez à jour votre carte dans le portail de facturation pour éviter une interruption.
+          </p>
+        )}
+        {isCanceled && (
+          <p style={{ margin: 0, color: '#52525b', fontSize: '13px' }}>
+            Votre abonnement a été résilié. Vous conservez l'accès jusqu'à la fin de la période déjà payée.
+          </p>
+        )}
+        {isSuspended && (
+          <p style={{ margin: 0, color: '#dc2626', fontSize: '13px' }}>
+            Votre abonnement est suspendu. Vous devez souscrire à nouveau pour retrouver l'accès à FacturePro.
+          </p>
+        )}
+
+        {hasStripeSubscription && (
+          <button onClick={handlePortal} disabled={portalLoading}
+                  style={{ background: '#00796B', color: '#fff', border: 'none',
+                           padding: '12px 24px', borderRadius: 8, fontWeight: 600,
+                           cursor: portalLoading ? 'wait' : 'pointer', marginTop: 12 }}>
+            {portalLoading ? 'Ouverture…' : 'Gérer mon abonnement'}
+          </button>
         )}
 
         {subscription?.last_payment && (
@@ -174,7 +208,7 @@ const SubscriptionPage = () => {
       </div>
 
       {/* Pricing Card */}
-      {!isActive && (
+      {showPricingCard && (
         <div style={{
           background: '#09090b', borderRadius: '6px', padding: '36px', color: '#ffffff'
         }}>
