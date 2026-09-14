@@ -10,6 +10,7 @@ _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
 import uuid
 from datetime import datetime, timezone, timedelta
 
+import pymongo
 import pytest
 import server as server_module
 from fastapi import HTTPException
@@ -25,6 +26,38 @@ def _sub(period_ends, status="active", sub_id="sub_test", customer="cus_test"):
         "status": status,
         "items": {"data": [{"current_period_end": e} for e in period_ends]},
     }
+
+
+@pytest.fixture
+def pas_de_transaction(monkeypatch):
+    """Empêche l'endpoint de checkout d'écrire réellement dans `payment_transactions`.
+
+    ⚠️ Ne PAS faire `monkeypatch.setattr(server_module.db.payment_transactions, "insert_one", ...)` :
+    `Database.__getattr__` de pymongo construit un NOUVEL objet `Collection` à chaque accès
+    d'attribut (`db.payment_transactions is db.payment_transactions` -> False). Le patch porterait
+    donc sur un objet jetable, l'endpoint appellerait une autre instance, et un vrai document
+    partirait dans la base de dev — qui est une copie de la production. C'est exactement ce qui
+    s'est produit : 78 documents accumulés, avec un faux « dernier paiement » lisible dans
+    /api/subscription/current.
+
+    On patche donc la méthode sur la CLASSE. Et on DÉLÈGUE pour toute autre collection : il y a 53
+    appels à `insert_one` dans server.py, et un no-op global casserait silencieusement la connexion
+    (`login_attempts`) ou d'autres écritures pendant le test.
+
+    Prévenir plutôt que nettoyer : un `delete_many` en fin de test ne s'exécute pas si un assert
+    échoue avant, et laisse donc fuir précisément dans le cas qui nous intéresse.
+    """
+    vrai_insert = pymongo.collection.Collection.insert_one
+    ignores = []
+
+    def _insert(self, document, *a, **kw):
+        if self.name == "payment_transactions":
+            ignores.append(document)          # capturé, jamais écrit
+            return None                       # l'endpoint ignore la valeur de retour
+        return vrai_insert(self, document, *a, **kw)
+
+    monkeypatch.setattr(pymongo.collection.Collection, "insert_one", _insert)
+    return ignores
 
 
 class TestSubscriptionPeriodEnd:
@@ -179,7 +212,7 @@ class TestAccessGate:
 
 
 class TestCheckoutSubscription:
-    def test_session_creee_en_mode_abonnement(self, monkeypatch):
+    def test_session_creee_en_mode_abonnement(self, monkeypatch, pas_de_transaction):
         captured = {}
 
         def fake_create(**kw):
@@ -191,9 +224,6 @@ class TestCheckoutSubscription:
 
         monkeypatch.setattr(server_module.stripe.checkout.Session, "create", fake_create)
         monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
-        # NE PAS monkeypatcher db.payment_transactions.insert_one : pymongo renvoie un NOUVEL
-        # objet Collection a chaque acces d'attribut, donc le patch ne prend jamais et de vrais
-        # documents finissent en base de dev. On nettoie par session_id en fin de test.
 
         client = TestClient(server_module.app)
         login = client.post("/api/auth/login",
@@ -212,7 +242,6 @@ class TestCheckoutSubscription:
         # il faut donc les recopier sur l'abonnement lui-même.
         assert captured["subscription_data"]["metadata"]["organization_id"]
         assert captured.get("customer_email")
-        server_module.db.payment_transactions.delete_many({"session_id": "cs_test_123"})
 
 
 class TestSubscriptionWebhooks:
@@ -403,7 +432,7 @@ class TestCheckoutReutiliseLeClient:
     """Sans cela, chaque réabonnement crée un Customer Stripe de plus et le portail client perd
     l'historique de facturation des cycles précédents."""
 
-    def _prepare(self, monkeypatch):
+    def _prepare(self, monkeypatch, pas_de_transaction):
         captured = {}
 
         def fake_create(**kw):
@@ -415,9 +444,6 @@ class TestCheckoutReutiliseLeClient:
 
         monkeypatch.setattr(server_module.stripe.checkout.Session, "create", fake_create)
         monkeypatch.setattr(server_module, "STRIPE_API_KEY", "sk_test_dummy")
-        # NE PAS monkeypatcher db.payment_transactions.insert_one : pymongo renvoie un NOUVEL
-        # objet Collection a chaque acces d'attribut, donc le patch ne prend jamais et de vrais
-        # documents finissent en base de dev. On nettoie par session_id en fin de test.
         c = TestClient(server_module.app)
         r = c.post("/api/auth/login",
                    json={"email": "gussdub@gmail.com", "password": "testpass123"})
@@ -426,8 +452,8 @@ class TestCheckoutReutiliseLeClient:
         me = c.get("/api/auth/me", headers=h).json()
         return c, h, me["organization_id"], captured
 
-    def test_client_existant_reutilise_et_pas_de_courriel(self, monkeypatch):
-        c, h, oid, captured = self._prepare(monkeypatch)
+    def test_client_existant_reutilise_et_pas_de_courriel(self, monkeypatch, pas_de_transaction):
+        c, h, oid, captured = self._prepare(monkeypatch, pas_de_transaction)
         server_module.db.organizations.update_one(
             {"id": oid}, {"$set": {"stripe_customer_id": "cus_deja_la"}})
         try:
@@ -440,10 +466,9 @@ class TestCheckoutReutiliseLeClient:
         finally:
             server_module.db.organizations.update_one(
                 {"id": oid}, {"$unset": {"stripe_customer_id": ""}})
-            server_module.db.payment_transactions.delete_many({"session_id": "cs_test_reuse"})
 
-    def test_sans_client_existant_on_passe_le_courriel(self, monkeypatch):
-        c, h, oid, captured = self._prepare(monkeypatch)
+    def test_sans_client_existant_on_passe_le_courriel(self, monkeypatch, pas_de_transaction):
+        c, h, oid, captured = self._prepare(monkeypatch, pas_de_transaction)
         server_module.db.organizations.update_one(
             {"id": oid}, {"$unset": {"stripe_customer_id": ""}})
         r = c.post("/api/subscription/create-checkout",
@@ -451,7 +476,6 @@ class TestCheckoutReutiliseLeClient:
         assert r.status_code == 200, r.text
         assert captured.get("customer_email")
         assert "customer" not in captured
-        server_module.db.payment_transactions.delete_many({"session_id": "cs_test_reuse"})
 
 
 class TestCourseCheckoutEtWebhook:
