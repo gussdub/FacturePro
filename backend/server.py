@@ -44,6 +44,11 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET')
 if STRIPE_API_KEY:
     stripe.api_key = STRIPE_API_KEY
 SUBSCRIPTION_PRICE_CAD = 15.00
+# [Facturation] Jours de grâce après la fin de période payée. Stripe retente ses webhooks pendant
+# ~3 jours ; 7 jours couvrent donc largement une panne de livraison sans bloquer un bon payeur.
+# L'accès expire TOUT SEUL après ce délai : c'est ce qui empêche un webhook manqué de redonner un
+# accès éternel, qui était exactement le défaut d'origine.
+_SUBSCRIPTION_GRACE_DAYS = 7
 SUPPORTED_CURRENCIES = ["CAD", "USD", "EUR", "GBP"]
 _exchange_rate_cache = {"rates": {}, "fetched_at": None}
 

@@ -9,7 +9,12 @@ resend
 python-multipart
 python-dateutil
 httpx
-stripe
+stripe>=15.3,<16   # [Facturation] ÉPINGLÉ : ce code dépend de la version d'API Stripe. En
+                   # 2026-06-24.dahlia, `current_period_end` vit sur SubscriptionItem et NON sur
+                   # Subscription (cf. _subscription_period_end). Une montée majeure non
+                   # intentionnelle pourrait redéplacer ce champ et casser la facturation EN
+                   # SILENCE. Toute montée de version doit être accompagnée d'un test manuel en
+                   # mode test Stripe.
 anthropic>=0.40.0
 openpyxl>=3.1,<4
 defusedxml>=0.7
