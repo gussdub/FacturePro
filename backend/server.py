@@ -10266,9 +10266,27 @@ def _home_office_factor(settings: dict) -> float:
     return pct / 100.0 * (1.0 - perso / 100.0)
 
 
-# Catégories EXPENSE_CATEGORIES (feature #3) reclassées sur la ligne 9945 (résidence)
-# quand home_office_percentage > 0 (mode exclusif).
-HOME_OFFICE_CATEGORIES = {"rent", "utilities", "insurance"}
+# [FISCAL] Deux familles, parce que le Québec ne les traite pas pareil.
+#
+# EXPLOITATION — liées à l'utilisation du bureau. TP-80 l. 500-502 : le prorata s'applique, mais
+# PAS la réduction de moitié. IN-155 §6.27.1 : « Pour celles qui sont plutôt liées à
+# l'utilisation du bureau (notamment les frais de chauffage et d'éclairage), la limite de 50 %
+# ne s'applique pas. » C'est précisément le cas d'Hydro-Québec.
+#
+# ⚠️ `utilities` est un fourre-tout (« Services publics ») qui couvre aussi l'eau, le gaz et le
+# câble. Le prorata s'appliquera donc au câble aussi. Limite CONNUE et acceptée en v1 : la ligne
+# 500 du TP-80 regroupe elle-même électricité, eau et chauffage, et scinder une catégorie
+# `electricity` toucherait le plan comptable et les dépenses existantes.
+_HOME_OFFICE_OPERATING = {"utilities"}
+
+# OCCUPATION — liées à la résidence elle-même. TP-80 l. 505-522 : après le prorata, le Québec
+# multiplie par 50 %, « ces dépenses étant, dans une large mesure, engagées à des fins
+# personnelles » (IN-155 §6.27.1). Le fédéral n'a pas cette réduction.
+_HOME_OFFICE_OCCUPANCY = {"rent", "insurance", "repairs_maintenance"}
+
+# `repairs_maintenance` (ligne 8960) était ABSENT de l'ancien ensemble alors que le T4002 le
+# renvoie vers la 9945 au même titre que le loyer.
+HOME_OFFICE_CATEGORIES = _HOME_OFFICE_OPERATING | _HOME_OFFICE_OCCUPANCY
 
 # Catégories EXPENSE_CATEGORIES reclassées sur la ligne 9281 (véhicule)
 # quand vehicle_business_percentage > 0.

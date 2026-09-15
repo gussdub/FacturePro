@@ -114,3 +114,25 @@ class TestReglagesBureau:
              "home_office_personal_use_pct": 15.0}
         # 10 % de superficie, dont 85 % d'usage affaires -> 8,5 %
         assert server_module._home_office_factor(s) == pytest.approx(0.085, abs=0.0001)
+
+
+class TestCategoriesBureau:
+    def test_deux_ensembles_distincts(self):
+        """TP-80 partie 8 sépare la ligne 500 (exploitation, PAS de limite de 50 %) des
+        lignes 505-522 (occupation, réduites de 50 %)."""
+        assert server_module._HOME_OFFICE_OPERATING == {"utilities"}
+        assert server_module._HOME_OFFICE_OCCUPANCY == {
+            "rent", "insurance", "repairs_maintenance"}
+
+    def test_union_couvre_l_ancien_ensemble(self):
+        """Non-régression : les 3 catégories d'origine restent traitées."""
+        assert {"rent", "utilities", "insurance"} <= server_module.HOME_OFFICE_CATEGORIES
+
+    def test_entretien_ajoute(self):
+        """Le T4002 renvoie l'entretien (l. 8960) vers la 9945 ; la catégorie existait déjà
+        dans le plan comptable mais manquait à l'ensemble."""
+        assert "repairs_maintenance" in server_module.HOME_OFFICE_CATEGORIES
+
+    def test_les_categories_existent_dans_le_plan_comptable(self):
+        codes = {c["code"] for c in server_module.EXPENSE_CATEGORIES}
+        assert server_module.HOME_OFFICE_CATEGORIES <= codes
