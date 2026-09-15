@@ -4,7 +4,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from server import T2125_LINE_LABELS, EXPENSE_CATEGORIES, T2125_LABEL_TABLE_TAX_YEAR
+from server import (T2125_LINE_LABELS, EXPENSE_CATEGORIES, T2125_LABEL_TABLE_TAX_YEAR,
+                    HOME_OFFICE_CATEGORIES)
 
 
 class TestT2125LineLabels:
@@ -171,7 +172,16 @@ class TestHomeOfficeAdjustment:
         assert adj["original_total"] == 15000.0  # 12000 + 2000 + 1000
         assert adj["deductible_amount"] == 2250.0  # 15000 × 15%
         assert adj["saved_to_arc_line"] == "9945"
-        assert set(adj["applies_to"]) == {"rent", "utilities", "insurance"}
+        # 2026-09-15 : `repairs_maintenance` (ligne ARC 8960) a REJOINT cet ensemble. Le
+        # T4002 le renvoie vers la ligne 9945 au même titre que le loyer et l'assurance ; il
+        # manquait à l'ensemble d'origine. L'assertion suit le code plutôt que de figer un
+        # périmètre incomplet.
+        assert set(adj["applies_to"]) == {
+            "rent", "utilities", "insurance", "repairs_maintenance"}
+        # Ancré sur la constante plutôt que sur une liste figée : si l'ensemble s'élargit
+        # encore (impôts fonciers, intérêts hypothécaires), ce test suivra au lieu de
+        # devoir être réécrit.
+        assert set(adj["applies_to"]) == HOME_OFFICE_CATEGORIES
 
     def test_100_percent(self):
         adj = _t2125_compute_home_office_adjustment(self._flat(), 100)
