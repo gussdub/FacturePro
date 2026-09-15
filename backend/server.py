@@ -10453,8 +10453,15 @@ def _build_t2125_report(scope, year, basis):
     # Re-trier par arc_line
     grouped.sort(key=lambda x: x["arc_line"])
 
-    # Total déductible (somme simple — mode exclusif évite double-count)
+    # [FISCAL] L'ordre du T2125 est : 9369 (revenu net AVANT ajustements) -> 9945 (frais de
+    # résidence) -> 9946 (revenu net final). La 9369 n'est pas décorative : c'est elle qui
+    # PLAFONNE la 9945, parce que ces frais ne peuvent ni créer ni augmenter une perte
+    # (LIR 18(12)b). Il faut donc les deux valeurs, pas une seule.
+    _home_lines = [l for l in grouped if l.get("arc_line") == "9945"]
+    total_home_office = round(sum(l["deductible"] for l in _home_lines), 2)
     total_deductible = round(sum(line["deductible"] for line in grouped), 2)
+    net_income_before_home_office = round(
+        pnl["revenue"] - (total_deductible - total_home_office), 2)
     net_income = round(pnl["revenue"] - total_deductible, 2)
 
     adjustments = {}
@@ -10476,8 +10483,10 @@ def _build_t2125_report(scope, year, basis):
         "expenses_by_arc_line": grouped,
         "total_expenses_deductible": total_deductible,
         "business_use_adjustments": adjustments,
+        "net_income_before_home_office": net_income_before_home_office,
+        "net_income_before_home_office_line": "9369",
         "net_income": net_income,
-        "net_income_line": "9369",
+        "net_income_line": "9946",
         "is_partial_year": year >= datetime.now(timezone.utc).year,
     }
 
@@ -14205,7 +14214,7 @@ def _render_t2125_csv(report):
         f"{report['total_expenses_deductible']:.2f}", "",
     ])
     writer.writerow([
-        "total", "9369", "Bénéfice net", "",
+        "total", "9946", "Bénéfice net", "",
         f"{report['net_income']:.2f}", "",
     ])
     text = buf.getvalue()
@@ -14367,7 +14376,7 @@ def _render_t2125_pdf(report):
     elements.append(Table([
         ["", "Total dépenses déductibles", "",
          _t2125_format_money(report["total_expenses_deductible"])],
-        ["", "Bénéfice net (ligne 9369)", "",
+        ["", "Bénéfice net (ligne 9946)", "",
          _t2125_format_money(report["net_income"])],
     ], colWidths=[0.8*inch, 4.0*inch, 1.1*inch, 1.1*inch],
         style=TableStyle([

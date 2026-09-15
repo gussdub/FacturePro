@@ -222,7 +222,7 @@ function ReportPreview({ report, onDownload }) {
             </td>
           </tr>
           <tr style={{ background: "#00A08C", color: "#fff", fontWeight: 700 }}>
-            <td style={{ padding: 8 }}>9369</td>
+            <td style={{ padding: 8 }}>9946</td>
             <td style={{ padding: 8 }}>Bénéfice net</td>
             <td style={{ padding: 8, textAlign: "right" }}>
               {fmtMoney(report.net_income)}

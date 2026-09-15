@@ -146,7 +146,7 @@ class TestT2125CsvEndpoint:
             body_text = r.content[3:].decode("utf-8")
             assert "section,arc_line,label,gross_cad,deductible_cad,note" in body_text
             assert "revenu,8000,Recettes brutes" in body_text
-            assert "total,9369,Bénéfice net" in body_text
+            assert "total,9946,Bénéfice net" in body_text
 
     def test_invalid_year_returns_422(self, client, auth_headers):
         r = client.get("/api/reports/t2125/csv?year=1999&basis=accrual",

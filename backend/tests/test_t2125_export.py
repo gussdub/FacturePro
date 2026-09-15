@@ -326,7 +326,9 @@ class TestBuildT2125Report:
                         "is_partial_year"]:
                 assert key in report, f"Missing key: {key}"
             assert report["income_line"] == "8000"
-            assert report["net_income_line"] == "9369"
+            # RÉGRESSION corrigée (tâche 1, bureau à domicile) : "net_income_line" est le
+            # revenu net FINAL, donc la ligne 9946 (après ajustements) — pas la 9369.
+            assert report["net_income_line"] == "9946"
             assert report["period"] == {"start": f"{valid_year}-01-01", "end": f"{valid_year}-12-31"}
         finally:
             self._cleanup_settings(uid)
