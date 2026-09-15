@@ -151,6 +151,16 @@ from server import (
 
 
 class TestHomeOfficeAdjustment:
+    """Adaptée tâche 6 : la signature devient (flat_expenses, settings, revenu_avant_9945) —
+    le pourcentage n'est plus un nombre injecté directement mais dérivé des superficies
+    (`_home_office_factor`). Province forcée à "ON" (au lieu de QC) pour ces cas : ces tests
+    vérifient le prorata simple, pas la limite québécoise de 50 % sur l'occupation (déjà
+    couverte par tests/test_bureau_domicile.py::TestT2125Integre) — sans ce choix, rent/
+    insurance (occupation) seraient divisés par deux et les valeurs 2250.0/15000.0 ci-dessous
+    ne correspondraient plus à un prorata unique et lisible. `revenu_avant_9945` est fixé très
+    haut pour qu'aucun de ces tests n'exerce le plafond (couvert ailleurs par
+    TestT2125Integre::test_plafond_applique_dans_le_rapport).
+    """
     def _flat(self):
         return {
             "rent": {"gross": 12000.0, "deductible": 12000.0, "arc_line": "8910"},
@@ -159,18 +169,32 @@ class TestHomeOfficeAdjustment:
             "advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"},  # exclu
         }
 
-    def test_zero_returns_none(self):
-        assert _t2125_compute_home_office_adjustment(self._flat(), 0) is None
-        assert _t2125_compute_home_office_adjustment(self._flat(), 0.0) is None
+    def _settings(self, area_pct):
+        """area_pct : superficie bureau / superficie totale, en %, pour obtenir un facteur
+        équivalent à l'ancien `home_pct` (mêmes valeurs numériques attendues)."""
+        return {
+            "office_location": "home", "home_office_qualifies": True,
+            "home_office_area_sqm": area_pct, "home_total_area_sqm": 100.0,
+            "province": "ON",
+        }
 
-    def test_negative_returns_none(self):
-        assert _t2125_compute_home_office_adjustment(self._flat(), -5) is None
+    def test_pas_de_bureau_a_domicile_renvoie_none(self):
+        """Réglages par défaut (pas de bureau à domicile déclaré) -> aucun ajustement,
+        équivalent de l'ancien "pct=0"."""
+        assert _t2125_compute_home_office_adjustment(self._flat(), {}, 1e9) is None
+        assert _t2125_compute_home_office_adjustment(self._flat(), None, 1e9) is None
+
+    def test_superficie_negative_renvoie_none(self):
+        """Une superficie négative (donnée invalide) ne doit jamais produire un facteur
+        négatif ni un ajustement — équivalent de l'ancien "pct=-5"."""
+        settings = self._settings(-11.0)
+        assert _t2125_compute_home_office_adjustment(self._flat(), settings, 1e9) is None
 
     def test_15_percent(self):
-        adj = _t2125_compute_home_office_adjustment(self._flat(), 15)
+        adj = _t2125_compute_home_office_adjustment(self._flat(), self._settings(15.0), 1e9)
         assert adj["percentage"] == 15
-        assert adj["original_total"] == 15000.0  # 12000 + 2000 + 1000
-        assert adj["deductible_amount"] == 2250.0  # 15000 × 15%
+        assert adj["expenses_this_year"] == 2250.0  # (12000 + 2000 + 1000) × 15 %, ON = pas de limite occupation
+        assert adj["deductible_amount"] == 2250.0  # aucun plafond à 1e9 de revenu avant
         assert adj["saved_to_arc_line"] == "9945"
         # 2026-09-15 : `repairs_maintenance` (ligne ARC 8960) a été retiré de cet ensemble
         # (revue de qualité) — la catégorie « Entretien et réparations » de FacturePro est
@@ -184,17 +208,21 @@ class TestHomeOfficeAdjustment:
         assert set(adj["applies_to"]) == HOME_OFFICE_CATEGORIES
 
     def test_100_percent(self):
-        adj = _t2125_compute_home_office_adjustment(self._flat(), 100)
+        adj = _t2125_compute_home_office_adjustment(self._flat(), self._settings(100.0), 1e9)
         assert adj["deductible_amount"] == 15000.0
 
     def test_no_relevant_expenses(self):
+        """Aucune catégorie de bureau à domicile dans les dépenses -> None (comportement
+        explicite de la tâche 6 : re-groupement sur les lignes ordinaires par l'appelant).
+        Avant la tâche 6, la fonction renvoyait un dict avec des zéros au lieu de None ;
+        ce changement de contrat est voulu, cf. le corps de la fonction dans server.py et
+        TestT2125Integre::test_reglages_vides_comportement_inchange."""
         flat = {"advertising": {"gross": 500.0, "deductible": 500.0, "arc_line": "8520"}}
-        adj = _t2125_compute_home_office_adjustment(flat, 15)
-        assert adj["original_total"] == 0
-        assert adj["deductible_amount"] == 0
+        adj = _t2125_compute_home_office_adjustment(flat, self._settings(15.0), 1e9)
+        assert adj is None
 
     def test_applies_to_sorted(self):
-        adj = _t2125_compute_home_office_adjustment(self._flat(), 15)
+        adj = _t2125_compute_home_office_adjustment(self._flat(), self._settings(15.0), 1e9)
         assert adj["applies_to"] == sorted(adj["applies_to"])
 
 

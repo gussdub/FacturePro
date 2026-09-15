@@ -253,3 +253,102 @@ class TestProvinceRobuste:
         flat = _flat(rent=18000.0)
         assert server_module._home_office_expenses(
             flat, 0.12, province=prov)["occupancy"] == pytest.approx(2160.0)
+
+
+class TestT2125Integre:
+    def _settings(self, **kw):
+        base = {"entity_type": "sole_proprietor", "province": "QC",
+                "office_location": "home", "home_office_qualifies": True,
+                "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0}
+        base.update(kw)
+        return base
+
+    def _report(self, monkeypatch, revenue, settings, **cats):
+        # ⚠️ Écart au texte du plan : le mock ci-dessous ajoute "arc_line" par catégorie
+        # (absent du bloc du plan). Sans lui, `_t2125_flatten_pnl_expenses` (qui lit
+        # `cat.get("arc_line") or "9270"`) range TOUT sous "9270" — le vrai `_aggregate_pnl`
+        # attache toujours `cat["t2125_line"]` (server.py l. 826), donc ce champ n'est jamais
+        # absent en production ; seul le mock l'omettait. Sans ce complément,
+        # `test_local_commercial_aucun_ajustement` et `test_reglages_vides_comportement_inchange`
+        # échouent en cherchant `lignes["9220"]`, pour une raison sans rapport avec la tâche 6
+        # (reproduit indépendamment de toute logique de bureau à domicile). Complément fidèle à
+        # la forme réelle, aucune assertion affaiblie.
+        def _arc_line(code):
+            cat = server_module._find_category(code)
+            return (cat or {}).get("t2125_line") or "9270"
+
+        monkeypatch.setattr(server_module, "_aggregate_pnl", lambda *a, **k: {
+            "revenue": revenue,
+            "expense_groups": [{"categories": [
+                {"code": c, "gross": v, "deductible": v, "arc_line": _arc_line(c)}
+                for c, v in cats.items()]}],
+        })
+        # ⚠️ NE PAS faire `monkeypatch.setattr(server_module.db.company_settings, "find_one", …)` :
+        # `Database.__getattr__` de pymongo construit un NOUVEL objet Collection à chaque accès
+        # (`db.company_settings is db.company_settings` -> False). Le patch porterait sur un objet
+        # jetable, le code interrogerait une autre instance, et le test lirait la VRAIE base —
+        # une copie de production. On patche donc au niveau de la CLASSE, en délégant pour toute
+        # autre collection. Même motif que tests/test_bureau_domicile.py::TestLigne9369.
+        _vrai_find_one = pymongo.collection.Collection.find_one
+
+        def _find_one(self, *a, **k):
+            if self.name == "company_settings":
+                return settings
+            return _vrai_find_one(self, *a, **k)
+
+        monkeypatch.setattr(pymongo.collection.Collection, "find_one", _find_one)
+        return server_module._build_t2125_report({"organization_id": "x"}, 2025, "accrual")
+
+    def test_local_commercial_aucun_ajustement(self, monkeypatch):
+        """L'électricité reste une dépense ordinaire à 100 % sur sa ligne 9220."""
+        r = self._report(monkeypatch, 50000.0,
+                         self._settings(office_location="commercial"), utilities=2000.0)
+        assert r["business_use_adjustments"].get("home_office") is None
+        lignes = {l["arc_line"]: l for l in r["expenses_by_arc_line"]}
+        assert "9945" not in lignes
+        assert lignes["9220"]["deductible"] == 2000.0
+
+    def test_domicile_prorate_et_deplace_sur_9945(self, monkeypatch):
+        r = self._report(monkeypatch, 50000.0, self._settings(), utilities=2000.0)
+        lignes = {l["arc_line"]: l for l in r["expenses_by_arc_line"]}
+        assert "9220" not in lignes, "utilities doit QUITTER sa ligne ordinaire"
+        assert lignes["9945"]["deductible"] == pytest.approx(200.0)
+
+    def test_plafond_applique_dans_le_rapport(self, monkeypatch):
+        """Revenu faible : la déduction est plafonnée et le résidu reporté."""
+        r = self._report(monkeypatch, 1100.0, self._settings(),
+                         utilities=2000.0, rent=12000.0, office_supplies=1000.0)
+        adj = r["business_use_adjustments"]["home_office"]
+        # revenu 1100 - 1000 de fournitures = 100 de revenu avant frais de domicile
+        assert r["net_income_before_home_office"] == pytest.approx(100.0)
+        assert adj["deductible_amount"] == pytest.approx(100.0), "plafonné"
+        assert adj["carryforward_next"] > 0, "le résidu doit être reporté"
+        assert r["net_income"] == pytest.approx(0.0), "le plafond interdit la perte"
+
+    def test_report_anterieur_pris_en_compte(self, monkeypatch):
+        r = self._report(monkeypatch, 50000.0,
+                         self._settings(home_office_carryforward_quebec=5000.0),
+                         utilities=2000.0)
+        adj = r["business_use_adjustments"]["home_office"]
+        assert adj["carryforward_prior"] == 5000.0
+        assert adj["deductible_amount"] == pytest.approx(5200.0)
+
+    def test_limite_quebecoise_visible_dans_le_rapport(self, monkeypatch):
+        r = self._report(monkeypatch, 50000.0, self._settings(), rent=12000.0)
+        adj = r["business_use_adjustments"]["home_office"]
+        assert adj["occupancy"] == pytest.approx(600.0), "12000 x 10 % x 50 %"
+        assert adj["qc_occupancy_limit_applied"] is True
+
+    def test_non_admissible_aucun_ajustement(self, monkeypatch):
+        r = self._report(monkeypatch, 50000.0,
+                         self._settings(home_office_qualifies=False), utilities=2000.0)
+        assert r["business_use_adjustments"].get("home_office") is None
+
+    def test_reglages_vides_comportement_inchange(self, monkeypatch):
+        """FAIL-SAFE : sans réglage, le rapport doit être identique à celui d'avant."""
+        r = self._report(monkeypatch, 50000.0,
+                         {"entity_type": "sole_proprietor", "province": "QC"},
+                         utilities=2000.0)
+        assert r["business_use_adjustments"].get("home_office") is None
+        lignes = {l["arc_line"]: l for l in r["expenses_by_arc_line"]}
+        assert lignes["9220"]["deductible"] == 2000.0

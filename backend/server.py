@@ -10508,21 +10508,52 @@ def _gifi_group_by_code(flat_expenses, exclude_codes=None):
                   key=lambda x: x["code"])
 
 
-def _t2125_compute_home_office_adjustment(flat_expenses, home_pct):
-    """Mode exclusif : si home_pct > 0, retourne le dict ajustement pour la ligne 9945.
-    Les catégories rent/utilities/insurance doivent être retirées de leurs lignes ARC
-    par l'appelant (via exclude_codes de _t2125_group_by_arc_line)."""
-    if home_pct is None or home_pct <= 0:
+def _t2125_compute_home_office_adjustment(flat_expenses, settings, revenu_avant_9945):
+    """Ligne 9945 — frais d'utilisation de la résidence aux fins de l'entreprise.
+
+    Renvoie None quand aucun ajustement ne s'applique : l'appelant laisse alors les catégories
+    sur leurs lignes ordinaires, comme avant cette fonctionnalité.
+
+    Trois étapes, dans cet ordre :
+      1. le facteur d'utilisation (superficie × usage), avec ses trois verrous ;
+      2. les frais de l'année, ventilés exploitation / occupation, la limite québécoise de 50 %
+         appliquée à l'occupation seulement ;
+      3. le PLAFOND au revenu avant ces frais, et le REPORT du résidu.
+
+    ⚠️ Lit `gross` et NON `deductible` : aucun prorata n'est jamais appliqué à la saisie pour ces
+    catégories, précisément pour que ce calcul-ci soit le seul. Cf. §1.2 de la spec.
+    """
+    factor = _home_office_factor(settings or {})
+    if factor <= 0:
         return None
-    original_total = sum(
-        float(flat_expenses.get(cat, {}).get("gross", 0) or 0)
-        for cat in HOME_OFFICE_CATEGORIES
-    )
+
+    province = str((settings or {}).get("province") or "QC").upper()
+    frais = _home_office_expenses(flat_expenses, factor, province=province)
+    if frais["total"] <= 0:
+        return None
+
+    champ_report = ("home_office_carryforward_quebec" if province == "QC"
+                    else "home_office_carryforward_federal")
+    try:
+        report_anterieur = float((settings or {}).get(champ_report) or 0)
+    except (TypeError, ValueError):
+        report_anterieur = 0.0
+
+    cap = _home_office_cap(frais["total"], report_anterieur, revenu_avant_9945)
+
     return {
-        "percentage": home_pct,
+        "percentage": round(factor * 100.0, 4),
         "applies_to": sorted(HOME_OFFICE_CATEGORIES),
-        "original_total": round(original_total, 2),
-        "deductible_amount": round(original_total * home_pct / 100.0, 2),
+        "operating": frais["operating"],
+        "occupancy": frais["occupancy"],
+        "qc_occupancy_limit_applied": province == "QC" and frais["occupancy"] > 0,
+        "expenses_this_year": frais["total"],
+        "carryforward_prior": round(report_anterieur, 2),
+        "available": cap["disponible"],
+        "income_cap": cap["plafond"],
+        "deductible_amount": cap["deductible"],
+        "carryforward_next": cap["report_suivant"],
+        "carryforward_field": champ_report,
         "saved_to_arc_line": "9945",
         "label": "Frais d'utilisation de la résidence aux fins de l'entreprise",
     }
@@ -10573,33 +10604,17 @@ def _build_t2125_report(scope, year, basis):
     # Flatten expense_groups → dict plat
     flat_expenses = _t2125_flatten_pnl_expenses(pnl.get("expense_groups", []))
 
-    # Pourcentages depuis Settings
-    home_pct = float(settings.get("home_office_percentage", 0) or 0)
+    # Pourcentage véhicule depuis Settings
     vehicle_pct = float(settings.get("vehicle_business_percentage", 0) or 0)
 
-    # Calculer les ajustements + déterminer les exclusions
-    home_adj = _t2125_compute_home_office_adjustment(flat_expenses, home_pct)
     vehicle_adj = _t2125_compute_vehicle_adjustment(flat_expenses, vehicle_pct)
 
-    excluded = set()
-    if home_adj is not None:
-        excluded.update(HOME_OFFICE_CATEGORIES)
+    # [FISCAL] La 9945 se plafonne au revenu AVANT elle-même : il faut donc grouper d'abord SANS
+    # elle, calculer ce revenu, puis seulement ensuite calculer l'ajustement de résidence.
+    excluded = set(HOME_OFFICE_CATEGORIES)
     if vehicle_adj is not None:
         excluded.update(VEHICLE_CATEGORIES)
-
-    # Grouper par ligne ARC en excluant les catégories déplacées
     grouped = _t2125_group_by_arc_line(flat_expenses, exclude_codes=excluded)
-
-    # Ajouter les lignes d'ajustement (9945, 9281)
-    if home_adj is not None:
-        grouped.append({
-            "arc_line": "9945",
-            "label": home_adj["label"],
-            "gross": home_adj["original_total"],
-            "deductible": home_adj["deductible_amount"],
-            "categories": list(HOME_OFFICE_CATEGORIES),
-            "note": f"{home_pct:g} % de l'utilisation totale",
-        })
     if vehicle_adj is not None:
         grouped.append({
             "arc_line": "9281",
@@ -10607,7 +10622,33 @@ def _build_t2125_report(scope, year, basis):
             "gross": vehicle_adj["original_total"],
             "deductible": vehicle_adj["deductible_amount"],
             "categories": list(VEHICLE_CATEGORIES),
-            "note": f"{vehicle_pct:g} % d'utilisation commerciale",
+        })
+    revenu_avant_9945 = round(
+        pnl["revenue"] - sum(l["deductible"] for l in grouped), 2)
+
+    home_adj = _t2125_compute_home_office_adjustment(
+        flat_expenses, settings, revenu_avant_9945)
+
+    if home_adj is None:
+        # Aucun ajustement : les catégories retournent sur leurs lignes ordinaires.
+        grouped = _t2125_group_by_arc_line(
+            flat_expenses,
+            exclude_codes=(VEHICLE_CATEGORIES if vehicle_adj is not None else set()))
+        if vehicle_adj is not None:
+            grouped.append({
+                "arc_line": "9281",
+                "label": vehicle_adj["label"],
+                "gross": vehicle_adj["original_total"],
+                "deductible": vehicle_adj["deductible_amount"],
+                "categories": list(VEHICLE_CATEGORIES),
+            })
+    else:
+        grouped.append({
+            "arc_line": "9945",
+            "label": home_adj["label"],
+            "gross": home_adj["expenses_this_year"],
+            "deductible": home_adj["deductible_amount"],
+            "categories": list(HOME_OFFICE_CATEGORIES),
         })
 
     # Re-trier par arc_line
