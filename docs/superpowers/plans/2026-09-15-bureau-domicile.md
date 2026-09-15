@@ -49,6 +49,14 @@ de ce plan.
 > `_check_subscription_active`. **Ne pas « corriger » cet ordre** — ce serait un déplacement
 > inutile dans un fichier de 14 600 lignes.
 
+> ⚠️ **Piège pymongo, vérifié dans ce repo.** Ne JAMAIS écrire
+> `monkeypatch.setattr(server_module.db.<collection>, "<methode>", …)` : `Database.__getattr__`
+> construit un **nouvel objet `Collection` à chaque accès d'attribut**, donc le patch porte sur un
+> objet jetable et le code testé interroge la vraie base — qui est ici une **copie de
+> production**. Ce piège a déjà fait fuiter 78 documents en base de dev dans ce projet. Patcher au
+> niveau de la **classe** (`pymongo.collection.Collection`), filtré par `self.name`, **avec
+> délégation** pour toute autre collection.
+
 **Règle absolue de ce plan :** ne JAMAIS écrire `personal_use_amount_cad` sur une dépense
 `utilities`, `rent`, `insurance` ou `repairs_maintenance`. Ce champ est le pivot unique qui
 alimente le P&L, le grand livre, le rapport de taxes ET le T2125 ; le poser ici réintroduirait le
@@ -92,6 +100,7 @@ import os as _os
 _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
 
 import uuid
+import pymongo
 import pytest
 import server as server_module
 
@@ -691,8 +700,20 @@ class TestT2125Integre:
             "expense_groups": [{"categories": [
                 {"code": c, "gross": v, "deductible": v} for c, v in cats.items()]}],
         })
-        monkeypatch.setattr(server_module.db.company_settings, "find_one",
-                            lambda *a, **k: settings)
+        # ⚠️ NE PAS faire `monkeypatch.setattr(server_module.db.company_settings, "find_one", …)` :
+        # `Database.__getattr__` de pymongo construit un NOUVEL objet Collection à chaque accès
+        # (`db.company_settings is db.company_settings` -> False). Le patch porterait sur un objet
+        # jetable, le code interrogerait une autre instance, et le test lirait la VRAIE base —
+        # une copie de production. On patche donc au niveau de la CLASSE, en délégant pour toute
+        # autre collection. Même motif que tests/test_bureau_domicile.py::TestLigne9369.
+        _vrai_find_one = pymongo.collection.Collection.find_one
+
+        def _find_one(self, *a, **k):
+            if self.name == "company_settings":
+                return settings
+            return _vrai_find_one(self, *a, **k)
+
+        monkeypatch.setattr(pymongo.collection.Collection, "find_one", _find_one)
         return server_module._build_t2125_report({"organization_id": "x"}, 2025, "accrual")
 
     def test_local_commercial_aucun_ajustement(self, monkeypatch):
