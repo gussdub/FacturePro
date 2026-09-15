@@ -455,32 +455,89 @@ const SettingsPage = () => {
               <option value="NT">Territoires du Nord-Ouest</option>
             </select>
           </div>
-          {/* Feature #12.1 — % bureau à domicile + véhicule : mécanismes T2125,
-              pertinents uniquement pour les travailleurs autonomes non incorporés.
-              Masqués pour une société par actions (voir aussi onglet T2125 caché). */}
-          {(settings.entity_type || 'sole_proprietor') === 'sole_proprietor' && (
-          <>
-          <div style={{ marginTop: 16 }}>
-            <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
-              Bureau à domicile — % surface utilisée pour l'entreprise
+          {/* Bureau — le régime fiscal dépend du LIEU, pas d'une case par dépense.
+              Pas masqué derrière entity_type : le lieu du bureau est une information valide
+              pour toute entité ; seul le rapport T2125 (ci-dessous) reste réservé aux
+              travailleurs autonomes. */}
+          <div style={{ marginTop: 24 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Bureau</h3>
+            <p style={{ fontSize: 13, color: '#6b7280', marginTop: 0 }}>
+              Si ton bureau est à la maison, les frais de résidence (électricité, loyer,
+              assurance, entretien) ne sont déductibles qu'au prorata de la superficie qu'il
+              occupe. Dans un local commercial, ils le sont à 100 %.
+            </p>
+
+            <label style={{ display: 'block', marginBottom: 8 }}>
+              <input type="radio" name="office_location" value="commercial"
+                     checked={(settings.office_location || 'commercial') === 'commercial'}
+                     onChange={() => setSettings(prev => ({ ...prev, office_location: 'commercial' }))} />
+              {' '}Local commercial
             </label>
-            <input
-              type="number"
-              min="0" max="100" step="0.1"
-              value={settings.home_office_percentage ?? 0}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSettings(prev => ({ ...prev,
-                  home_office_percentage: v === '' ? 0 : parseFloat(v) || 0 }));
-              }}
-              placeholder="0"
-              style={{ width: 120, padding: 8, border: '1px solid #d1d5db',
-                       borderRadius: 6, fontSize: 14 }}
-            />
-            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
-              Ex: bureau de 15 m² dans une maison de 100 m² = 15. Mettre 0 si bureau commercial.
-            </div>
+            <label style={{ display: 'block', marginBottom: 8 }}>
+              <input type="radio" name="office_location" value="home"
+                     checked={settings.office_location === 'home'}
+                     onChange={() => setSettings(prev => ({ ...prev, office_location: 'home' }))} />
+              {' '}À mon domicile
+            </label>
+
+            {settings.office_location === 'home' && (
+              <div style={{ marginLeft: 20, marginTop: 12, paddingLeft: 14,
+                            borderLeft: '3px solid #e5e7eb' }}>
+                <label style={{ display: 'block', marginBottom: 12, fontSize: 14 }}>
+                  <input type="checkbox"
+                         checked={!!settings.home_office_qualifies}
+                         onChange={e => setSettings(prev => ({
+                           ...prev, home_office_qualifies: e.target.checked }))} />
+                  {' '}Cet espace est mon principal lieu d'affaires, <em>ou</em> je l'utilise
+                  uniquement pour mon entreprise et j'y rencontre des clients de façon régulière.
+                </label>
+
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <label style={{ fontSize: 14 }}>Superficie du bureau (m²)<br />
+                    <input type="number" min="0" step="0.1"
+                           value={settings.home_office_area_sqm ?? ''}
+                           onChange={e => setSettings(prev => ({ ...prev,
+                             home_office_area_sqm: e.target.value === '' ? ''
+                               : parseFloat(e.target.value) || 0 }))}
+                           style={{ padding: 8, borderRadius: 6, border: '1px solid #d1d5db',
+                                    width: 120 }} />
+                  </label>
+                  <label style={{ fontSize: 14 }}>Superficie totale du domicile (m²)<br />
+                    <input type="number" min="0" step="0.1"
+                           value={settings.home_total_area_sqm ?? ''}
+                           onChange={e => setSettings(prev => ({ ...prev,
+                             home_total_area_sqm: e.target.value === '' ? ''
+                               : parseFloat(e.target.value) || 0 }))}
+                           style={{ padding: 8, borderRadius: 6, border: '1px solid #d1d5db',
+                                    width: 120 }} />
+                  </label>
+                </div>
+
+                <p style={{ marginTop: 12, fontSize: 14, color: '#00796B', fontWeight: 600 }}>
+                  Part de ton domicile utilisée pour l'entreprise :{' '}
+                  {(settings.home_total_area_sqm > 0 && settings.home_office_area_sqm > 0)
+                    ? Math.min(100, settings.home_office_area_sqm
+                        / settings.home_total_area_sqm * 100).toFixed(2) + ' %'
+                    : '—'}
+                </p>
+                <p style={{ fontSize: 13, color: '#6b7280' }}>
+                  Ces frais ne peuvent pas créer ni augmenter une perte d'entreprise. Ce qui
+                  dépasse ton revenu est reporté aux années suivantes, sans limite de temps.
+                </p>
+              </div>
+            )}
+
+            {(settings.office_location || 'commercial') === 'commercial' && (
+              <p style={{ fontSize: 13, color: '#6b7280', marginLeft: 20 }}>
+                Tes frais de local sont déductibles à 100 %, sur leurs lignes habituelles.
+              </p>
+            )}
           </div>
+
+          {/* Feature #12.1 — véhicule : mécanisme T2125, pertinent uniquement pour les
+              travailleurs autonomes non incorporés. Masqué pour une société par actions
+              (voir aussi onglet T2125 caché). */}
+          {(settings.entity_type || 'sole_proprietor') === 'sole_proprietor' && (
           <div style={{ marginTop: 16 }}>
             <label style={{ display: 'block', fontWeight: 500, marginBottom: 4 }}>
               Véhicule — % utilisation commerciale
@@ -502,7 +559,6 @@ const SettingsPage = () => {
               Ex: 12 000 km commerciaux / 30 000 km total = 40. Mettre 0 si véhicule purement commercial.
             </div>
           </div>
-          </>
           )}
         </div>
 
