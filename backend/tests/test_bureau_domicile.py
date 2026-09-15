@@ -63,3 +63,54 @@ class TestLigne9369:
         assert r["net_income_before_home_office_line"] == "9369"
         assert r["net_income_line"] == "9946", "le revenu net FINAL est la 9946, pas la 9369"
         assert r["net_income"] < r["net_income_before_home_office"]
+
+
+class TestReglagesBureau:
+    def test_pourcentage_derive_des_superficies(self):
+        s = {"home_office_area_sqm": 12.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_pct_from_areas(s) == pytest.approx(10.909, abs=0.001)
+
+    def test_superficie_totale_nulle_donne_zero(self):
+        """Division par zéro : on renvoie 0, jamais une exception ni un infini."""
+        for s in ({"home_office_area_sqm": 12.0, "home_total_area_sqm": 0},
+                  {"home_office_area_sqm": 12.0},
+                  {}):
+            assert server_module._home_office_pct_from_areas(s) == 0.0
+
+    def test_bureau_plus_grand_que_la_maison_est_borne_a_100(self):
+        s = {"home_office_area_sqm": 200.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_pct_from_areas(s) == 100.0
+
+    def test_valeurs_negatives_donnent_zero(self):
+        s = {"home_office_area_sqm": -5.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_pct_from_areas(s) == 0.0
+
+    def test_facteur_zero_si_pas_au_domicile(self):
+        """Un local commercial n'a AUCUN prorata : 18(12) ne vise que la résidence."""
+        s = {"office_location": "commercial", "home_office_qualifies": True,
+             "home_office_area_sqm": 12.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_factor(s) == 0.0
+
+    def test_facteur_zero_si_non_admissible(self):
+        """Sans confirmation d'admissibilité (LIR 18(12)a), aucune déduction."""
+        s = {"office_location": "home", "home_office_qualifies": False,
+             "home_office_area_sqm": 12.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_factor(s) == 0.0
+
+    def test_facteur_par_defaut_est_zero(self):
+        """FAIL-SAFE : des réglages vides ne doivent produire aucun ajustement."""
+        assert server_module._home_office_factor({}) == 0.0
+
+    def test_facteur_nominal(self):
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 12.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_factor(s) == pytest.approx(0.10909, abs=0.00001)
+
+    def test_prorata_horaire_reduit_le_facteur(self):
+        """Si l'espace sert AUSSI à des fins personnelles, l'ARC exige un second prorata.
+        Non exposé en v1, mais le calcul doit déjà le respecter s'il est présent."""
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0,
+             "home_office_personal_use_pct": 15.0}
+        # 10 % de superficie, dont 85 % d'usage affaires -> 8,5 %
+        assert server_module._home_office_factor(s) == pytest.approx(0.085, abs=0.0001)

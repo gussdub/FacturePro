@@ -10213,6 +10213,59 @@ T2125_LABEL_TABLE_TAX_YEAR = 2024
 T2125_MIN_YEAR = 2020
 T2125_VALID_BASES = {"accrual", "cash"}
 
+def _home_office_pct_from_areas(settings: dict) -> float:
+    """Pourcentage d'utilisation du domicile, dérivé des SUPERFICIES.
+
+    L'ARC accepte explicitement cette méthode : « use a reasonable basis, such as the area of the
+    workspace divided by the total area of your home ». On dérive plutôt que de faire saisir le
+    pourcentage directement, pour deux raisons : la méthode reste prouvable en cas de
+    vérification, et le nombre ne peut pas diverger de ce que l'abonné a déclaré.
+    """
+    try:
+        bureau = float(settings.get("home_office_area_sqm") or 0)
+        total = float(settings.get("home_total_area_sqm") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (bureau > 0 and total > 0):
+        return 0.0
+    return round(min(100.0, bureau / total * 100.0), 4)
+
+
+def _home_office_factor(settings: dict) -> float:
+    """Fraction des frais de résidence imputable à l'entreprise, entre 0 et 1.
+
+    Trois verrous, dans cet ordre — chacun renvoie 0, c'est-à-dire AUCUN ajustement :
+      1. le bureau n'est pas au domicile -> LIR 18(12) ne vise que « a self-contained domestic
+         establishment in which the individual resides ». En local commercial, les frais sont
+         des dépenses ordinaires à 100 %, et rien de ce module ne s'applique ;
+      2. l'admissibilité n'est pas confirmée -> LIR 18(12)a) exige que l'espace soit le principal
+         lieu d'affaires, OU utilisé exclusivement pour l'entreprise ET pour rencontrer des
+         clients de façon régulière et continue ;
+      3. les superficies ne sont pas saisies.
+
+    Le défaut est donc 0 : des réglages vides ne produisent aucun ajustement, et le comportement
+    reste identique à celui d'avant cette fonctionnalité.
+
+    Le prorata HORAIRE (`home_office_personal_use_pct`) s'applique EN PLUS de la superficie quand
+    l'espace sert aussi à des fins personnelles — l'ARC : « calculate how many hours in the day
+    you use the rooms for your business, and then divide that amount by 24 hours ». Non exposé en
+    v1 (usage déclaré exclusif), mais respecté s'il est présent.
+    """
+    if settings.get("office_location") != "home":
+        return 0.0
+    if not settings.get("home_office_qualifies"):
+        return 0.0
+    pct = _home_office_pct_from_areas(settings)
+    if pct <= 0:
+        return 0.0
+    try:
+        perso = float(settings.get("home_office_personal_use_pct") or 0)
+    except (TypeError, ValueError):
+        perso = 0.0
+    perso = min(100.0, max(0.0, perso))
+    return pct / 100.0 * (1.0 - perso / 100.0)
+
+
 # Catégories EXPENSE_CATEGORIES (feature #3) reclassées sur la ligne 9945 (résidence)
 # quand home_office_percentage > 0 (mode exclusif).
 HOME_OFFICE_CATEGORIES = {"rent", "utilities", "insurance"}
@@ -12264,6 +12317,38 @@ def update_settings(
             if not (0 <= v <= 100):
                 raise HTTPException(422, f"{field} doit être entre 0 et 100")
             settings_data[field] = v
+    # [FISCAL] Bureau à domicile. `update_settings` écrit tout le corps sans liste blanche
+    # (cf. le $set plus bas) : un champ non validé entrerait donc en base tel quel.
+    if "office_location" in settings_data:
+        loc = str(settings_data.get("office_location") or "").strip()
+        if loc not in ("home", "commercial"):
+            raise HTTPException(422, "office_location doit valoir 'home' ou 'commercial'")
+        settings_data["office_location"] = loc
+    if "home_office_qualifies" in settings_data:
+        settings_data["home_office_qualifies"] = bool(settings_data["home_office_qualifies"])
+    for field in ("home_office_area_sqm", "home_total_area_sqm"):
+        if field in settings_data:
+            try:
+                v = float(settings_data[field])
+            except (ValueError, TypeError):
+                raise HTTPException(422, f"{field} doit être un nombre")
+            if not math.isfinite(v) or v < 0:
+                raise HTTPException(422, f"{field} doit être un nombre positif")
+            settings_data[field] = v
+    if "home_office_personal_use_pct" in settings_data:
+        try:
+            v = float(settings_data["home_office_personal_use_pct"])
+        except (ValueError, TypeError):
+            raise HTTPException(422, "home_office_personal_use_pct doit être un nombre")
+        if not math.isfinite(v) or not (0 <= v <= 100):
+            raise HTTPException(422, "home_office_personal_use_pct doit être entre 0 et 100")
+        settings_data["home_office_personal_use_pct"] = v
+    # Le pourcentage est DÉRIVÉ, jamais saisi : on le recalcule à chaque écriture des superficies
+    # pour qu'il ne puisse pas diverger de la méthode déclarée.
+    if ("home_office_area_sqm" in settings_data) or ("home_total_area_sqm" in settings_data):
+        _cur = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
+        _merged = {**_cur, **settings_data}
+        settings_data["home_office_percentage"] = _home_office_pct_from_areas(_merged)
     # Feature #14 — télécom à usage mixte : interrupteurs, % (0–100 entier) et compte offset
     for field in ("telecom_cell_mixed_use", "telecom_internet_mixed_use"):
         if field in settings_data:
