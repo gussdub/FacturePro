@@ -10266,6 +10266,43 @@ def _home_office_factor(settings: dict) -> float:
     return pct / 100.0 * (1.0 - perso / 100.0)
 
 
+# [FISCAL] Réduction québécoise des frais d'OCCUPATION. IN-155 §6.27.1 et TP-80 l. 522
+# (« Montant de la ligne 518 multiplié par 50 % »). S'applique aux exercices commencés après le
+# 9 mai 1996. Le fédéral n'a AUCUN équivalent.
+_QC_OCCUPANCY_LIMIT = 0.50
+
+
+def _home_office_expenses(flat_expenses: dict, factor: float, province: str = "QC") -> dict:
+    """Frais de bureau à domicile de l'année, ventilés exploitation / occupation.
+
+    `factor` est la fraction déjà calculée par `_home_office_factor` (superficie × usage).
+    `flat_expenses` vient de `_t2125_flatten_pnl_expenses` : on lit le champ `gross`.
+
+    Au Québec, les frais d'OCCUPATION sont réduits de moitié APRÈS le prorata ; ceux
+    d'EXPLOITATION ne le sont pas. Les deux sont renvoyés séparément parce que le solde à
+    reporter diffère entre le fédéral et le Québec, et qu'on a donc besoin des deux totaux.
+    """
+    def _somme(codes):
+        total = 0.0
+        for code in codes:
+            try:
+                total += float((flat_expenses.get(code) or {}).get("gross") or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    f = max(0.0, min(1.0, float(factor or 0)))
+    operating = _somme(_HOME_OFFICE_OPERATING) * f
+    occupancy = _somme(_HOME_OFFICE_OCCUPANCY) * f
+    if str(province or "").upper() == "QC":
+        occupancy *= _QC_OCCUPANCY_LIMIT
+    return {
+        "operating": round(operating, 2),
+        "occupancy": round(occupancy, 2),
+        "total": round(operating + occupancy, 2),
+    }
+
+
 # [FISCAL] Deux familles, parce que le Québec ne les traite pas pareil.
 #
 # EXPLOITATION — liées à l'utilisation du bureau. TP-80 l. 500-502 : le prorata s'applique, mais

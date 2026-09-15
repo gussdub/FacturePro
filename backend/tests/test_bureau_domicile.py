@@ -136,3 +136,41 @@ class TestCategoriesBureau:
     def test_les_categories_existent_dans_le_plan_comptable(self):
         codes = {c["code"] for c in server_module.EXPENSE_CATEGORIES}
         assert server_module.HOME_OFFICE_CATEGORIES <= codes
+
+
+class TestLimiteQuebec:
+    def test_federal_ne_reduit_rien(self):
+        flat = _flat(utilities=2000.0, rent=12000.0)
+        r = server_module._home_office_expenses(flat, 0.10, province="ON")
+        assert r["operating"] == pytest.approx(200.0)
+        assert r["occupancy"] == pytest.approx(1200.0)
+        assert r["total"] == pytest.approx(1400.0)
+
+    def test_quebec_reduit_l_occupation_de_moitie(self):
+        """IN-155 §6.27.1 : assurance, entretien, intérêts, impôts fonciers et loyer sont
+        multipliés par 50 %."""
+        flat = _flat(utilities=2000.0, rent=12000.0)
+        r = server_module._home_office_expenses(flat, 0.10, province="QC")
+        assert r["occupancy"] == pytest.approx(600.0), "le loyer doit être réduit de moitié"
+
+    def test_quebec_ne_reduit_PAS_l_exploitation(self):
+        """C'est le point qui distingue l'électricité du loyer — et c'est la dépense visée par
+        la demande d'origine."""
+        flat = _flat(utilities=2000.0)
+        r = server_module._home_office_expenses(flat, 0.10, province="QC")
+        assert r["operating"] == pytest.approx(200.0), (
+            "l'électricité ÉCHAPPE à la limite de 50 %")
+
+    def test_facteur_nul_donne_zero(self):
+        flat = _flat(utilities=2000.0, rent=12000.0)
+        r = server_module._home_office_expenses(flat, 0.0, province="QC")
+        assert r["total"] == 0.0
+
+    def test_categories_absentes_ne_plantent_pas(self):
+        r = server_module._home_office_expenses({}, 0.10, province="QC")
+        assert r["total"] == 0.0
+
+    def test_entretien_traite_comme_occupation(self):
+        flat = _flat(repairs_maintenance=1000.0)
+        assert server_module._home_office_expenses(flat, 0.10, province="QC")["total"] == \
+            pytest.approx(50.0)
