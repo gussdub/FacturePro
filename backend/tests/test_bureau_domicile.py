@@ -121,17 +121,17 @@ class TestCategoriesBureau:
         """TP-80 partie 8 sépare la ligne 500 (exploitation, PAS de limite de 50 %) des
         lignes 505-522 (occupation, réduites de 50 %)."""
         assert server_module._HOME_OFFICE_OPERATING == {"utilities"}
-        assert server_module._HOME_OFFICE_OCCUPANCY == {
-            "rent", "insurance", "repairs_maintenance"}
+        assert server_module._HOME_OFFICE_OCCUPANCY == {"rent", "insurance"}
 
     def test_union_couvre_l_ancien_ensemble(self):
         """Non-régression : les 3 catégories d'origine restent traitées."""
         assert {"rent", "utilities", "insurance"} <= server_module.HOME_OFFICE_CATEGORIES
 
-    def test_entretien_ajoute(self):
-        """Le T4002 renvoie l'entretien (l. 8960) vers la 9945 ; la catégorie existait déjà
-        dans le plan comptable mais manquait à l'ensemble."""
-        assert "repairs_maintenance" in server_module.HOME_OFFICE_CATEGORIES
+    def test_entretien_volontairement_exclu(self):
+        """`repairs_maintenance` est GÉNÉRIQUE (outils, équipement, ordinateur), pas seulement
+        le bâtiment. L'inclure écraserait une réparation d'équipement de 800 $ à 48 $ pour un
+        bureau à 12 % au Québec. Exclusion délibérée, pas un oubli."""
+        assert "repairs_maintenance" not in server_module.HOME_OFFICE_CATEGORIES
 
     def test_les_categories_existent_dans_le_plan_comptable(self):
         codes = {c["code"] for c in server_module.EXPENSE_CATEGORIES}
@@ -170,10 +170,17 @@ class TestLimiteQuebec:
         r = server_module._home_office_expenses({}, 0.10, province="QC")
         assert r["total"] == 0.0
 
-    def test_entretien_traite_comme_occupation(self):
+    def test_entretien_ignore(self):
+        """Hors de l'ensemble : aucun prorata ne lui est appliqué (cf. test_entretien_
+        volontairement_exclu)."""
         flat = _flat(repairs_maintenance=1000.0)
-        assert server_module._home_office_expenses(flat, 0.10, province="QC")["total"] == \
-            pytest.approx(50.0)
+        assert server_module._home_office_expenses(flat, 0.10, province="QC")["total"] == 0.0
+
+    def test_le_total_egale_toujours_la_somme_affichee(self):
+        """Les trois valeurs finissent côte à côte sur un formulaire fiscal."""
+        flat = _flat(utilities=753.53, rent=18861.17)
+        r = server_module._home_office_expenses(flat, 0.1231, province="QC")
+        assert r["total"] == pytest.approx(r["operating"] + r["occupancy"], abs=0.0001)
 
 
 class TestPlafondEtReport:
@@ -224,3 +231,25 @@ class TestPlafondEtReport:
                                                revenu_avant=revenu)
             assert revenu - r["deductible"] >= -0.005, (
                 f"revenu={revenu} deductible={r['deductible']} -> perte créée")
+
+
+class TestProvinceRobuste:
+    def test_province_absente_applique_quand_meme_la_limite(self):
+        """RÉGRESSION : `province=settings.get("province")` passe None quand la clé manque, et
+        le défaut du paramètre ne s'applique pas. Sans repli, l'abonné québécois déduisait le
+        double — une sur-déduction, donc un risque de redressement."""
+        flat = _flat(rent=18000.0)
+        assert server_module._home_office_expenses(
+            flat, 0.12, province=None)["occupancy"] == pytest.approx(1080.0)
+
+    @pytest.mark.parametrize("prov", ["QC", "Qc", "qc", "quebec", "Québec", "  QC  "])
+    def test_variantes_quebecoises_reconnues(self, prov):
+        flat = _flat(rent=18000.0)
+        assert server_module._home_office_expenses(
+            flat, 0.12, province=prov)["occupancy"] == pytest.approx(1080.0)
+
+    @pytest.mark.parametrize("prov", ["ON", "AB", "BC", "NB"])
+    def test_hors_quebec_aucune_reduction(self, prov):
+        flat = _flat(rent=18000.0)
+        assert server_module._home_office_expenses(
+            flat, 0.12, province=prov)["occupancy"] == pytest.approx(2160.0)

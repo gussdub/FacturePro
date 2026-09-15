@@ -172,12 +172,12 @@ class TestHomeOfficeAdjustment:
         assert adj["original_total"] == 15000.0  # 12000 + 2000 + 1000
         assert adj["deductible_amount"] == 2250.0  # 15000 × 15%
         assert adj["saved_to_arc_line"] == "9945"
-        # 2026-09-15 : `repairs_maintenance` (ligne ARC 8960) a REJOINT cet ensemble. Le
-        # T4002 le renvoie vers la ligne 9945 au même titre que le loyer et l'assurance ; il
-        # manquait à l'ensemble d'origine. L'assertion suit le code plutôt que de figer un
-        # périmètre incomplet.
-        assert set(adj["applies_to"]) == {
-            "rent", "utilities", "insurance", "repairs_maintenance"}
+        # 2026-09-15 : `repairs_maintenance` (ligne ARC 8960) a été retiré de cet ensemble
+        # (revue de qualité) — la catégorie « Entretien et réparations » de FacturePro est
+        # GÉNÉRIQUE (outils, équipement, ordinateur, pas seulement le bâtiment) et n'aurait
+        # pas dû être proratée/réduite comme le loyer. Cf. commentaire sur
+        # `_HOME_OFFICE_OCCUPANCY` dans server.py.
+        assert set(adj["applies_to"]) == {"rent", "utilities", "insurance"}
         # Ancré sur la constante plutôt que sur une liste figée : si l'ensemble s'élargit
         # encore (impôts fonciers, intérêts hypothécaires), ce test suivra au lieu de
         # devoir être réécrit.

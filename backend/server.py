@@ -10294,11 +10294,26 @@ def _home_office_expenses(flat_expenses: dict, factor: float, province: str = "Q
     f = max(0.0, min(1.0, float(factor or 0)))
     operating = _somme(_HOME_OFFICE_OPERATING) * f
     occupancy = _somme(_HOME_OFFICE_OCCUPANCY) * f
-    if str(province or "").upper() == "QC":
+    # [FISCAL] Repli sur QC, pas sur "" : `province=settings.get("province")` passe None dès que
+    # la clé est absente, et le défaut du PARAMÈTRE ne s'applique alors pas. Avec un repli vide,
+    # un abonné québécois sans province enregistrée déduirait le DOUBLE de ce à quoi il a droit.
+    # Le défaut sûr est celui qui APPLIQUE la restriction.
+    # ⚠️ Un simple `[:2] == "QC"` NE reconnaît PAS « Québec »/« quebec » (leurs 2 premières
+    # lettres sont "QU", pas "QC") — vérifié avant de l'écrire. On compare donc à l'abréviation
+    # ENTIÈRE "QC", et sinon on teste le nom au long, accents normalisés à la main (pas de
+    # dépendance `unicodedata` pour un seul caractère).
+    _p = str(province or "QC").strip().upper().replace("É", "E").replace("È", "E").replace("Ê", "E")
+    if _p == "QC" or _p.startswith("QUEBEC"):
         occupancy *= _QC_OCCUPANCY_LIMIT
+    # [FISCAL] Arrondir une SEULE fois, puis sommer les valeurs arrondies. Sommer les valeurs
+    # non arrondies ferait porter au total l'erreur composée des deux, et les trois nombres
+    # finissent côte à côte sur un formulaire fiscal : un sous-total qui ne s'additionne pas y
+    # est un signal de bug, quel que soit le cent en jeu.
+    operating = round(operating, 2)
+    occupancy = round(occupancy, 2)
     return {
-        "operating": round(operating, 2),
-        "occupancy": round(occupancy, 2),
+        "operating": operating,
+        "occupancy": occupancy,
         "total": round(operating + occupancy, 2),
     }
 
@@ -10349,10 +10364,17 @@ _HOME_OFFICE_OPERATING = {"utilities"}
 # OCCUPATION — liées à la résidence elle-même. TP-80 l. 505-522 : après le prorata, le Québec
 # multiplie par 50 %, « ces dépenses étant, dans une large mesure, engagées à des fins
 # personnelles » (IN-155 §6.27.1). Le fédéral n'a pas cette réduction.
-_HOME_OFFICE_OCCUPANCY = {"rent", "insurance", "repairs_maintenance"}
+_HOME_OFFICE_OCCUPANCY = {"rent", "insurance"}
 
-# `repairs_maintenance` (ligne 8960) était ABSENT de l'ancien ensemble alors que le T4002 le
-# renvoie vers la 9945 au même titre que le loyer.
+# ⚠️ `repairs_maintenance` (ligne 8960) N'EST PAS ici, et c'est délibéré. Le T4002 renvoie bien
+# vers la 9945 l'entretien « related to business use of workspace in your home » — mais notre
+# catégorie « Entretien et réparations » est GÉNÉRIQUE : elle reçoit aussi la réparation d'un
+# outil ou d'un ordinateur, déductibles à 100 %. L'y inclure écraserait ces dépenses : 800 $ de
+# réparation d'équipement tomberaient à 48 $ pour un bureau à 12 % au Québec (× 0,12 × 0,50).
+# Le préjudice serait pour l'ABONNÉ, et silencieux.
+# Le faire proprement exige une catégorie distincte `home_repairs_maintenance` dédiée au
+# bâtiment — plan comptable + migration. Même raisonnement que pour une catégorie `electricity`
+# séparée de `utilities`. À traiter ensemble, pas à moitié.
 HOME_OFFICE_CATEGORIES = _HOME_OFFICE_OPERATING | _HOME_OFFICE_OCCUPANCY
 
 # Catégories EXPENSE_CATEGORIES reclassées sur la ligne 9281 (véhicule)
