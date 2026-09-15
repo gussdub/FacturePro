@@ -465,3 +465,48 @@ class TestAggregateSalesTaxCti:
             org["scope"], "2026-01-01", "2026-12-31")
         assert result["summary"]["gst"]["paid"] == pytest.approx(5.00)
         assert result["summary"]["qst"]["paid"] in (9.97, 9.98)
+
+
+class TestSocieteParActions:
+    """Le régime du bureau à domicile ne vise que le PARTICULIER.
+
+    LIR 18(12)a) parle d'un espace « of a self-contained domestic establishment in which THE
+    INDIVIDUAL resides », et LTA 170(1)a.1) en est le miroir pour le CTI. Une société n'a pas
+    de résidence. C'est aussi cohérent avec le reste du produit : le T2125 est fermé aux
+    sociétés (422) et le rapport GIFI n'applique explicitement aucun ajustement bureau.
+    """
+
+    def _base(self, **kw):
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0, "province": "QC"}
+        s.update(kw)
+        return s
+
+    def test_societe_aucun_facteur(self):
+        assert server_module._home_office_factor(
+            self._base(entity_type="corporation")) == 0.0
+
+    def test_societe_cti_entier(self):
+        """RÉGRESSION : sans ce verrou, une société voyait son CTI amputé de 90 % pour un
+        bureau de 10 % — au prorata d'une superficie qui n'alimente aucun de ses rapports,
+        puisque le T2125 lui est fermé et que le GIFI ne l'utilise pas."""
+        assert server_module._home_office_itc_factor(
+            self._base(entity_type="corporation"), "utilities") == 1.0
+
+    def test_travailleur_autonome_inchange(self):
+        assert server_module._home_office_factor(
+            self._base(entity_type="sole_proprietor")) == pytest.approx(0.10)
+        assert server_module._home_office_itc_factor(
+            self._base(entity_type="sole_proprietor"), "utilities") == pytest.approx(0.10)
+
+    def test_entity_type_absent_traite_comme_autonome(self):
+        """Le défaut du reste du fichier est `sole_proprietor` (3 occurrences, dont la garde
+        du T2125 elle-même) : un réglage sans entity_type doit continuer de fonctionner."""
+        assert server_module._home_office_factor(self._base()) == pytest.approx(0.10)
+
+    def test_societe_aucun_ajustement_t2125(self):
+        """Le verrou protège les DEUX chemins, puisque tous deux passent par
+        _home_office_factor."""
+        flat = {"utilities": {"gross": 2000.0, "deductible": 2000.0}}
+        assert server_module._t2125_compute_home_office_adjustment(
+            flat, self._base(entity_type="corporation"), 50000.0) is None

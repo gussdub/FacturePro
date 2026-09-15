@@ -483,6 +483,19 @@ const SettingsPage = () => {
             {settings.office_location === 'home' && (
               <div style={{ marginLeft: 20, marginTop: 12, paddingLeft: 14,
                             borderLeft: '3px solid #e5e7eb' }}>
+                {/* Le régime du bureau à domicile ne vise que le particulier (LIR 18(12) parle
+                    de « the individual »). Le dire plutôt que de laisser une société saisir des
+                    superficies qui n'alimentent aucun de ses rapports. */}
+                {settings.entity_type === 'corporation' && (
+                  <p style={{ background: '#fef3c7', border: '1px solid #fcd34d',
+                              borderRadius: 6, padding: '10px 12px', fontSize: 13,
+                              color: '#78350f', marginTop: 0 }}>
+                    Ton entreprise est une société par actions. Le régime du bureau à domicile
+                    vise les particuliers en affaires&nbsp;: ces superficies n'alimentent aucun
+                    de tes rapports pour l'instant. Une société déduit ses frais de local
+                    autrement — parles-en à ta comptable.
+                  </p>
+                )}
                 <label style={{ display: 'block', marginBottom: 12, fontSize: 14 }}>
                   <input type="checkbox"
                          checked={!!settings.home_office_qualifies}

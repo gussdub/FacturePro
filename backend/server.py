@@ -10251,6 +10251,15 @@ def _home_office_factor(settings: dict) -> float:
     you use the rooms for your business, and then divide that amount by 24 hours ». Non exposé en
     v1 (usage déclaré exclusif), mais respecté s'il est présent.
     """
+    # [FISCAL] Le régime du bureau à domicile ne vise que le PARTICULIER. LIR 18(12)a) parle
+    # d'un espace « of a self-contained domestic establishment in which THE INDIVIDUAL resides »,
+    # et LTA 170(1)a.1) en est le miroir pour le CTI. Une société n'a pas de résidence.
+    # Cohérent avec le reste du produit : le T2125 est fermé aux sociétés (422, l. ~10629) et le
+    # rapport GIFI n'applique explicitement aucun ajustement bureau. Sans ce verrou, une société
+    # voyait son CTI amputé au prorata d'une superficie qui n'alimente AUCUN de ses rapports —
+    # le pire des deux mondes.
+    if (settings or {}).get("entity_type", "sole_proprietor") != "sole_proprietor":
+        return 0.0
     if settings.get("office_location") != "home":
         return 0.0
     if not settings.get("home_office_qualifies"):
@@ -10288,6 +10297,13 @@ def _home_office_itc_factor(settings: dict, category_code: str) -> float:
     parfaitement ordinaire. Décision explicite, pas un oubli.
     """
     if category_code not in HOME_OFFICE_CATEGORIES:
+        return 1.0
+    # [FISCAL] Une SOCIÉTÉ est hors du régime, pas « non admissible » : son crédit est ENTIER.
+    # La distinction compte — tomber dans la branche `factor <= 0` ci-dessous lui retirerait
+    # 100 % de son CTI au lieu de le lui laisser. LTA 170(1)a.1) ne vise que l'espace de travail
+    # dans la résidence d'un particulier ; pour une société, une facture d'électricité est une
+    # dépense d'exploitation ordinaire.
+    if (settings or {}).get("entity_type", "sole_proprietor") != "sole_proprietor":
         return 1.0
     if (settings or {}).get("office_location") != "home":
         return 1.0                      # local commercial : dépense ordinaire, CTI entier
