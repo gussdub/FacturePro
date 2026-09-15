@@ -174,3 +174,53 @@ class TestLimiteQuebec:
         flat = _flat(repairs_maintenance=1000.0)
         assert server_module._home_office_expenses(flat, 0.10, province="QC")["total"] == \
             pytest.approx(50.0)
+
+
+class TestPlafondEtReport:
+    def test_sous_le_plafond_tout_est_deductible(self):
+        r = server_module._home_office_cap(frais=1000.0, report_anterieur=0.0,
+                                           revenu_avant=5000.0)
+        assert r["deductible"] == 1000.0
+        assert r["report_suivant"] == 0.0
+
+    def test_au_dessus_du_plafond_le_residu_se_reporte(self):
+        """LIR 18(12)b) : ces frais ne peuvent ni créer ni augmenter une perte.
+        18(12)c) : l'excédent est déductible l'année SUIVANTE, indéfiniment."""
+        r = server_module._home_office_cap(frais=4000.0, report_anterieur=0.0,
+                                           revenu_avant=3000.0)
+        assert r["deductible"] == 3000.0, "plafonné au revenu avant ces frais"
+        assert r["report_suivant"] == 1000.0, "le résidu n'est PAS perdu"
+
+    def test_le_report_anterieur_s_ajoute(self):
+        """TP-80 l. 528 : « Montant de la ligne 534 du formulaire de l'année précédente »."""
+        r = server_module._home_office_cap(frais=1000.0, report_anterieur=2500.0,
+                                           revenu_avant=3000.0)
+        assert r["disponible"] == 3500.0
+        assert r["deductible"] == 3000.0
+        assert r["report_suivant"] == 500.0
+
+    def test_revenu_negatif_traite_comme_zero(self):
+        """TP-80 l. 532 : « S'il est négatif, inscrivez 0 ». Une entreprise déficitaire ne
+        déduit RIEN au titre du bureau, et reporte tout."""
+        r = server_module._home_office_cap(frais=1000.0, report_anterieur=0.0,
+                                           revenu_avant=-8000.0)
+        assert r["deductible"] == 0.0
+        assert r["report_suivant"] == 1000.0
+
+    def test_report_jamais_negatif(self):
+        """TP-80 l. 534 : « Si le résultat est négatif, inscrivez 0 »."""
+        r = server_module._home_office_cap(frais=100.0, report_anterieur=0.0,
+                                           revenu_avant=99999.0)
+        assert r["report_suivant"] == 0.0
+
+    def test_aucun_frais_ne_produit_rien(self):
+        r = server_module._home_office_cap(frais=0.0, report_anterieur=0.0, revenu_avant=5000.0)
+        assert r["deductible"] == 0.0 and r["report_suivant"] == 0.0
+
+    def test_le_plafond_ne_peut_pas_creer_de_perte(self):
+        """INVARIANT, formulé comme la loi : le revenu après déduction est toujours >= 0."""
+        for revenu in (0.0, 1.0, 500.0, 5000.0):
+            r = server_module._home_office_cap(frais=9999.0, report_anterieur=9999.0,
+                                               revenu_avant=revenu)
+            assert revenu - r["deductible"] >= -0.005, (
+                f"revenu={revenu} deductible={r['deductible']} -> perte créée")

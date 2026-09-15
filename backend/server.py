@@ -10303,6 +10303,36 @@ def _home_office_expenses(flat_expenses: dict, factor: float, province: str = "Q
     }
 
 
+def _home_office_cap(frais: float, report_anterieur: float, revenu_avant: float) -> dict:
+    """Applique le PLAFOND et calcule le REPORT des frais de bureau à domicile.
+
+    C'est la règle la plus importante de ce module, et elle était entièrement absente : le code
+    se contentait de `total × pourcentage`.
+
+    ARC : « The amount you can deduct for business-use-of-home expenses cannot be more than your
+    net income from the business before you deduct these expenses. In other words, you cannot use
+    these expenses to increase or create a business loss. » — LIR 18(12)b).
+
+    L'excédent n'est PAS perdu : LIR 18(12)c) le rend déductible l'année suivante, et le folio
+    S4-F2-C2 précise qu'il se reporte « indefinitely ».
+
+    Le Québec applique la même mécanique, ligne par ligne (TP-80 partie 8) :
+        l. 530 = l. 527 (frais de l'année) + l. 528 (report de l'an dernier)
+        l. 532 = revenu avant ces frais, « s'il est négatif, inscrivez 0 »
+        l. 536 = le MOINDRE des deux   <- la déduction
+        l. 534 = l. 530 moins l. 532, « si négatif, inscrivez 0 »   <- le report
+    """
+    disponible = max(0.0, float(frais or 0)) + max(0.0, float(report_anterieur or 0))
+    plafond = max(0.0, float(revenu_avant or 0))      # TP-80 l. 532
+    deductible = min(disponible, plafond)             # TP-80 l. 536
+    return {
+        "disponible": round(disponible, 2),
+        "plafond": round(plafond, 2),
+        "deductible": round(deductible, 2),
+        "report_suivant": round(max(0.0, disponible - deductible), 2),   # TP-80 l. 534
+    }
+
+
 # [FISCAL] Deux familles, parce que le Québec ne les traite pas pareil.
 #
 # EXPLOITATION — liées à l'utilisation du bureau. TP-80 l. 500-502 : le prorata s'applique, mais
