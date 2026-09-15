@@ -10266,6 +10266,39 @@ def _home_office_factor(settings: dict) -> float:
     return pct / 100.0 * (1.0 - perso / 100.0)
 
 
+# [FISCAL] Seuil du « substantially all » : à 90 % ou plus d'utilisation commerciale, le CTI est
+# réclamable en entier plutôt qu'au prorata.
+_ITC_SUBSTANTIALLY_ALL = 0.90
+
+
+def _home_office_itc_factor(settings: dict, category_code: str) -> float:
+    """Fraction de TPS/TVQ récupérable sur une dépense de résidence. 1.0 = rien à changer.
+
+    LTA 170(1)a.1) refuse le CTI sur un espace de travail résidentiel SAUF s'il est le principal
+    lieu d'affaires, ou utilisé exclusivement pour l'entreprise et pour rencontrer des clients de
+    façon régulière et continue. C'est la même condition d'accès que la déduction au revenu — on
+    la lit donc dans le même réglage d'admissibilité.
+
+    Une fois l'accès ouvert, le crédit suit l'utilisation commerciale. Contrairement à la
+    déduction, il n'y a NI plafond de revenu NI report : ce sont deux régimes distincts.
+
+    ⚠️ La falaise de 10 % de `_recoverable_usage_frac` ne s'applique PAS ici. Ce seuil vient du
+    régime des biens à usage mixte (le cas du cellulaire) ; l'appliquer à une superficie de
+    bureau annulerait tout le crédit pour un bureau de 10 m² dans une maison de 130 m² — cas
+    parfaitement ordinaire. Décision explicite, pas un oubli.
+    """
+    if category_code not in HOME_OFFICE_CATEGORIES:
+        return 1.0
+    if (settings or {}).get("office_location") != "home":
+        return 1.0                      # local commercial : dépense ordinaire, CTI entier
+    factor = _home_office_factor(settings or {})
+    if factor <= 0:
+        return 0.0                      # au domicile mais non admissible -> aucun CTI
+    if factor >= _ITC_SUBSTANTIALLY_ALL:
+        return 1.0
+    return factor
+
+
 # [FISCAL] Réduction québécoise des frais d'OCCUPATION. IN-155 §6.27.1 et TP-80 l. 522
 # (« Montant de la ligne 518 multiplié par 50 % »). S'applique aux exercices commencés après le
 # 9 mai 1996. Le fédéral n'a AUCUN équivalent.
@@ -13908,7 +13941,20 @@ def _aggregate_sales_tax(scope, start, end):
     # celui-ci applique la fraction (50 % repas + seuils télécom) ET le PLAFONNEMENT partagé avec
     # le grand livre (cap = amount − personal, revue adversariale). Somme naïve = biais rapport↔GL
     # quand le plafond absorbe des taxes qu'un calcul naïf compterait quand même.
-    _rec = [_expense_recoverable_tax_cad(e) for e in expenses]
+    # [FISCAL] Bureau à domicile : le CTI/RTI sur les frais de résidence suit l'utilisation
+    # commerciale. Appliqué ICI, au rapport, et jamais à la saisie — poser le prorata sur la
+    # dépense elle-même modifierait aussi le P&L et le grand livre, et serait recompté par le
+    # T2125 (cf. §1.2 et §3.1 de la spec).
+    _ho_settings = db.company_settings.find_one(scope, {"_id": 0}) or {}
+
+    def _rec_one(e):
+        gst, qst, hst = _expense_recoverable_tax_cad(e)
+        f = _home_office_itc_factor(_ho_settings, e.get("category_code"))
+        if f == 1.0:
+            return gst, qst, hst
+        return gst * f, qst * f, hst * f
+
+    _rec = [_rec_one(e) for e in expenses]
     gst_paid = sum(r[0] for r in _rec)
     qst_paid = sum(r[1] for r in _rec)
     hst_paid = sum(r[2] for r in _rec)

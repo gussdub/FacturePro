@@ -352,3 +352,116 @@ class TestT2125Integre:
         assert r["business_use_adjustments"].get("home_office") is None
         lignes = {l["arc_line"]: l for l in r["expenses_by_arc_line"]}
         assert lignes["9220"]["deductible"] == 2000.0
+
+
+class TestCtiRti:
+    """CTI/RTI (feature #7) : le prorata bureau-à-domicile s'applique au RAPPORT de taxes, pas à
+    la saisie. `_home_office_itc_factor` calcule la fraction récupérable ; câblé dans
+    `_aggregate_sales_tax` (jamais sur `personal_use_amount_cad` d'une dépense de résidence)."""
+
+    def test_local_commercial_cti_entier(self):
+        s = {"office_location": "commercial", "home_office_qualifies": True,
+             "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_itc_factor(s, "utilities") == 1.0
+
+    def test_categorie_hors_bureau_non_touchee(self):
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_itc_factor(s, "office_supplies") == 1.0
+        assert server_module._home_office_itc_factor(s, "meals_entertainment") == 1.0
+
+    def test_domicile_cti_proratise(self):
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_itc_factor(s, "utilities") == pytest.approx(0.10)
+
+    def test_usage_predominant_donne_cti_entier(self):
+        """Règle du « substantially all » : à 90 % ou plus d'utilisation commerciale, le CTI
+        est réclamable en entier."""
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 95.0, "home_total_area_sqm": 100.0}
+        assert server_module._home_office_itc_factor(s, "utilities") == 1.0
+
+    def test_pas_de_falaise_a_10_pourcent(self):
+        """RÉGRESSION : le seuil de 10 % de _recoverable_usage_frac vient du régime des biens à
+        usage mixte (cellulaire) et ne s'applique PAS aux frais d'exploitation d'un bureau à
+        domicile. Un bureau de 7,7 % garde son CTI au prorata, il ne tombe pas à zéro."""
+        s = {"office_location": "home", "home_office_qualifies": True,
+             "home_office_area_sqm": 10.0, "home_total_area_sqm": 130.0}
+        f = server_module._home_office_itc_factor(s, "utilities")
+        assert f > 0, "le CTI ne doit PAS être annulé pour un petit bureau"
+        assert f == pytest.approx(0.0769, abs=0.0001)
+
+    def test_non_admissible_aucun_cti(self):
+        """LTA 170(1)a.1) refuse le CTI si l'espace n'est pas le principal lieu d'affaires ou
+        utilisé exclusivement pour l'entreprise."""
+        s = {"office_location": "home", "home_office_qualifies": False,
+             "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0}
+        assert server_module._home_office_itc_factor(s, "utilities") == 0.0
+
+
+class TestAggregateSalesTaxCti:
+    """Câblage dans `_aggregate_sales_tax` : le prorata s'applique au niveau du RAPPORT, jamais
+    en écrivant `personal_use_amount_cad` sur la dépense elle-même (double prorata sinon, cf.
+    §1.2/§3.1 de la spec — une déduction de 26,09 $ tomberait à 3,91 $)."""
+
+    @pytest.fixture()
+    def org(self):
+        org_id = f"TESTORG-CTI-{uuid.uuid4()}"
+        scope = {"organization_id": org_id}
+        yield {"org_id": org_id, "scope": scope}
+        server_module.db.expenses.delete_many(scope)
+        server_module.db.company_settings.delete_many(scope)
+
+    def _expense(self, org_id, **extra):
+        eid = str(uuid.uuid4())
+        base = {
+            "id": eid, "organization_id": org_id, "vendor": "Hydro-Québec",
+            "description": "Électricité", "category_code": "utilities",
+            "amount_cad": 114.975, "currency": "CAD", "expense_date": "2026-06-15",
+            "gst_paid_cad": 5.00, "qst_paid_cad": 9.975, "hst_paid_cad": 0.0,
+        }
+        base.update(extra)
+        server_module.db.expenses.insert_one(base)
+        return eid
+
+    def test_domicile_proratise_le_cti_du_rapport(self, org):
+        """Bureau à domicile 10 % : le CTI/RTI récupéré par le rapport est réduit à 10 %, alors
+        que la dépense elle-même ne porte AUCUN `personal_use_amount_cad`."""
+        server_module.db.company_settings.insert_one({
+            "organization_id": org["org_id"], "office_location": "home",
+            "home_office_qualifies": True,
+            "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0,
+        })
+        self._expense(org["org_id"])
+        result = server_module._aggregate_sales_tax(
+            org["scope"], "2026-01-01", "2026-12-31")
+        assert result["summary"]["gst"]["paid"] == pytest.approx(0.50)
+        assert result["summary"]["qst"]["paid"] == pytest.approx(1.00)
+        # Aucune dépense n'a été modifiée par le rapport : le prorata reste au niveau agrégat.
+        stored = server_module.db.expenses.find_one({"organization_id": org["org_id"]})
+        assert stored.get("personal_use_amount_cad") is None
+
+    def test_local_commercial_cti_entier_dans_le_rapport(self, org):
+        """Sans bureau à domicile (local commercial), le rapport ne change rien : CTI entier."""
+        server_module.db.company_settings.insert_one({
+            "organization_id": org["org_id"], "office_location": "commercial",
+        })
+        self._expense(org["org_id"])
+        result = server_module._aggregate_sales_tax(
+            org["scope"], "2026-01-01", "2026-12-31")
+        assert result["summary"]["gst"]["paid"] == pytest.approx(5.00)
+        assert result["summary"]["qst"]["paid"] in (9.97, 9.98)
+
+    def test_categorie_non_bureau_non_touchee_dans_le_rapport(self, org):
+        """Une catégorie hors HOME_OFFICE_CATEGORIES garde son CTI entier même au domicile."""
+        server_module.db.company_settings.insert_one({
+            "organization_id": org["org_id"], "office_location": "home",
+            "home_office_qualifies": True,
+            "home_office_area_sqm": 11.0, "home_total_area_sqm": 110.0,
+        })
+        self._expense(org["org_id"], category_code="office_supplies")
+        result = server_module._aggregate_sales_tax(
+            org["scope"], "2026-01-01", "2026-12-31")
+        assert result["summary"]["gst"]["paid"] == pytest.approx(5.00)
+        assert result["summary"]["qst"]["paid"] in (9.97, 9.98)
