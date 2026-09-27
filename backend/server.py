@@ -2497,6 +2497,9 @@ def _persist_solo_org_for_user(user: dict) -> dict:
     )
     # Backfill des collections metier existantes
     for coll_name in _ORG_SCOPED_COLLECTIONS:
+        # [sync-ok] migration : pose `organization_id`, un identifiant INTERNE. Pas de
+        # stamp `updated_at` — ce n'est pas une modification metier, et l'avancer ferait
+        # ressortir toute la base comme « modifiee aujourd'hui » chez PFM.
         db[coll_name].update_many(
             {"user_id": user["id"], "organization_id": {"$exists": False}},
             [{"$set": {"organization_id": org_id, "created_by_user_id": "$user_id"}}]
@@ -3282,12 +3285,18 @@ def _safe_autopost(fn, source_doc_collection: str, source_doc_id: str,
     mark_filter = _autopost_mark_filter(source_doc_id, org_scope, legacy_user_id)
     try:
         fn()
+        # [sync-ok] liaison au grand livre : champs internes, non exposes par l'API
+        # d'integration. Aucun stamp — cet appel suit une ecriture qui a deja pose
+        # `updated_at`, et le refaire ne dirait rien de neuf a PFM.
         db[source_doc_collection].update_one(
             mark_filter, {"$unset": {"autopost_error": ""}})
     except Exception as e:
         # NE JAMAIS propager : l'opération métier a déjà réussi.
         logger.warning("autopost failed for %s: %s", source_doc_id,
                        type(e).__name__)
+        # [sync-ok] liaison au grand livre : champs internes, non exposes par l'API
+        # d'integration. Aucun stamp — cet appel suit une ecriture qui a deja pose
+        # `updated_at`, et le refaire ne dirait rien de neuf a PFM.
         db[source_doc_collection].update_one(
             mark_filter,
             {"$set": {"autopost_error":
@@ -3958,6 +3967,9 @@ def migrate_organizations_v1():
         )
         # Backfill business collections : organization_id + created_by_user_id
         for coll_name in _ORG_SCOPED_COLLECTIONS:
+            # [sync-ok] migration : pose `organization_id`, un identifiant INTERNE. Pas de
+            # stamp `updated_at` — ce n'est pas une modification metier, et l'avancer ferait
+            # ressortir toute la base comme « modifiee aujourd'hui » chez PFM.
             db[coll_name].update_many(
                 {"user_id": user["id"], "organization_id": {"$exists": False}},
                 [{"$set": {
@@ -4118,6 +4130,19 @@ def migrate_integration_org_backfill_v1():
             # ces documents comme « modifiés aujourd'hui » dans la resynchronisation de PFM.
             coll.update_one({"id": doc["id"], "organization_id": {"$exists": False}},
                             {"$set": {"organization_id": org_id}})
+
+
+def migrate_api_idempotency_v1():
+    """Idempotente. Safe à chaque boot (lot 0 §5.1 — création idempotente).
+
+    Purement additive : crée l'index de la clé composite et purge les entrées périmées.
+    L'index est UNIQUE sur `(organization_id, idempotency_key)` — c'est ce qui garantit qu'un
+    réessai concurrent de PFM ne puisse pas créer deux entrées, donc deux soumissions.
+    """
+    db.api_idempotency.create_index(
+        [("organization_id", 1), ("idempotency_key", 1)], unique=True)
+    db.api_idempotency.create_index("created_at")
+    _api_idempotency_purge()
 
 
 def migrate_api_keys_v1():
@@ -4904,6 +4929,96 @@ def update_member_role(
 # exclusion : sinon tout champ ajouté au schéma fuiterait dans l'API sans que personne ne le
 # décide. `items` n'est jamais exposé (PFM n'a besoin que des totaux).
 
+def _next_document_number(collection_name: str, champ: str, prefixe: str, filtre: dict) -> str:
+    """Prochain numéro de document, dérivé du MAXIMUM existant et non d'un décompte.
+
+    `count_documents() + 1` recule dès qu'un document est supprimé et produit alors un numéro
+    déjà pris — en silence, puisqu'aucun index unique ne le détecte. Invisible jusqu'ici parce
+    qu'aucune suppression n'a eu lieu (vérifié : count == max sur les 136 soumissions et les
+    128 factures), mais la création par programme rendrait la collision fréquente.
+
+    Reste une course en cas de créations vraiment simultanées. L'idempotence de l'API couvre le
+    cas réel — les réessais de PFM — et ce produit n'a qu'un client d'intégration. Passer à un
+    compteur atomique exigerait une collection de séquences ; hors périmètre du lot 0.
+    """
+    plus_grand = 0
+    motif = re.compile(r"^" + re.escape(prefixe) + r"-(\d+)$")
+    for doc in _sync_collection(collection_name).find(filtre, {"_id": 0, champ: 1}):
+        m = motif.match(str(doc.get(champ) or ""))
+        if m:
+            plus_grand = max(plus_grand, int(m.group(1)))
+    return f"{prefixe}-{plus_grand + 1:04d}"
+
+
+# [INTÉGRATION PFM] Statuts de soumission exclus du tableau de bord.
+#
+# Une soumission en brouillon est une proposition en attente de revue, pas une soumission
+# remise à un client. Aucune n'existe aujourd'hui (0/138), donc l'exclusion ne change rien à
+# l'affichage actuel — elle cadre les brouillons que PFM va créer.
+#
+# NOTE : `total_invoices` compte les 104 factures en brouillon. Incohérence PRÉEXISTANTE,
+# délibérément non touchée : le tableau de bord déployé les affiche ainsi, et les retirer
+# changerait un chiffre que le propriétaire lit tous les jours.
+_QUOTE_STATUSES_HORS_STATS = ("draft",)
+
+
+def _stats_quote_filter(scope: dict) -> dict:
+    """Filtre des soumissions comptées au tableau de bord."""
+    return {**scope, "status": {"$nin": list(_QUOTE_STATUSES_HORS_STATS)}}
+
+
+# [INTÉGRATION PFM] Idempotence de la création par API.
+#
+# PFM réessaiera sur délai dépassé — Render s'endort après 15 minutes et le premier appel prend
+# 30 à 60 secondes, donc ce n'est pas une hypothèse. Sans idempotence, chaque réessai créerait
+# une soumission de plus, et le propriétaire trouverait trois brouillons identiques à trier.
+_IDEMPOTENCY_REPLAY_HOURS = 24
+_IDEMPOTENCY_RETENTION_DAYS = 7
+
+
+def _api_idempotency_lookup(organization_id: str, cle: str):
+    """Réponse déjà produite pour cette clé, ou None. Clé composite
+    `(organization_id, idempotency_key)` : deux organisations utilisant la même chaîne ne
+    doivent pas se voler leurs réponses."""
+    if not cle:
+        return None
+    doc = db.api_idempotency.find_one(
+        {"organization_id": organization_id, "idempotency_key": cle}, {"_id": 0})
+    if not doc:
+        return None
+    try:
+        pose = _parse_stored_dt(doc.get("created_at"))
+    except Exception:
+        return None
+    limite = datetime.now(timezone.utc) - timedelta(hours=_IDEMPOTENCY_REPLAY_HOURS)
+    if pose < limite:
+        return None      # trop ancienne : on laisse recréer plutôt que de rendre un périmé
+    return doc.get("response")
+
+
+def _api_idempotency_store(organization_id: str, cle: str, reponse: dict) -> None:
+    if not cle:
+        return
+    try:
+        db.api_idempotency.update_one(
+            {"organization_id": organization_id, "idempotency_key": cle},
+            {"$setOnInsert": {"organization_id": organization_id, "idempotency_key": cle,
+                              "response": reponse,
+                              "created_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
+    except Exception:
+        pass      # best-effort : ne jamais faire échouer une création réussie
+
+
+def _api_idempotency_purge() -> None:
+    """Supprime les entrées de plus de 7 jours. Appelée au démarrage."""
+    limite = (datetime.now(timezone.utc) - timedelta(days=_IDEMPOTENCY_RETENTION_DAYS)).isoformat()
+    try:
+        db.api_idempotency.delete_many({"created_at": {"$lt": limite}})
+    except Exception:
+        pass
+
+
 _INTEGRATION_MAX_LIMIT = 500
 _INTEGRATION_DEFAULT_LIMIT = 100
 
@@ -5079,6 +5194,79 @@ def integration_list_invoices(
         principal: CurrentUser = Depends(require_api_scope("invoices:read"))):
     return _integration_page("invoices", principal, _integration_invoice,
                              updated_since, limit, cursor)
+
+
+@app.post("/api/v1/integration/quotes", status_code=201)
+def integration_create_quote(
+        payload: dict,
+        request: Request,
+        principal: CurrentUser = Depends(require_api_scope("quotes:write"))):
+    """Crée une soumission en BROUILLON.
+
+    Le statut est toujours `draft`, quoi que demande l'appelant : une soumission créée par
+    l'API n'est jamais envoyée automatiquement au client final. C'est le propriétaire qui
+    l'ouvre, la vérifie et l'envoie depuis FacturePro.
+
+    L'en-tête `Idempotency-Key` est honoré. Il n'est pas optionnel dans les faits : PFM
+    réessaiera sur délai dépassé, et sans lui chaque réessai créerait une soumission de plus.
+    """
+    scope = {"organization_id": principal.organization_id}
+    cle_idem = (request.headers.get("Idempotency-Key") or "").strip()[:200]
+
+    rejeu = _api_idempotency_lookup(principal.organization_id, cle_idem)
+    if rejeu is not None:
+        return rejeu     # réponse d'ORIGINE, rien de créé
+
+    # Le client est résolu dans l'organisation DE LA CLÉ, jamais ailleurs.
+    client_id = str(payload.get("client_id") or "").strip()
+    if not client_id or not db.clients.find_one({**scope, "id": client_id}, {"_id": 0, "id": 1}):
+        raise HTTPException(404, "Client introuvable dans cette organisation")
+
+    items = payload.get("items") or []
+    if not isinstance(items, list) or not items:
+        raise HTTPException(422, "Au moins une ligne est requise")
+
+    # Les totaux sont CALCULÉS. Un appelant ne dicte pas un montant : il serait faux vis-à-vis
+    # des lignes, et c'est FacturePro qui fait foi sur les taxes.
+    try:
+        subtotal = sum(float(it.get("quantity", 1)) * float(it.get("unit_price", 0))
+                       for it in items)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Lignes invalides : quantity et unit_price doivent être des nombres")
+
+    reglages = db.company_settings.find_one(scope, {"_id": 0, "province": 1}) or {}
+    province = reglages.get("province") or "QC"
+    gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
+    total = round(subtotal + total_tax, 2)
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": principal.organization_id,
+        # Traçabilité : l'identifiant de la CLÉ, pas d'un utilisateur — aucun humain n'a agi.
+        "created_by_api_key_id": principal.id,
+        "client_id": client_id,
+        "quote_number": _next_document_number("quotes", "quote_number", "QUO", scope),
+        "issue_date": payload.get("issue_date") or datetime.now(timezone.utc).isoformat(),
+        "valid_until": payload.get("valid_until") or "",
+        "items": items,
+        "subtotal": round(subtotal, 2),
+        "gst_amount": gst, "pst_amount": pst, "hst_amount": hst,
+        "total_tax": total_tax, "total": total, "province": province,
+        "currency": "CAD", "exchange_rate_to_cad": 1.0, "total_cad": total,
+        # TOUJOURS draft. `payload.get("status")` est délibérément ignoré.
+        "status": "draft",
+        "notes": str(payload.get("notes") or ""),
+        # Champ libre : stocké tel quel, relu tel quel. Il permet à PFM de reconnaître ses
+        # propres soumissions et de ne pas en produire deux pour la même période.
+        "external_ref": payload.get("external_ref"),
+    }
+    doc["tax_registrations"] = _build_tax_registrations(scope, client_id)
+    _sync_insert_one("quotes", doc)
+
+    frais = _sync_collection("quotes").find_one({"id": doc["id"]}, {"_id": 0})
+    reponse = _integration_quote(frais)
+    _api_idempotency_store(principal.organization_id, cle_idem, reponse)
+    return reponse
 
 
 class ApiKeyCreate(BaseModel):
@@ -9027,12 +9215,20 @@ def erase_client(client_id: str, body: dict, request: Request,
 
     def _freeze_issued():
         for coll in ("invoices", "quotes"):
+            # [sync-ok] effacement client (Loi 25) : le contenu du document CHANGE reellement,
+            # les renseignements du client y sont remplaces. On pose donc `updated_at`, pour
+            # que PFM resynchronise au lieu de garder une copie de donnees effacees.
             db[coll].update_many(
                 {**scope, "client_id": client_id, "client_snapshot": {"$exists": False}},
-                {"$set": {"client_snapshot": snap}})
+                {"$set": {"client_snapshot": snap,
+                          "updated_at": datetime.now(timezone.utc).isoformat()}})
+            # [sync-ok] effacement client (Loi 25) : le contenu du document CHANGE reellement,
+            # les renseignements du client y sont remplaces. On pose donc `updated_at`, pour
+            # que PFM resynchronise au lieu de garder une copie de donnees effacees.
             db[coll].update_many(
                 {**scope, "client_id": client_id},
-                {"$set": {"tax_registrations.client": empty_regs}})
+                {"$set": {"tax_registrations.client": empty_regs,
+                          "updated_at": datetime.now(timezone.utc).isoformat()}})
 
     _freeze_issued()
     n_inv = db.invoices.count_documents(doc_q)
@@ -11361,14 +11557,15 @@ def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_p
     currency = quote_data.get("currency", "CAD")
     exchange_rate = quote_data.get("exchange_rate_to_cad", 1.0)
     total_cad = round(total / exchange_rate, 2) if exchange_rate > 0 and currency != "CAD" else total
-    count = db.quotes.count_documents(_org_scope(current_user))
+    numero = _next_document_number("quotes", "quote_number", "QUO",
+                                   _org_scope(current_user))
     doc = {
         "id": str(uuid.uuid4()),
         "organization_id": current_user.organization_id,
         "created_by_user_id": current_user.id,
         "user_id": current_user.id,  # legacy
         "client_id": quote_data.get("client_id", ""),
-        "quote_number": f"QUO-{count + 1:04d}",
+        "quote_number": numero,
         "issue_date": quote_data.get("issue_date") or datetime.now(timezone.utc).isoformat(),
         "valid_until": quote_data.get("valid_until", ""),
         "items": items, "subtotal": round(subtotal, 2),
@@ -13310,7 +13507,7 @@ def get_stats(current_user: CurrentUser = Depends(require_permission("reports:re
     ]}
     total_clients = db.clients.count_documents(scope)
     total_invoices = db.invoices.count_documents(scope)
-    total_quotes = db.quotes.count_documents(scope)
+    total_quotes = db.quotes.count_documents(_stats_quote_filter(scope))
     total_products = db.products.count_documents({**scope, "is_active": True})
     total_employees = db.employees.count_documents({**scope, "is_active": True})
     total_expenses = db.expenses.count_documents(scope)
@@ -15420,6 +15617,7 @@ def seed_data():
         _run_migration(migrate_updated_at_v1, "updated_at_v1")
         _run_migration(migrate_api_keys_v1, "api_keys_v1")
         _run_migration(migrate_integration_org_backfill_v1, "integration_org_backfill_v1")
+        _run_migration(migrate_api_idempotency_v1, "api_idempotency_v1")
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
         # ajoutés aux plans comptables existants (idempotente, additive)
         _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")

@@ -48,17 +48,43 @@ class TestGardeAucuneEcritureDirecte:
         assert not trouves, (
             "Écriture directe trouvée : %s. Utiliser _sync_update_one()." % trouves)
 
+    def test_update_one_par_nom_variable_marque(self):
+        """`db[nom].update_one(...)` échappe au motif littéral : le nom est une variable, donc
+        la collection visée est indécidable statiquement. Ces sites doivent porter un
+        `# [sync-ok]`, qui atteste que la question a été tranchée."""
+        src = _source().split("\n")
+        motif = _re.compile(r"\bdb\[[^\]]+\]\.(insert_one|update_one)\(")
+        non_marques = []
+        for i, ligne in enumerate(src):
+            if not motif.search(ligne):
+                continue
+            if "[sync-ok]" not in "\n".join(src[max(0, i - 4):i + 1]):
+                non_marques.append(f"l.{i + 1}: {ligne.strip()[:70]}")
+        assert not non_marques, (
+            "Écriture par nom variable sans marqueur [sync-ok] : %s" % non_marques)
+
     def test_aucune_ecriture_en_masse_non_marquee(self):
         """Les écritures en masse ne passent pas par les helpers. Chacune doit donc porter un
         marqueur `# [sync-ok]` dans les 3 lignes qui la précèdent, attestant qu'elle pose
         `updated_at` elle-même. La migration de remplissage est le seul cas légitime
         aujourd'hui. Le marqueur force quiconque en ajoute une à y réfléchir."""
         src = _source().split("\n")
-        motif = _re.compile(
-            r"\b(db|coll)\.(insert_many|update_many|replace_one|bulk_write|find_one_and_update)\(")
+        # Trois formes doivent etre couvertes :
+        #   db.clients.update_many(...)   nom litteral, collection suivie
+        #   db[coll].update_many(...)     nom VARIABLE, indecidable statiquement -> exige
+        #   coll.update_many(...)         handle obtenu par _sync_collection()
+        # La forme entre crochets echappait au motif initial, et SIX sites reels ecrivaient
+        # ainsi dans les collections suivies : migrations, auto-ecriture au grand livre,
+        # effacement client. Trou trouve a l'etape 4.
+        ops = r"(insert_many|update_many|replace_one|bulk_write|find_one_and_update)"
+        motifs = [
+            _re.compile(r"\bdb\.(%s)\.%s\(" % ("|".join(_TRACKED), ops)),
+            _re.compile(r"\bdb\[[^\]]+\]\.%s\(" % ops),
+            _re.compile(r"\bcoll\.%s\(" % ops),
+        ]
         non_marques = []
         for i, ligne in enumerate(src):
-            if not motif.search(ligne):
+            if not any(m.search(ligne) for m in motifs):
                 continue
             contexte = "\n".join(src[max(0, i - 3):i + 1])
             if "[sync-ok]" not in contexte:
