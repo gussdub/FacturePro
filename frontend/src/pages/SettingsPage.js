@@ -5,6 +5,7 @@ import { BACKEND_URL, CURRENCY_LABELS } from '../config';
 import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
 import MfaSettings from '../components/MfaSettings';
+import ApiKeysSettings from '../components/ApiKeysSettings';
 import AuditLog from '../components/AuditLog';
 import { useAuth } from '../context/AuthContext';
 import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS, roleLabel } from '../constants/permissions';
@@ -234,7 +235,31 @@ const SettingsPage = () => {
             Journal d'audit
           </button>
         )}
+        {currentUserRole === 'owner' && (
+          <button
+            type="button"
+            onClick={() => setActiveTab('integrations')}
+            data-testid="tab-integrations"
+            style={{
+              background: 'none', border: 'none', padding: '12px 20px', cursor: 'pointer',
+              fontSize: 14, fontWeight: 600,
+              color: activeTab === 'integrations' ? '#00A08C' : '#6b7280',
+              borderBottom: activeTab === 'integrations'
+                ? '2px solid #00A08C' : '2px solid transparent',
+              marginBottom: -1,
+            }}
+          >
+            Intégrations
+          </button>
+        )}
       </div>
+
+      {/* Réservé au propriétaire : une clé API porte des droits de lecture sur TOUTES les
+          données de l'organisation et contourne l'interface. Le serveur applique la même
+          règle — cette garde-ci n'est qu'un confort. */}
+      {activeTab === 'integrations' && currentUserRole === 'owner' && (
+        <div style={{ padding: '8px 0' }}><ApiKeysSettings /></div>
+      )}
 
       {activeTab === 'security' && (
         <div style={{ padding: '8px 0' }}><MfaSettings /></div>
