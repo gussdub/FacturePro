@@ -6,6 +6,7 @@ import TaxNumberInput from '../components/TaxNumberInput';
 import InviteMemberModal from '../components/InviteMemberModal';
 import MfaSettings from '../components/MfaSettings';
 import ApiKeysSettings from '../components/ApiKeysSettings';
+import WebhooksSettings from '../components/WebhooksSettings';
 import AuditLog from '../components/AuditLog';
 import { useAuth } from '../context/AuthContext';
 import { PERMISSIONS_EDITABLE, PERMISSION_GROUPS, roleLabel } from '../constants/permissions';
@@ -258,7 +259,10 @@ const SettingsPage = () => {
           données de l'organisation et contourne l'interface. Le serveur applique la même
           règle — cette garde-ci n'est qu'un confort. */}
       {activeTab === 'integrations' && currentUserRole === 'owner' && (
-        <div style={{ padding: '8px 0' }}><ApiKeysSettings /></div>
+        <div style={{ padding: '8px 0' }}>
+          <ApiKeysSettings />
+          <WebhooksSettings />
+        </div>
       )}
 
       {activeTab === 'security' && (
