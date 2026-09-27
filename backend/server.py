@@ -4132,6 +4132,19 @@ def migrate_integration_org_backfill_v1():
                             {"$set": {"organization_id": org_id}})
 
 
+def migrate_webhooks_v1():
+    """Idempotente. Safe à chaque boot (lot 0 §6 — webhooks sortants).
+
+    Purement additive : crée les index. Celui sur `(status, next_attempt_at)` est celui que la
+    boucle de fond interroge à chaque tour ; sans lui elle balaierait toute la collection.
+    """
+    db.webhook_endpoints.create_index("id", unique=True)
+    db.webhook_endpoints.create_index([("organization_id", 1), ("actif", 1)])
+    db.webhook_deliveries.create_index("id", unique=True)
+    db.webhook_deliveries.create_index([("status", 1), ("next_attempt_at", 1)])
+    db.webhook_deliveries.create_index([("endpoint_id", 1), ("created_at", -1)])
+
+
 def migrate_api_idempotency_v1():
     """Idempotente. Safe à chaque boot (lot 0 §5.1 — création idempotente).
 
@@ -4929,6 +4942,205 @@ def update_member_role(
 # exclusion : sinon tout champ ajouté au schéma fuiterait dans l'API sans que personne ne le
 # décide. `items` n'est jamais exposé (PFM n'a besoin que des totaux).
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [INTÉGRATION PFM] Webhooks sortants
+#
+# ⚠️ LIMITE D'HÉBERGEMENT, à connaître avant de lire le calendrier de réessai. Le backend est
+# sur le palier gratuit de Render : il s'endort après 15 minutes d'inactivité, et la boucle
+# d'arrière-plan s'arrête avec lui. Un réessai planifié à +30 min ne partira donc qu'au
+# prochain réveil de l'instance. Les délais ci-dessous sont des PLANCHERS, pas des garanties.
+# C'est aussi pourquoi PFM garde un bouton de resynchronisation manuelle.
+#
+# À l'inverse, PFM est aussi sur Render : une livraison peut échouer simplement parce que la
+# cible est froide. Les réessais ne sont donc pas une amélioration optionnelle — sans eux,
+# l'intégration perdrait des événements dès le premier jour.
+
+_WEBHOOK_EVENTS = (
+    "client.created", "client.updated",
+    "quote.created", "quote.status_changed",
+    "invoice.created", "invoice.status_changed", "invoice.paid",
+)
+
+# 1 min, 5 min, 30 min, 2 h, 6 h. Abandon après la cinquième tentative.
+_WEBHOOK_RETRY_DELAYS_SEC = (60, 300, 1800, 7200, 21600)
+_WEBHOOK_MAX_ATTEMPTS = len(_WEBHOOK_RETRY_DELAYS_SEC)
+_WEBHOOK_TIMEOUT_SEC = 10.0
+_WEBHOOK_SIGNATURE_TOLERANCE_SEC = 300      # 5 minutes
+# Codes transitoires : seules exceptions parmi les 4xx.
+_WEBHOOK_RETRYABLE_4XX = (408, 429)
+
+
+def _webhook_signature_header(corps: str, secret: str, horodatage: int = None) -> str:
+    """En-tête `X-FacturePro-Signature: t=<unix>,v1=<hmac hex>`.
+
+    Le HMAC-SHA256 porte sur `<horodatage>.<corps BRUT>`. L'horodatage est DANS la signature :
+    sans lui, une requête interceptée pourrait être rejouée indéfiniment.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp()) if horodatage is None else int(horodatage)
+    mac = hmac.new(secret.encode(), f"{ts}.{corps}".encode(), hashlib.sha256).hexdigest()
+    return f"t={ts},v1={mac}"
+
+
+def _webhook_signature_verify(corps: str, entete: str, secret: str) -> bool:
+    """Vérifie une signature. Fourni pour que nos propres tests exercent exactement ce que PFM
+    devra implémenter — un contrat qu'on ne peut pas vérifier soi-même est un contrat qu'on
+    découvre cassé en production."""
+    try:
+        parties = dict(p.split("=", 1) for p in (entete or "").split(","))
+        ts = int(parties["t"])
+        recu = parties["v1"]
+    except Exception:
+        return False
+    ecart = abs(int(datetime.now(timezone.utc).timestamp()) - ts)
+    if ecart > _WEBHOOK_SIGNATURE_TOLERANCE_SEC:
+        return False      # anti-rejeu
+    attendu = hmac.new(secret.encode(), f"{ts}.{corps}".encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(attendu, recu)
+
+
+def _webhook_next_attempt(tentatives: int):
+    """Date ISO du prochain essai, ou None s'il faut abandonner."""
+    if tentatives >= _WEBHOOK_MAX_ATTEMPTS:
+        return None
+    delai = _WEBHOOK_RETRY_DELAYS_SEC[tentatives - 1 if tentatives > 0 else 0]
+    return (datetime.now(timezone.utc) + timedelta(seconds=delai)).isoformat()
+
+
+def _webhook_is_success(code) -> bool:
+    return isinstance(code, int) and 200 <= code < 300
+
+
+def _webhook_should_retry(code) -> bool:
+    """Un 2xx est un succès. Un 4xx est DÉFINITIF sauf 408 et 429 : inutile de marteler une
+    cible qui refuse. Tout le reste (5xx, absence de réponse) est transitoire."""
+    if code is None:
+        return True
+    if _webhook_is_success(code):
+        return False
+    if 400 <= code < 500:
+        return code in _WEBHOOK_RETRYABLE_4XX
+    return True
+
+
+def _webhook_enqueue(organization_id: str, type_evenement: str, data: dict) -> None:
+    """Met une livraison en file pour chaque endpoint abonné. N'ENVOIE RIEN.
+
+    Appelée depuis le chemin de requête, donc :
+      - aucun appel réseau ici. Une cible lente ferait échouer la création du client ;
+      - ne lève JAMAIS. Un webhook raté ne doit pas annuler une écriture métier réussie.
+    """
+    try:
+        charge = {
+            "id": f"evt_{uuid.uuid4().hex}",
+            "type": type_evenement,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "organization_id": organization_id,
+            # `data` est le MÊME objet que celui renvoyé par l'endpoint de lecture
+            # correspondant. Cette symétrie évite à PFM deux façons de lire la même entité.
+            "data": data,
+        }
+        corps = json.dumps(charge, separators=(",", ":"), ensure_ascii=False)
+        maintenant = datetime.now(timezone.utc).isoformat()
+        for ep in db.webhook_endpoints.find(
+                {"organization_id": organization_id, "actif": True}, {"_id": 0}):
+            if type_evenement not in (ep.get("events") or []):
+                continue
+            db.webhook_deliveries.insert_one({
+                "id": str(uuid.uuid4()),
+                "endpoint_id": ep["id"],
+                "event_id": charge["id"],
+                # Le corps est figé ICI. La signature portera sur CES octets exactement :
+                # re-sérialiser à l'envoi changerait un espace et invaliderait le HMAC.
+                "payload": corps,
+                "status": "pending",
+                "attempts": 0,
+                "next_attempt_at": maintenant,
+                "last_status_code": None,
+                "last_error": None,
+                "created_at": maintenant,
+            })
+    except Exception:
+        pass      # best-effort, jamais bloquant
+
+
+def _webhook_deliver_due(limite: int = 20) -> int:
+    """Envoie les livraisons dues. Renvoie le nombre traité. Appelée par la boucle de fond."""
+    maintenant = datetime.now(timezone.utc).isoformat()
+    traitees = 0
+    for livr in list(db.webhook_deliveries.find(
+            {"status": "pending", "next_attempt_at": {"$lte": maintenant}},
+            {"_id": 0}).limit(limite)):
+        ep = db.webhook_endpoints.find_one({"id": livr["endpoint_id"]}, {"_id": 0})
+        if not ep or not ep.get("actif"):
+            db.webhook_deliveries.update_one(
+                {"id": livr["id"]},
+                {"$set": {"status": "failed", "last_error": "endpoint absent ou inactif"}})
+            continue
+
+        corps = livr["payload"]
+        tentative = int(livr.get("attempts") or 0) + 1
+        code, erreur = None, None
+        try:
+            rep = httpx.post(
+                ep["url"],
+                content=corps.encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-FacturePro-Signature": _webhook_signature_header(corps, ep["secret"]),
+                    "X-FacturePro-Event": livr.get("event_id") or "",
+                },
+                timeout=_WEBHOOK_TIMEOUT_SEC)
+            code = rep.status_code
+        except Exception as e:
+            # JAMAIS str(e) : le message pourrait contenir l'URL complète ou le secret.
+            erreur = type(e).__name__
+        traitees += 1
+
+        if _webhook_is_success(code):
+            db.webhook_deliveries.update_one(
+                {"id": livr["id"]},
+                {"$set": {"status": "sent", "attempts": tentative,
+                          "last_status_code": code, "last_error": None}})
+            db.webhook_endpoints.update_one(
+                {"id": ep["id"]},
+                {"$set": {"last_success_at": datetime.now(timezone.utc).isoformat(),
+                          "last_error": None}})
+            continue
+
+        detail = erreur or f"HTTP {code}"
+        prochain = _webhook_next_attempt(tentative) if _webhook_should_retry(code) else None
+        maj = {"attempts": tentative, "last_status_code": code, "last_error": detail}
+        if prochain:
+            maj["status"] = "pending"
+            maj["next_attempt_at"] = prochain
+        else:
+            maj["status"] = "failed"
+        db.webhook_deliveries.update_one({"id": livr["id"]}, {"$set": maj})
+        db.webhook_endpoints.update_one({"id": ep["id"]}, {"$set": {"last_error": detail}})
+    return traitees
+
+
+def _webhook_emit(collection_name: str, doc_id: str, type_evenement: str,
+                  organization_id: str) -> None:
+    """Émet un événement en relisant le document FRAIS et en le projetant comme l'endpoint de
+    lecture correspondant.
+
+    Relire plutôt que réutiliser le dict de l'appelant : celui-ci peut être partiel (un
+    `$set` de statut ne contient que le statut), et PFM attend l'entité complète. La symétrie
+    avec l'endpoint de lecture est le contrat du §6.3.
+    """
+    try:
+        projections = {"clients": _integration_client,
+                       "quotes": _integration_quote,
+                       "invoices": _integration_invoice}
+        frais = _sync_collection(collection_name).find_one({"id": doc_id}, {"_id": 0})
+        if not frais:
+            return
+        _webhook_enqueue(organization_id, type_evenement, projections[collection_name](frais))
+    except Exception:
+        pass      # best-effort : jamais sur le chemin critique
+
+
 def _next_document_number(collection_name: str, champ: str, prefixe: str, filtre: dict) -> str:
     """Prochain numéro de document, dérivé du MAXIMUM existant et non d'un décompte.
 
@@ -5262,11 +5474,166 @@ def integration_create_quote(
     }
     doc["tax_registrations"] = _build_tax_registrations(scope, client_id)
     _sync_insert_one("quotes", doc)
+    _webhook_emit("quotes", doc["id"], "quote.created",
+                  principal.organization_id)
 
     frais = _sync_collection("quotes").find_one({"id": doc["id"]}, {"_id": 0})
     reponse = _integration_quote(frais)
     _api_idempotency_store(principal.organization_id, cle_idem, reponse)
     return reponse
+
+
+# ── Boucle de livraison des webhooks ────────────────────────────────────────
+#
+# Le gestionnaire de requête se contente d'insérer une ligne `pending` (§6.5). Cette boucle
+# reprend les livraisons dues. FacturePro n'a pas de file de tâches ; un fil d'arrière-plan
+# suffit à ce volume.
+#
+# ⚠️ Elle ne tourne QUE pendant que l'instance est éveillée. Sur le palier gratuit de Render,
+# l'instance s'endort après 15 minutes : un réessai planifié à +30 min ne partira qu'au
+# prochain réveil. Les délais du calendrier sont des planchers.
+_WEBHOOK_LOOP_INTERVAL_SEC = 30
+_webhook_loop_task = None
+
+
+async def _webhook_loop():
+    """Tour de boucle : sortir les livraisons dues, attendre, recommencer.
+
+    `anyio.to_thread.run_sync` sort le pymongo synchrone et le httpx bloquant de l'event-loop —
+    même motif que l'écriture d'audit détachée. Toute exception est avalée : une erreur de
+    livraison ne doit pas tuer la boucle, sinon plus aucun webhook ne partirait jusqu'au
+    prochain redéploiement.
+    """
+    import asyncio
+    import anyio
+    while True:
+        try:
+            await anyio.to_thread.run_sync(_webhook_deliver_due)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        try:
+            await asyncio.sleep(_WEBHOOK_LOOP_INTERVAL_SEC)
+        except asyncio.CancelledError:
+            raise
+
+
+class WebhookEndpointCreate(BaseModel):
+    url: str
+    events: List[str]
+
+
+@app.post("/api/org/webhooks", status_code=201)
+def create_webhook_endpoint(payload: WebhookEndpointCreate,
+                            request: Request,
+                            current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Crée un endpoint de réception. Le secret est renvoyé UNE SEULE FOIS.
+
+    Réservé au propriétaire : un endpoint reçoit les données de facturation de toute
+    l'organisation.
+    """
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+
+    url = (payload.url or "").strip()
+    # HTTPS exigé : le corps contient des renseignements de clients, et la signature
+    # authentifie l'expéditeur, elle ne chiffre rien.
+    if not url.startswith("https://"):
+        raise HTTPException(400, "L'URL doit être en https://")
+    inconnus = [e for e in (payload.events or []) if e not in _WEBHOOK_EVENTS]
+    if inconnus:
+        raise HTTPException(400, f"Événements inconnus : {', '.join(inconnus)}. "
+                                 f"Disponibles : {', '.join(_WEBHOOK_EVENTS)}")
+    if not payload.events:
+        raise HTTPException(400, "Au moins un événement est requis")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "url": url,
+        "secret": "whsec_" + secrets.token_urlsafe(32),
+        "events": sorted(set(payload.events)),
+        "actif": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_success_at": None,
+        "last_error": None,
+    }
+    db.webhook_endpoints.insert_one(dict(doc))
+    _audit("webhook_endpoint.created", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           target_type="webhook_endpoint", target_id=doc["id"], target_label=url,
+           category="security", metadata={"events": doc["events"], "url": url})
+    return doc      # contient le secret, affiché une seule fois côté client
+
+
+@app.get("/api/org/webhooks")
+def list_webhook_endpoints(current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Liste les endpoints. Le secret ne sort JAMAIS d'ici."""
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+    eps = list(db.webhook_endpoints.find(
+        {"organization_id": current_user.organization_id}, {"_id": 0, "secret": 0}))
+    for ep in eps:
+        ep["deliveries_recentes"] = list(db.webhook_deliveries.find(
+            {"endpoint_id": ep["id"]},
+            {"_id": 0, "payload": 0}).sort("created_at", -1).limit(10))
+    return {"data": eps}
+
+
+@app.delete("/api/org/webhooks/{endpoint_id}", status_code=204)
+def delete_webhook_endpoint(endpoint_id: str, request: Request,
+                            current_user: CurrentUser = Depends(get_current_user_with_access)):
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+    ep = db.webhook_endpoints.find_one(
+        {"id": endpoint_id, "organization_id": current_user.organization_id},
+        {"_id": 0, "url": 1})
+    if not ep:
+        raise HTTPException(404, "Endpoint introuvable")
+    db.webhook_endpoints.update_one(
+        {"id": endpoint_id, "organization_id": current_user.organization_id},
+        {"$set": {"actif": False}})
+    _audit("webhook_endpoint.disabled", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           target_type="webhook_endpoint", target_id=endpoint_id,
+           target_label=ep.get("url"), category="security")
+    return Response(status_code=204)
+
+
+@app.post("/api/org/webhooks/{endpoint_id}/test")
+def test_webhook_endpoint(endpoint_id: str,
+                          current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Met en file un événement `ping` signé.
+
+    Indispensable pour diagnostiquer : sans lui, vérifier la configuration exigerait
+    d'attendre qu'un vrai client soit créé.
+    """
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+    ep = db.webhook_endpoints.find_one(
+        {"id": endpoint_id, "organization_id": current_user.organization_id}, {"_id": 0})
+    if not ep:
+        raise HTTPException(404, "Endpoint introuvable")
+
+    charge = {
+        "id": f"evt_{uuid.uuid4().hex}",
+        "type": "ping",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "organization_id": current_user.organization_id,
+        "data": {"message": "FacturePro joint bien cet endpoint."},
+    }
+    corps = json.dumps(charge, separators=(",", ":"), ensure_ascii=False)
+    maintenant = datetime.now(timezone.utc).isoformat()
+    did = str(uuid.uuid4())
+    # Même chemin que les vrais événements : mis en file, pas envoyé ici. Un ping synchrone
+    # mentirait sur le comportement réel — et resterait bloqué sur une cible froide.
+    db.webhook_deliveries.insert_one({
+        "id": did, "endpoint_id": endpoint_id, "event_id": charge["id"],
+        "payload": corps, "status": "pending", "attempts": 0,
+        "next_attempt_at": maintenant, "last_status_code": None, "last_error": None,
+        "created_at": maintenant})
+    return {"delivery_id": did, "event_id": charge["id"], "status": "pending"}
 
 
 class ApiKeyCreate(BaseModel):
@@ -9152,6 +9519,8 @@ def create_client(client_data: dict, current_user: CurrentUser = Depends(require
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     _sync_insert_one("clients", doc)
+    _webhook_emit("clients", doc["id"], "client.created",
+                  current_user.organization_id)
     return clean_doc(doc)
 
 @app.put("/api/clients/{client_id}")
@@ -9160,6 +9529,9 @@ def update_client(client_id: str, client_data: dict, current_user: CurrentUser =
         client_data.pop(k, None)
     normalize_tax_fields(client_data)
     result = _sync_update_one("clients", {"id": client_id, **_org_scope(current_user)}, {"$set": client_data})
+    if result.matched_count:
+        _webhook_emit("clients", client_id, "client.updated",
+                      current_user.organization_id)
     if result.matched_count == 0:
         raise HTTPException(404, "Client not found")
     return clean_doc(db.clients.find_one({"id": client_id}, {"_id": 0}))
@@ -9403,6 +9775,8 @@ def create_invoice(invoice_data: dict, current_user: CurrentUser = Depends(requi
     }
     doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
     _sync_insert_one("invoices", doc)
+    _webhook_emit("invoices", doc["id"], "invoice.created",
+                  current_user.organization_id)
     return clean_doc(doc)
 
 @app.put("/api/invoices/{invoice_id}")
@@ -9442,6 +9816,14 @@ def update_invoice_status(invoice_id: str, status_data: dict, current_user: Curr
     old_status = existing.get("status", "draft")
     new_status = status_data.get("status", "draft")
     result = _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
+    if result.matched_count:
+        # `invoice.paid` est un evenement DISTINCT de `invoice.status_changed` : c'est
+        # celui qui compte pour un CRM, et PFM peut s'y abonner seul.
+        _webhook_emit("invoices", invoice_id, "invoice.status_changed",
+                      current_user.organization_id)
+        if new_status == "paid":
+            _webhook_emit("invoices", invoice_id, "invoice.paid",
+                          current_user.organization_id)
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
     # Auto-posting (§5.5), opt-in par org (décision #10). NE DOIT JAMAIS faire
@@ -9510,6 +9892,14 @@ def add_invoice_payment(invoice_id: str, body: dict,
             "invoices", invoice_id, {"organization_id": org_id},
             legacy_user_id=current_user.id)
     fresh = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
+    # Un paiement change l'etat paye de la facture : c'est l'evenement le plus utile a un
+    # CRM. `invoice.paid` est emis EN PLUS de `invoice.status_changed`, pour que PFM puisse
+    # s'abonner au seul cas qui l'interesse.
+    _webhook_emit("invoices", invoice_id, "invoice.status_changed",
+                  current_user.organization_id)
+    if set_fields.get("status") == "paid":
+        _webhook_emit("invoices", invoice_id, "invoice.paid",
+                      current_user.organization_id)
     return _enrich_invoice(fresh)
 
 @app.delete("/api/invoices/{invoice_id}/payments/{payment_id}")
@@ -11577,6 +11967,8 @@ def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_p
     }
     doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
     _sync_insert_one("quotes", doc)
+    _webhook_emit("quotes", doc["id"], "quote.created",
+                  current_user.organization_id)
     return clean_doc(doc)
 
 @app.put("/api/quotes/{quote_id}")
@@ -11644,6 +12036,9 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
 def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     new_status = status_data.get("status", "pending")
     result = _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
+    if result.matched_count:
+        _webhook_emit("quotes", quote_id, "quote.status_changed",
+                      current_user.organization_id)
     if result.matched_count == 0:
         raise HTTPException(404, "Quote not found")
     return {"message": "Status updated"}
@@ -15514,6 +15909,15 @@ def get_t2125_pdf(
 # ─── Startup Seed ───
 @app.on_event("startup")
 def seed_data():
+    # [INTÉGRATION PFM] Boucle de livraison des webhooks. Démarrée ici plutôt qu'à l'import
+    # pour qu'aucune boucle ne tourne pendant les tests qui importent seulement le module.
+    global _webhook_loop_task
+    try:
+        import asyncio
+        if _webhook_loop_task is None or _webhook_loop_task.done():
+            _webhook_loop_task = asyncio.create_task(_webhook_loop())
+    except Exception:
+        pass
     try:
         client.admin.command('ping')
         print("MongoDB connected successfully")
@@ -15618,6 +16022,7 @@ def seed_data():
         _run_migration(migrate_api_keys_v1, "api_keys_v1")
         _run_migration(migrate_integration_org_backfill_v1, "integration_org_backfill_v1")
         _run_migration(migrate_api_idempotency_v1, "api_idempotency_v1")
+        _run_migration(migrate_webhooks_v1, "webhooks_v1")
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
         # ajoutés aux plans comptables existants (idempotente, additive)
         _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")
