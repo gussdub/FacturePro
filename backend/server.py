@@ -24,6 +24,7 @@ import hashlib
 import io
 import csv
 import base64
+import json
 import re
 import html as _html
 from dotenv import load_dotenv
@@ -4081,6 +4082,44 @@ def migrate_mileage_logbook_v1():
     db.mileage_rate_reminders.create_index("id", unique=True)
 
 
+def migrate_integration_org_backfill_v1():
+    """Idempotente. Safe à chaque boot (lot 0 §11.5 — endpoints de lecture).
+
+    Pose `organization_id` sur les documents qui n'en ont pas mais portent un `user_id`
+    rattaché à un utilisateur connu. `migrate_organizations_v1` les avait manqués.
+
+    Pourquoi c'est nécessaire : `_org_scope` compense l'absence par un repli sur `user_id`,
+    mais pour une clé API `principal.id` est l'identifiant DE LA CLÉ, pas d'un utilisateur —
+    ce repli matcherait zéro document. Une requête scopée strictement par `organization_id`,
+    comme celle de l'API, ne les verrait donc jamais.
+
+    AUCUN changement de visibilité dans l'interface : ces documents étaient déjà visibles par
+    le repli `user_id`, ils le resteront par le champ direct.
+
+    Les documents dont le `user_id` ne correspond à aucun utilisateur ne sont PAS touchés :
+    aucune organisation ne peut les revendiquer, et leur inventer une attribution serait pire
+    que de les laisser invisibles.
+    """
+    orgs_par_user = {}
+    for name in _SYNC_TRACKED_COLLECTIONS:
+        coll = _sync_collection(name)
+        for doc in coll.find(
+                {"organization_id": {"$exists": False}, "user_id": {"$exists": True}},
+                {"_id": 0, "id": 1, "user_id": 1}):
+            uid = doc.get("user_id")
+            if uid not in orgs_par_user:
+                u = db.users.find_one({"id": uid}, {"_id": 0, "organization_id": 1})
+                orgs_par_user[uid] = (u or {}).get("organization_id")
+            org_id = orgs_par_user[uid]
+            if not org_id:
+                continue      # utilisateur supprimé : non revendiquable
+            # [sync-ok] pose `organization_id` seulement ; `updated_at` existe déjà et ne doit
+            # PAS bouger — ce n'est pas une modification métier, et l'avancer ferait ressortir
+            # ces documents comme « modifiés aujourd'hui » dans la resynchronisation de PFM.
+            coll.update_one({"id": doc["id"], "organization_id": {"$exists": False}},
+                            {"$set": {"organization_id": org_id}})
+
+
 def migrate_api_keys_v1():
     """Idempotente. Safe à chaque boot (lot 0 — clés API).
 
@@ -4851,6 +4890,195 @@ def update_member_role(
            target_label=target.get("email"),
            metadata={"old_role": target.get("role"), "new_role": role})
     return {"user_id": user_id, "role": role}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [INTÉGRATION PFM] Endpoints de lecture versionnés — /api/v1/integration/
+#
+# Surface SÉPARÉE des endpoints du frontend, et c'est la raison d'être du préfixe : la forme
+# des réponses de `/api/clients` doit rester libre d'évoluer avec le frontend, qui est
+# redéployé en même temps qu'elle. Ici le client est un autre produit, déployé séparément :
+# le contrat est figé.
+#
+# Le contrat est une liste FERMÉE de champs. Une projection par liste blanche, et non par
+# exclusion : sinon tout champ ajouté au schéma fuiterait dans l'API sans que personne ne le
+# décide. `items` n'est jamais exposé (PFM n'a besoin que des totaux).
+
+_INTEGRATION_MAX_LIMIT = 500
+_INTEGRATION_DEFAULT_LIMIT = 100
+
+
+def _integration_cursor_encode(updated_at: str, doc_id: str) -> str:
+    """Curseur opaque : base64url d'un keyset `(updated_at, id)`.
+
+    PAS un décalage numérique. La liste bouge pendant le parcours : un document modifié entre
+    deux pages change de position dans un tri par `updated_at`, ce qui fait sauter ou dupliquer
+    des documents avec un décalage. Un keyset demande « ce qui vient après cette position ».
+
+    `id` départage les documents partageant la même `updated_at` — cas courant, puisque le
+    remplissage rétroactif de l'étape 1 a daté 339 documents avec leur `created_at`.
+    """
+    brut = json.dumps({"u": updated_at, "i": doc_id}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(brut.encode()).decode().rstrip("=")
+
+
+def _integration_cursor_decode(cursor: str):
+    """-> (updated_at, id). Lève 422 sur un curseur illisible : mieux vaut un refus net qu'un
+    parcours silencieusement reparti du début."""
+    try:
+        rembourrage = "=" * (-len(cursor) % 4)
+        data = json.loads(base64.urlsafe_b64decode(cursor + rembourrage).decode())
+        return str(data["u"]), str(data["i"])
+    except Exception:
+        raise HTTPException(422, "Curseur invalide")
+
+
+def _integration_query(collection_name: str, principal: CurrentUser,
+                       updated_since: str = None, cursor: str = None):
+    """Filtre Mongo d'une page. Scopé par l'organisation DE LA CLÉ, jamais par une valeur
+    venue du corps ou de l'URL."""
+    conditions = [{"organization_id": principal.organization_id}]
+
+    if updated_since:
+        # ⚠️ NORMALISATION OBLIGATOIRE avant comparaison.
+        #
+        # `updated_at` est stocké par `datetime.now(timezone.utc).isoformat()`, donc suffixé
+        # « +00:00 ». Le contrat (§11.1) fait envoyer « Z » par PFM. Or Mongo compare ces deux
+        # valeurs comme des CHAÎNES, et « + » (0x2B) est inférieur à « Z » (0x5A) :
+        #     "2026-03-01T00:00:00+00:00" >= "2026-03-01T00:00:00Z"   ->   False
+        # Comparer la valeur brute ferait donc RATER des documents, en silence et
+        # précisément à la frontière demandée. On reparse puis on re-sérialise au format
+        # stocké.
+        try:
+            borne = datetime.fromisoformat(
+                updated_since.replace("Z", "+00:00")).isoformat()
+        except (ValueError, TypeError):
+            raise HTTPException(422, "updated_since doit être une date ISO 8601")
+        conditions.append({"updated_at": {"$gte": borne}})
+
+    if cursor:
+        c_updated, c_id = _integration_cursor_decode(cursor)
+        # Strictement APRÈS la position du curseur, `id` départageant les égalités.
+        conditions.append({"$or": [
+            {"updated_at": {"$gt": c_updated}},
+            {"updated_at": c_updated, "id": {"$gt": c_id}},
+        ]})
+
+    return {"$and": conditions} if len(conditions) > 1 else conditions[0]
+
+
+def _integration_page(collection_name: str, principal: CurrentUser, projeter,
+                      updated_since: str = None, limit: int = None, cursor: str = None):
+    """Exécute une page et construit l'enveloppe `{data, next_cursor}`.
+
+    L'enveloppe est délibérée : elle permet d'ajouter des métadonnées plus tard sans changer
+    la forme de la réponse pour un client déjà déployé.
+    """
+    taille = _INTEGRATION_DEFAULT_LIMIT if limit is None else limit
+    coll = _sync_collection(collection_name)
+    filtre = _integration_query(collection_name, principal, updated_since, cursor)
+    # Tri identique à l'encodage du curseur, sinon la pagination saute des documents.
+    docs = list(coll.find(filtre, {"_id": 0})
+                .sort([("updated_at", 1), ("id", 1)])
+                .limit(taille + 1))            # +1 : détecte s'il reste une page
+    reste = len(docs) > taille
+    docs = docs[:taille]
+    suivant = None
+    if reste and docs:
+        dernier = docs[-1]
+        suivant = _integration_cursor_encode(
+            str(dernier.get("updated_at") or ""), str(dernier.get("id") or ""))
+    return {"data": [projeter(d) for d in docs], "next_cursor": suivant}
+
+
+def _integration_client(doc: dict) -> dict:
+    return {
+        "id": doc.get("id"),
+        "name": doc.get("name"),
+        "email": doc.get("email"),
+        "phone": doc.get("phone"),
+        "address": doc.get("address"),
+        "city": doc.get("city"),
+        "postal_code": doc.get("postal_code"),
+        # §11.4 : le champ n'existe sur AUCUN des 71 clients. Exposé à null pour tenir le
+        # contrat annoncé à PFM sans inventer de donnée. L'ajouter exige d'abord de le mettre
+        # au formulaire client — changement de produit, pas d'API.
+        "province": doc.get("province"),
+        "created_at": doc.get("created_at"),
+        "updated_at": doc.get("updated_at"),
+    }
+
+
+def _integration_quote(doc: dict) -> dict:
+    return {
+        "id": doc.get("id"),
+        "client_id": doc.get("client_id"),
+        "quote_number": doc.get("quote_number"),
+        "status": doc.get("status"),
+        "issue_date": doc.get("issue_date"),
+        "valid_until": doc.get("valid_until"),
+        "subtotal": doc.get("subtotal"),
+        "total_tax": doc.get("total_tax"),
+        "total": doc.get("total"),
+        "currency": doc.get("currency") or "CAD",
+        "created_at": doc.get("created_at"),
+        "updated_at": doc.get("updated_at"),
+        # Peuplé par l'étape 4 (création de soumission par l'API). Exposé dès maintenant pour
+        # que le contrat ne change pas quand elle arrivera.
+        "external_ref": doc.get("external_ref"),
+    }
+
+
+def _integration_invoice(doc: dict) -> dict:
+    # §11.2 : `amount_paid` est CALCULÉ, pas persisté. Même formule que `_enrich_invoice` —
+    # le persister créerait une seconde source de vérité pouvant diverger de `payments`.
+    paiements = doc.get("payments") or []
+    paye = round(sum(float(p.get("amount_cad", 0) or 0) for p in paiements), 2)
+    return {
+        "id": doc.get("id"),
+        "client_id": doc.get("client_id"),
+        "invoice_number": doc.get("invoice_number"),
+        "status": doc.get("status"),
+        "issue_date": doc.get("issue_date"),
+        "due_date": doc.get("due_date"),
+        "subtotal": doc.get("subtotal"),
+        "total_tax": doc.get("total_tax"),
+        "total": doc.get("total"),
+        "currency": doc.get("currency") or "CAD",
+        "amount_paid": paye,
+        "created_at": doc.get("created_at"),
+        "updated_at": doc.get("updated_at"),
+    }
+
+
+@app.get("/api/v1/integration/clients")
+def integration_list_clients(
+        updated_since: str = None,
+        limit: int = Query(_INTEGRATION_DEFAULT_LIMIT, ge=1, le=_INTEGRATION_MAX_LIMIT),
+        cursor: str = None,
+        principal: CurrentUser = Depends(require_api_scope("clients:read"))):
+    return _integration_page("clients", principal, _integration_client,
+                             updated_since, limit, cursor)
+
+
+@app.get("/api/v1/integration/quotes")
+def integration_list_quotes(
+        updated_since: str = None,
+        limit: int = Query(_INTEGRATION_DEFAULT_LIMIT, ge=1, le=_INTEGRATION_MAX_LIMIT),
+        cursor: str = None,
+        principal: CurrentUser = Depends(require_api_scope("quotes:read"))):
+    return _integration_page("quotes", principal, _integration_quote,
+                             updated_since, limit, cursor)
+
+
+@app.get("/api/v1/integration/invoices")
+def integration_list_invoices(
+        updated_since: str = None,
+        limit: int = Query(_INTEGRATION_DEFAULT_LIMIT, ge=1, le=_INTEGRATION_MAX_LIMIT),
+        cursor: str = None,
+        principal: CurrentUser = Depends(require_api_scope("invoices:read"))):
+    return _integration_page("invoices", principal, _integration_invoice,
+                             updated_since, limit, cursor)
 
 
 class ApiKeyCreate(BaseModel):
@@ -15191,6 +15419,7 @@ def seed_data():
         _run_migration(migrate_mileage_logbook_v1, "mileage_logbook_v1")
         _run_migration(migrate_updated_at_v1, "updated_at_v1")
         _run_migration(migrate_api_keys_v1, "api_keys_v1")
+        _run_migration(migrate_integration_org_backfill_v1, "integration_org_backfill_v1")
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
         # ajoutés aux plans comptables existants (idempotente, additive)
         _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")
