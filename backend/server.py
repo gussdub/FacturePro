@@ -175,6 +175,68 @@ def normalize_tax_fields(data):
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [INTÉGRATION PFM] Suivi de `updated_at` sur les collections exposées à l'API
+#
+# ProFireManager resynchronise de façon INCRÉMENTALE : « donne-moi ce qui a changé depuis telle
+# date ». Sans `updated_at` à jour, cette requête est impossible et le filet de sécurité de PFM
+# ne fonctionne pas. Un site d'écriture oublié ne casse rien de visible — le document cesse
+# simplement d'être resynchronisé, en silence.
+#
+# D'où ces deux helpers, seuls points d'écriture autorisés sur ces trois collections.
+# `tests/test_updated_at_sync.py` échoue si une écriture directe réapparaît.
+_SYNC_TRACKED_COLLECTIONS = ("clients", "quotes", "invoices")
+
+# Handles MIS EN CACHE, et c'est délibéré : `Database.__getattr__` de pymongo construit un
+# NOUVEL objet Collection à chaque accès d'attribut (`db.clients is db.clients` -> False). Sans
+# ce cache, un monkeypatch de test porterait sur un objet jetable et le vrai appel passerait à
+# côté — piège déjà rencontré deux fois dans ce projet.
+_SYNC_COLLECTIONS = {name: db[name] for name in _SYNC_TRACKED_COLLECTIONS}
+
+
+def _sync_collection(name: str):
+    """Collection suivie, par son nom. Lève sur un nom inconnu — fail-closed : une faute de
+    frappe ne doit pas produire une écriture silencieuse dans une collection non suivie."""
+    try:
+        return _SYNC_COLLECTIONS[name]
+    except KeyError:
+        raise ValueError(
+            f"Collection '{name}' non suivie. Attendu : {_SYNC_TRACKED_COLLECTIONS}")
+
+
+def _sync_now() -> str:
+    """Horodatage du contrat d'intégration : ISO 8601 en UTC. PFM convertit pour l'affichage."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sync_insert_one(collection_name: str, document: dict, *args, **kwargs):
+    """Insère en posant `updated_at`, et `created_at` s'il manque.
+
+    Le document de l'appelant n'est jamais muté : plusieurs sites réutilisent leur dict après
+    l'insertion (pour le renvoyer dans la réponse HTTP, notamment).
+    """
+    coll = _sync_collection(collection_name)
+    now = _sync_now()
+    doc = dict(document)
+    doc.setdefault("created_at", now)
+    doc["updated_at"] = now
+    return coll.insert_one(doc, *args, **kwargs)
+
+
+def _sync_update_one(collection_name: str, filtre: dict, update: dict, *args, **kwargs):
+    """Met à jour en posant `updated_at`, quel que soit l'opérateur employé.
+
+    Le `$set` est CRÉÉ s'il manque : quatre sites réels poussent dans `payments` avec un `$push`
+    seul. Un paiement change l'état payé de la facture, donc PFM doit le voir.
+
+    Renvoie l'objet `UpdateResult` tel quel — plusieurs appelants lisent `matched_count`.
+    """
+    coll = _sync_collection(collection_name)
+    upd = dict(update)
+    upd["$set"] = {**upd.get("$set", {}), "updated_at": _sync_now()}
+    return coll.update_one(filtre, upd, *args, **kwargs)
+
+
 # Logger serveur. L'auto-posting (feature #12, Phase 2) y écrit un diagnostic
 # SANS détail sensible (type d'exception seulement, jamais str(e) — pattern
 # anti-leak feature #8). Le message stocké côté doc source reste générique.
@@ -1206,7 +1268,7 @@ def _release_bank_transaction(tx_id, scope):
             # $pull atomique par bank_transaction_id : ne touche QUE les payments du split, laisse
             # intacts les paiements ajoutés concurremment sur la facture (fix revue adverse : un
             # $set: payments: [...] écraserait un payment manuel arrivé entre find_one et update).
-            db.invoices.update_one(
+            _sync_update_one("invoices",
                 {"id": iid, **scope},
                 {"$pull": {"payments": {"bank_transaction_id": tx_id}}})
             updated = db.invoices.find_one({"id": iid, **scope}, {"_id": 0})
@@ -1217,7 +1279,7 @@ def _release_bank_transaction(tx_id, scope):
             if updated.get("status") in ("paid", "partial"):
                 updated["status"] = "sent"
             new_status = _recompute_invoice_status(updated)
-            db.invoices.update_one({"id": iid, **scope}, {"$set": {"status": new_status}})
+            _sync_update_one("invoices", {"id": iid, **scope}, {"$set": {"status": new_status}})
     db.bank_transactions.update_one(
         {"id": tx_id, **scope},
         {"$set": {
@@ -1294,12 +1356,12 @@ def _apply_match(tx, kind, target_id, scope):
             "bank_transaction_id": tx["id"],
             "created_at": now,
         }
-        db.invoices.update_one(
+        _sync_update_one("invoices",
             {"id": target_id, **scope},
             {"$push": {"payments": payment}})
         updated = db.invoices.find_one({"id": target_id, **scope}, {"_id": 0})
         new_status = _recompute_invoice_status(updated)
-        db.invoices.update_one({"id": target_id, **scope},
+        _sync_update_one("invoices", {"id": target_id, **scope},
                                {"$set": {"status": new_status}})
         match_kind = "invoice_payment"
         match_id = payment["id"]
@@ -1414,12 +1476,12 @@ def _apply_invoice_split_match(tx, target_ids, scope):
             "bank_transaction_id": tx["id"],
             "created_at": now,
         }
-        db.invoices.update_one(
+        _sync_update_one("invoices",
             {"id": inv["id"], **scope},
             {"$push": {"payments": payment}})
         updated = db.invoices.find_one({"id": inv["id"], **scope}, {"_id": 0})
         new_status = _recompute_invoice_status(updated)
-        db.invoices.update_one({"id": inv["id"], **scope},
+        _sync_update_one("invoices", {"id": inv["id"], **scope},
                                {"$set": {"status": new_status}})
         payment_ids.append(payment["id"])
 
@@ -3862,6 +3924,39 @@ def migrate_mileage_logbook_v1():
     db.mileage_places.create_index([("organization_id", 1), ("name", 1)])
     db.mileage_vehicles.create_index([("organization_id", 1), ("is_default", 1)])
     db.mileage_rate_reminders.create_index("id", unique=True)
+
+
+def migrate_updated_at_v1():
+    """Idempotente. Safe à chaque boot (lot 0 — intégration ProFireManager).
+
+    Remplit `updated_at` sur les documents ANTÉRIEURS aux helpers `_sync_*`, avec la valeur de
+    `created_at`. Sans ce remplissage, tous les documents existants seraient invisibles à une
+    requête `updated_since` — PFM croirait la base vide au premier appel.
+
+    Pourquoi `created_at` et non l'heure du boot : dater tous les documents existants de
+    « maintenant » les ferait tous ressortir comme « modifiés aujourd'hui » à chaque
+    resynchronisation suivante. `created_at` est la seule date vraie dont on dispose.
+
+    Les documents sans `created_at` (aucun aujourd'hui, vérifié : 339/339 en portent un) sont
+    traités à part avec l'époque Unix — une date volontairement très ancienne, pour qu'ils
+    remontent dans la première resynchronisation plutôt que d'être silencieusement ignorés.
+    """
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc).isoformat()
+    for name in _SYNC_TRACKED_COLLECTIONS:
+        coll = _sync_collection(name)
+        # [sync-ok] écriture en masse délibérée : cette migration POSE `updated_at` elle-même.
+        coll.update_many(
+            {"updated_at": {"$exists": False}, "created_at": {"$exists": True}},
+            [{"$set": {"updated_at": "$created_at"}}],
+        )
+        # [sync-ok] filet pour un document sans created_at : daté de l'époque Unix pour qu'il
+        # apparaisse dans la première resynchronisation au lieu d'être perdu.
+        coll.update_many(
+            {"updated_at": {"$exists": False}},
+            {"$set": {"updated_at": epoch}},
+        )
+        # Index de la requête `updated_since`, toujours scopée par organisation.
+        coll.create_index([("organization_id", 1), ("updated_at", 1)])
 
 
 def migrate_bank_created_expenses_v1():
@@ -8387,7 +8482,7 @@ def create_client(client_data: dict, current_user: CurrentUser = Depends(require
         "neq_number": client_data.get("neq_number", ""),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
-    db.clients.insert_one(doc)
+    _sync_insert_one("clients", doc)
     return clean_doc(doc)
 
 @app.put("/api/clients/{client_id}")
@@ -8395,7 +8490,7 @@ def update_client(client_id: str, client_data: dict, current_user: CurrentUser =
     for k in ("id", "user_id", "organization_id", "_id"):
         client_data.pop(k, None)
     normalize_tax_fields(client_data)
-    result = db.clients.update_one({"id": client_id, **_org_scope(current_user)}, {"$set": client_data})
+    result = _sync_update_one("clients", {"id": client_id, **_org_scope(current_user)}, {"$set": client_data})
     if result.matched_count == 0:
         raise HTTPException(404, "Client not found")
     return clean_doc(db.clients.find_one({"id": client_id}, {"_id": 0}))
@@ -8470,7 +8565,7 @@ def erase_client(client_id: str, body: dict, request: Request,
         _freeze_issued()  # filet anti-TOCTOU : fige tout doc inséré pendant l'effacement
         outcome = "deleted"
     else:
-        db.clients.update_one(
+        _sync_update_one("clients",
             {"id": client_id, **scope},
             {"$set": {"name": f"Client anonymisé #{_anon_suffix(client_id)}",
                       "anonymized": True,
@@ -8630,7 +8725,7 @@ def create_invoice(invoice_data: dict, current_user: CurrentUser = Depends(requi
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
-    db.invoices.insert_one(doc)
+    _sync_insert_one("invoices", doc)
     return clean_doc(doc)
 
 @app.put("/api/invoices/{invoice_id}")
@@ -8657,7 +8752,7 @@ def update_invoice(invoice_id: str, invoice_data: dict, current_user: CurrentUse
     if existing.get("status", "draft") == "draft":
         client_id_for_snapshot = invoice_data.get("client_id", existing.get("client_id"))
         invoice_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
-    db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": invoice_data})
+    _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": invoice_data})
     return clean_doc(db.invoices.find_one({"id": invoice_id}, {"_id": 0}))
 
 @app.put("/api/invoices/{invoice_id}/status")
@@ -8669,7 +8764,7 @@ def update_invoice_status(invoice_id: str, status_data: dict, current_user: Curr
         raise HTTPException(404, "Invoice not found")
     old_status = existing.get("status", "draft")
     new_status = status_data.get("status", "draft")
-    result = db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
+    result = _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
     # Auto-posting (§5.5), opt-in par org (décision #10). NE DOIT JAMAIS faire
@@ -8722,7 +8817,7 @@ def add_invoice_payment(invoice_id: str, body: dict,
             # de rappels casserait silencieusement → un rappel manqué. On normalise à la source.
             bdd = _date.fromisoformat(bdd).isoformat()
         set_fields["balance_due_date"] = bdd
-    db.invoices.update_one(
+    _sync_update_one("invoices",
         {"id": invoice_id, **_org_scope(current_user)},
         {"$push": {"payments": payment}, "$set": set_fields}
     )
@@ -8762,7 +8857,7 @@ def delete_invoice_payment(invoice_id: str, payment_id: str,
     if invoice.get("status") in ("partial", "paid"):
         invoice["status"] = "sent"
     new_status = _recompute_invoice_status(invoice)
-    db.invoices.update_one(
+    _sync_update_one("invoices",
         {"id": invoice_id, **_org_scope(current_user)},
         {"$set": {"payments": payments, "status": new_status}}
     )
@@ -8846,7 +8941,7 @@ def toggle_recurrence(invoice_id: str, body: dict, current_user: CurrentUser = D
     if not active:
         update["recurrence"] = "none"
         update["next_send_date"] = ""
-    result = db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": update})
+    result = _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": update})
     if result.matched_count == 0:
         raise HTTPException(404, "Invoice not found")
     return {"message": "Recurrence updated"}
@@ -8901,7 +8996,7 @@ def process_recurring_invoices(current_user: CurrentUser = Depends(require_permi
             resend.Emails.send(params)
             new_next = _advance_date(inv["next_send_date"], inv["recurrence"])
             new_due = _advance_date(inv.get("due_date", inv["next_send_date"]), inv["recurrence"])
-            db.invoices.update_one({"id": inv["id"]}, {"$set": {
+            _sync_update_one("invoices", {"id": inv["id"]}, {"$set": {
                 "next_send_date": new_next,
                 "due_date": new_due,
                 "status": "sent",
@@ -9690,13 +9785,13 @@ def unmatch_bank_transaction(tx_id: str,
         if invoice:
             new_payments = [p for p in invoice.get("payments", [])
                             if p.get("id") != tx.get("match_id")]
-            db.invoices.update_one(
+            _sync_update_one("invoices",
                 {"id": invoice["id"], **_org_scope(current_user)},
                 {"$set": {"payments": new_payments, "status": "sent"}})
             updated = db.invoices.find_one(
                 {"id": invoice["id"], **_org_scope(current_user)}, {"_id": 0})
             new_status = _recompute_invoice_status(updated)
-            db.invoices.update_one({"id": invoice["id"], **_org_scope(current_user)},
+            _sync_update_one("invoices", {"id": invoice["id"], **_org_scope(current_user)},
                                    {"$set": {"status": new_status}})
     elif tx.get("match_kind") == "invoice_split":
         # Défaire un split : supprimer TOUS les payments créés (identifiés par bank_transaction_id
@@ -9704,7 +9799,7 @@ def unmatch_bank_transaction(tx_id: str,
         invoice_ids = tx.get("invoice_ids") or []
         for iid in invoice_ids:
             scope = _org_scope(current_user)
-            db.invoices.update_one(
+            _sync_update_one("invoices",
                 {"id": iid, **scope},
                 {"$pull": {"payments": {"bank_transaction_id": tx["id"]}}})
             updated = db.invoices.find_one({"id": iid, **scope}, {"_id": 0})
@@ -9714,7 +9809,7 @@ def unmatch_bank_transaction(tx_id: str,
             if updated.get("status") in ("paid", "partial"):
                 updated["status"] = "sent"
             new_status = _recompute_invoice_status(updated)
-            db.invoices.update_one({"id": iid, **scope}, {"$set": {"status": new_status}})
+            _sync_update_one("invoices", {"id": iid, **scope}, {"$set": {"status": new_status}})
     elif tx.get("match_kind") == "expense":
         exp = db.expenses.find_one(
             {"id": tx.get("match_id"), **_org_scope(current_user)}, {"_id": 0})
@@ -9947,7 +10042,7 @@ def create_invoice_from_tx(tx_id: str, body: dict,
         "created_at": now,
     }
     invoice_doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id)
-    db.invoices.insert_one(invoice_doc)
+    _sync_insert_one("invoices", invoice_doc)
     db.bank_transactions.update_one(
         {"id": tx_id, **_org_scope(current_user)},
         {"$set": {"status": "matched", "match_kind": "invoice_payment",
@@ -10059,13 +10154,13 @@ def delete_bank_import(import_id: str, force: bool = False,
             if inv:
                 new_payments = [p for p in inv.get("payments", [])
                                 if p.get("id") != tx.get("match_id")]
-                db.invoices.update_one(
+                _sync_update_one("invoices",
                     {"id": inv["id"], **_org_scope(current_user)},
                     {"$set": {"payments": new_payments, "status": "sent"}})
                 updated = db.invoices.find_one(
                     {"id": inv["id"], **_org_scope(current_user)}, {"_id": 0})
                 new_status = _recompute_invoice_status(updated)
-                db.invoices.update_one({"id": inv["id"], **_org_scope(current_user)},
+                _sync_update_one("invoices", {"id": inv["id"], **_org_scope(current_user)},
                                        {"$set": {"status": new_status}})
         elif tx.get("match_kind") == "expense":
             db.expenses.update_one(
@@ -10803,7 +10898,7 @@ def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_p
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
-    db.quotes.insert_one(doc)
+    _sync_insert_one("quotes", doc)
     return clean_doc(doc)
 
 @app.put("/api/quotes/{quote_id}")
@@ -10829,7 +10924,7 @@ def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = De
         raise HTTPException(404, "Quote not found")
     client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
     quote_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
-    db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": quote_data})
+    _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
 @app.post("/api/quotes/{quote_id}/convert")
@@ -10863,14 +10958,14 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
     # convertie ; ses numéros de taxes ont déjà été effacés à la source dans le tax_registrations du devis.
     if quote.get("client_snapshot"):
         invoice_doc["client_snapshot"] = quote["client_snapshot"]
-    db.invoices.insert_one(invoice_doc)
-    db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "converted"}})
+    _sync_insert_one("invoices", invoice_doc)
+    _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "converted"}})
     return clean_doc(invoice_doc)
 
 @app.put("/api/quotes/{quote_id}/status")
 def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     new_status = status_data.get("status", "pending")
-    result = db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
+    result = _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
     if result.matched_count == 0:
         raise HTTPException(404, "Quote not found")
     return {"message": "Status updated"}
@@ -12766,7 +12861,7 @@ def get_overdue_invoices(current_user: CurrentUser = Depends(require_permission(
         if due and due < today:
             days = (datetime.now(timezone.utc) - datetime.fromisoformat(due + "T00:00:00+00:00")).days
             if inv.get("status") != "overdue":
-                db.invoices.update_one({"id": inv["id"]}, {"$set": {"status": "overdue"}})
+                _sync_update_one("invoices", {"id": inv["id"]}, {"$set": {"status": "overdue"}})
                 inv["status"] = "overdue"
             _enrich_invoice(inv)
             client = db.clients.find_one({"id": inv.get("client_id"), **scope}, {"_id": 0})
@@ -12839,7 +12934,7 @@ def send_invoice_reminder(invoice_id: str, body: dict, current_user: CurrentUser
     }
     try:
         r = resend.Emails.send(params)
-        db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"last_reminded": datetime.now(timezone.utc).isoformat()}})
+        _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": {"last_reminded": datetime.now(timezone.utc).isoformat()}})
         return {"message": f"Rappel envoye a {to_email}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi rappel: {str(e)}")
@@ -13319,7 +13414,7 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     sent_to = ", ".join(to_list)
     try:
         r = resend.Emails.send(params)
-        db.quotes.update_one({"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
+        _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
         return {"message": f"Soumission envoyee a {sent_to}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
@@ -13359,7 +13454,7 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = 
     sent_to = ", ".join(to_list)
     try:
         r = resend.Emails.send(params)
-        db.invoices.update_one({"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
+        _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
         return {"message": f"Facture envoyee a {sent_to}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
@@ -14841,6 +14936,7 @@ def seed_data():
         _run_migration(lambda: migrate_general_ledger_autopost_v1(db), "general_ledger_autopost_v1")
         # Migration feature #13 — carnet de route / kilométrage (idempotente)
         _run_migration(migrate_mileage_logbook_v1, "mileage_logbook_v1")
+        _run_migration(migrate_updated_at_v1, "updated_at_v1")
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
         # ajoutés aux plans comptables existants (idempotente, additive)
         _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")
@@ -14929,7 +15025,7 @@ def seed_data():
                 "logo_url": "", "primary_color": "#00A08C", "secondary_color": "#1F2937",
                 "default_due_days": 30, "bn_number": "123456789", "gst_number": "123456789RT0001", "qst_number": "1234567890TQ0001", "hst_number": "", "neq_number": "1234567890"
             })
-            db.clients.insert_one({
+            _sync_insert_one("clients", {
                 "id": str(uuid.uuid4()), "user_id": user_id,
                 "name": "Client Test", "email": "test@client.com", "phone": "514-123-4567",
                 "address": "123 Rue Test", "city": "Montreal", "postal_code": "H1A 1A1",
