@@ -409,3 +409,74 @@ sont nécessaires que pour les lots PFM ultérieurs.
   ISO 8601 en UTC avec suffixe `Z`, PFM convertit pour l'affichage).
 - Si PFM a besoin des lignes de détail (`items`) des soumissions et des
   factures, ou seulement des totaux.
+
+---
+
+## 11. Décisions prises (2026-09-27)
+
+Les questions ouvertes du §10 sont tranchées. Cette section est la référence : en cas de
+divergence avec les sections antérieures, c'est elle qui vaut.
+
+### 11.1 Réponses du propriétaire
+
+- **Format des dates** : ISO 8601 en UTC. PFM convertit pour l'affichage.
+- **Lignes de détail (`items`)** : non exposées. PFM n'a besoin que des totaux.
+- **URL du webhook côté PFM** : inconnue, elle arrive avec le lot 2 de PFM. Non bloquant,
+  puisque l'URL vit dans `webhook_endpoints`.
+
+### 11.2 `amount_paid` est CALCULÉ, non persisté
+
+Constat : ce champ n'existe sur aucune facture, et le code dérive déjà le montant payé —
+`_enrich_invoice` calcule `total_paid_cad = sum(payments[].amount_cad)`.
+
+Décision : l'API le calcule avec la même formule. Le persister créerait une seconde source de
+vérité pouvant diverger de `payments`, sans rien apporter : aucune facture ne porte de paiement
+aujourd'hui, donc il n'y a même pas de coût de calcul à l'échelle actuelle.
+
+### 11.3 Le curseur est un keyset `(updated_at, id)`, pas un décalage
+
+Encodage : base64url d'un JSON `{"u": <updated_at>, "i": <id>}`. Opaque pour PFM, qui le renvoie
+tel quel.
+
+Pourquoi pas un décalage numérique : la liste bouge pendant le parcours. Un document modifié
+entre deux pages change de position dans un tri par `updated_at`, ce qui fait **sauter** ou
+**dupliquer** des documents avec un décalage. Un keyset est stable — il demande « ce qui vient
+après cette position », pas « à partir du 200ᵉ ».
+
+`id` départage les documents partageant la même `updated_at`, ce qui arrive : le remplissage
+rétroactif de l'étape 1 a daté 339 documents avec leur `created_at`, et plusieurs partagent la
+même seconde.
+
+### 11.4 `province` n'existe pas sur les clients
+
+Le §4 demande `province` pour les clients. Recensement des 71 documents : le champ est **absent
+partout**. Les clients portent `country`, pas `province`.
+
+Décision : `province` est exposé à `null`, pour que le contrat reste celui annoncé à PFM sans
+inventer de donnée. Si PFM en a besoin, il faut d'abord ajouter le champ au formulaire client —
+c'est un changement de produit, pas d'API.
+
+### 11.5 Les 35 documents sans `organization_id`
+
+Recensement : 7 clients, 14 soumissions, 14 factures n'ont pas de champ `organization_id`.
+`migrate_organizations_v1` les a manqués.
+
+Ils se répartissent en deux groupes :
+
+| Groupe | Nombre | Utilisateur | Visible dans l'interface aujourd'hui |
+|---|---|---|---|
+| Attribuables | 30 | existe, org `a0dba47b…` | **oui**, via le repli `user_id` de `_org_scope` |
+| Orphelins | 5 | supprimé, introuvable | non |
+
+Décision : `migrate_integration_org_backfill_v1` pose `organization_id` sur les 30 attribuables,
+en le lisant sur leur utilisateur. Les 5 orphelins ne sont pas touchés — aucune organisation ne
+peut les revendiquer.
+
+**Aucun changement de visibilité** : les 30 étaient déjà visibles par le repli `user_id`, ils le
+resteront par le champ direct. Ce qui change, c'est qu'ils deviennent visibles à une requête
+scopée strictement par `organization_id` — celle de l'API.
+
+Pourquoi ne pas simplement reproduire le repli `user_id` dans l'API : pour une clé API,
+`principal.id` est l'identifiant **de la clé**, pas d'un utilisateur. Le repli de `_org_scope`
+matcherait donc zéro document. Corriger la donnée est plus sûr que contourner ce piège à chaque
+requête.
