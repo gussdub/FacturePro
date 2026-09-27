@@ -19,6 +19,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 import uuid
 import secrets
+import hmac
+import hashlib
 import io
 import csv
 import base64
@@ -2542,6 +2544,159 @@ def require_permission(perm_code: str):
     return _dep
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [INTÉGRATION PFM] Clés API — authentification machine à machine
+#
+# Chaîne de dépendance VOLONTAIREMENT SÉPARÉE de `get_current_user`. Conséquence directe et
+# recherchée : `_enforce_org_mfa` n'est JAMAIS atteint par une clé API, donc aucun
+# contournement n'est à écrire dans ce garde. Assouplir `_enforce_org_mfa` pour laisser passer
+# les clés aurait ouvert un trou pour les vrais utilisateurs ; ne rien y toucher est plus sûr.
+# `tests/test_api_keys.py::test_aucune_mfa_invoquee` fige ce choix.
+#
+# Une clé API est son propre facteur d'authentification : secret de 256 bits, révocable,
+# porté par un en-tête dédié.
+
+# Liste BLANCHE. Tout code absent d'ici est refusé à la création, même demandé explicitement.
+# `team:manage` et `billing:manage` en sont exclus par décision de sécurité : une intégration
+# de facturation n'a aucune raison de gérer l'équipe ou l'abonnement.
+_API_KEY_ALLOWED_SCOPES = ("clients:read", "quotes:read", "quotes:write", "invoices:read")
+
+_API_KEY_SECRET_PREFIX = "fp_live_"
+# ⚠️ 8 caractères ALÉATOIRES après le préfixe littéral. Un préfixe réduit aux 8 premiers
+# caractères du secret vaudrait « fp_live_ » pour toutes les clés et ne discriminerait rien :
+# il sert justement à retrouver la clé en base AVANT la comparaison de hachage.
+_API_KEY_PREFIX_RANDOM_LEN = 8
+
+# Limitation de débit en mémoire, sur le modèle de `_rate_limit_accept_invite`.
+# Par processus : suffisant sur le palier gratuit de Render (instance unique). À déplacer vers
+# un magasin partagé le jour où le backend tourne sur plusieurs instances.
+_API_KEY_RATE = {}                 # {(ip, prefixe): [horodatages]}
+_API_KEY_WINDOW_SEC = 60
+_API_KEY_MAX_REQUESTS = 120
+
+
+def _api_key_generate_secret() -> str:
+    """Secret complet, affiché UNE SEULE FOIS à la création. Seul le hachage est conservé."""
+    return _API_KEY_SECRET_PREFIX + secrets.token_urlsafe(32)
+
+
+def _api_key_prefix(secret: str) -> str:
+    """Partie non secrète, stockée en clair et affichée dans l'interface."""
+    return secret[:len(_API_KEY_SECRET_PREFIX) + _API_KEY_PREFIX_RANDOM_LEN]
+
+
+def _api_key_hash(secret: str) -> str:
+    """SHA-256 suffit ici, contrairement à un mot de passe : le secret porte 256 bits
+    d'entropie, donc une fonction lente comme bcrypt n'apporterait rien contre une recherche
+    exhaustive et coûterait à chaque requête."""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def _api_key_validate_scopes(scopes) -> list:
+    """Valide contre la liste blanche. Lève 400 sur tout code inconnu."""
+    if not isinstance(scopes, (list, tuple)) or not scopes:
+        raise HTTPException(400, "Au moins un scope est requis")
+    demandes = sorted({str(s).strip() for s in scopes if str(s).strip()})
+    interdits = [s for s in demandes if s not in _API_KEY_ALLOWED_SCOPES]
+    if interdits:
+        raise HTTPException(
+            400, f"Scopes non accordables à une clé API : {', '.join(interdits)}. "
+                 f"Autorisés : {', '.join(_API_KEY_ALLOWED_SCOPES)}")
+    return demandes
+
+
+def _api_key_rate_limit_ok(ip: str, prefixe: str) -> bool:
+    """True si dans les limites, False si dépassé. Compté par (IP, préfixe)."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    debut = now_ts - _API_KEY_WINDOW_SEC
+    cle = (ip or "?", prefixe or "?")
+    hits = [t for t in _API_KEY_RATE.get(cle, []) if t > debut]
+    if len(hits) >= _API_KEY_MAX_REQUESTS:
+        _API_KEY_RATE[cle] = hits
+        return False
+    hits.append(now_ts)
+    _API_KEY_RATE[cle] = hits
+    return True
+
+
+def _api_key_resolve(secret: str, ip: str = None) -> CurrentUser:
+    """Secret brut -> principal. Lève 401 / 429.
+
+    ORDRE CRITIQUE, et c'est la raison d'être de cette fonction :
+        1. limiter le débit ;
+        2. SEULEMENT ensuite comparer le hachage.
+
+    Une limitation placée après l'authentification ne protège pas contre l'essai systématique
+    de clés invalides : ces requêtes échouent avant d'atteindre le compteur, donc l'attaquant
+    peut essayer sans limite. Le test `test_debit_limite_AVANT_comparaison_de_hachage` rend la
+    comparaison explosive pour prouver qu'elle n'est jamais atteinte après dépassement.
+    """
+    secret = (secret or "").strip()
+    prefixe = _api_key_prefix(secret)
+
+    # 1. Débit — AVANT toute lecture de base et toute comparaison.
+    if not _api_key_rate_limit_ok(ip, prefixe):
+        raise HTTPException(429, "Trop de requêtes")
+
+    if not secret.startswith(_API_KEY_SECRET_PREFIX):
+        raise HTTPException(401, "Clé API invalide")
+
+    doc = db.api_keys.find_one({"key_prefix": prefixe}, {"_id": 0})
+    if not doc:
+        raise HTTPException(401, "Clé API invalide")
+    if doc.get("revoked_at"):
+        raise HTTPException(401, "Clé API révoquée")
+
+    # 2. Comparaison en temps constant : une comparaison naïve fuit, par son temps d'exécution,
+    #    le nombre de caractères devinés juste.
+    if not hmac.compare_digest(str(doc.get("key_hash") or ""), _api_key_hash(secret)):
+        raise HTTPException(401, "Clé API invalide")
+
+    # Best-effort : la traçabilité ne doit jamais faire échouer une requête légitime.
+    try:
+        db.api_keys.update_one(
+            {"id": doc["id"]},
+            {"$set": {"last_used_at": datetime.now(timezone.utc).isoformat()}})
+    except Exception:
+        pass
+
+    return CurrentUser(
+        id=doc["id"],
+        email=f"api-key:{doc['key_prefix']}",   # jamais le secret, seulement le préfixe
+        organization_id=doc["organization_id"],
+        role="api",
+        permissions=list(doc.get("scopes") or []),
+    )
+
+
+def get_api_principal(request: Request) -> CurrentUser:
+    """Dépendance FastAPI des endpoints `/api/v1/integration/`.
+
+    En-tête DÉDIÉ `X-API-Key`, et non `Authorization: Bearer` déjà utilisé par les JWT : un
+    en-tête distinct rend impossible qu'une clé API soit acceptée là où un JWT est attendu,
+    et réciproquement.
+    """
+    secret = request.headers.get("X-API-Key")
+    if not secret:
+        raise HTTPException(401, "En-tête X-API-Key requis")
+    return _api_key_resolve(secret, ip=_client_ip(request))
+
+
+def _api_key_require_scope(principal: CurrentUser, scope: str) -> None:
+    """403 si le scope manque. Séparé de `require_permission`, qui appartient à la chaîne
+    utilisateur et impose la MFA."""
+    if scope not in (principal.permissions or []):
+        raise HTTPException(403, f"Scope requis : {scope}")
+
+
+def require_api_scope(scope: str):
+    """Fabrique de dépendance : `Depends(require_api_scope("clients:read"))`."""
+    def _dep(principal: CurrentUser = Depends(get_api_principal)) -> CurrentUser:
+        _api_key_require_scope(principal, scope)
+        return principal
+    return _dep
+
+
 def _org_scope(current_user: CurrentUser) -> dict:
     """Retourne le filtre Mongo `$or` pour scoper une query business à l'organisation
     du user, avec fallback pre-migration sur user_id (docs sans organization_id).
@@ -3926,6 +4081,18 @@ def migrate_mileage_logbook_v1():
     db.mileage_rate_reminders.create_index("id", unique=True)
 
 
+def migrate_api_keys_v1():
+    """Idempotente. Safe à chaque boot (lot 0 — clés API).
+
+    Purement additive : crée les index. `key_prefix` est UNIQUE parce que la résolution d'une
+    clé le cherche avant toute comparaison de hachage — deux clés partageant un préfixe
+    rendraient cette recherche ambiguë.
+    """
+    db.api_keys.create_index("id", unique=True)
+    db.api_keys.create_index("key_prefix", unique=True)
+    db.api_keys.create_index([("organization_id", 1), ("created_at", -1)])
+
+
 def migrate_updated_at_v1():
     """Idempotente. Safe à chaque boot (lot 0 — intégration ProFireManager).
 
@@ -4684,6 +4851,92 @@ def update_member_role(
            target_label=target.get("email"),
            metadata={"old_role": target.get("role"), "new_role": role})
     return {"user_id": user_id, "role": role}
+
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    scopes: List[str]
+
+
+@app.post("/api/org/api-keys", status_code=201)
+def create_api_key(payload: ApiKeyCreate,
+                   request: Request,
+                   current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Crée une clé API. Le secret complet n'est renvoyé QU'ICI, jamais ensuite.
+
+    Réservé au propriétaire : une clé API contourne l'interface et porte des droits de lecture
+    sur toutes les données de l'organisation.
+    """
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+
+    nom = (payload.name or "").strip()
+    if not nom:
+        raise HTTPException(400, "Nom requis")
+    scopes = _api_key_validate_scopes(payload.scopes)   # lève 400 hors liste blanche
+
+    secret = _api_key_generate_secret()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "organization_id": current_user.organization_id,
+        "name": nom[:120],
+        "key_prefix": _api_key_prefix(secret),
+        "key_hash": _api_key_hash(secret),     # seul le hachage est conservé
+        "scopes": scopes,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by_user_id": current_user.id,
+        "last_used_at": None,
+        "revoked_at": None,
+    }
+    db.api_keys.insert_one(dict(doc))
+
+    # Métadonnées SÛRES uniquement : jamais le secret ni le hachage.
+    _audit("api_key.created", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           target_type="api_key", target_id=doc["id"], target_label=doc["name"],
+           category="security", metadata={"scopes": scopes, "key_prefix": doc["key_prefix"]})
+
+    sortie = {k: v for k, v in doc.items() if k != "key_hash"}
+    sortie["secret"] = secret      # affiché une seule fois, côté client
+    return sortie
+
+
+@app.get("/api/org/api-keys")
+def list_api_keys(current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Liste les clés de l'organisation. Ni secret ni hachage ne sortent d'ici."""
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+    cles = list(db.api_keys.find(
+        {"organization_id": current_user.organization_id},
+        {"_id": 0, "key_hash": 0},
+    ).sort("created_at", -1))
+    return {"data": cles}
+
+
+@app.delete("/api/org/api-keys/{key_id}", status_code=204)
+def revoke_api_key(key_id: str,
+                   request: Request,
+                   current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Révoque une clé. Elle n'est JAMAIS supprimée : garder la ligne préserve la trace de ce
+    qui a été fait avec, et l'audit doit pouvoir la nommer après coup."""
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+
+    # Filtre scopé par l'organisation : une clé d'une autre org est un 404, pas un 403 —
+    # inutile de révéler son existence.
+    doc = db.api_keys.find_one(
+        {"id": key_id, "organization_id": current_user.organization_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Clé introuvable")
+    if not doc.get("revoked_at"):
+        db.api_keys.update_one(
+            {"id": key_id, "organization_id": current_user.organization_id},
+            {"$set": {"revoked_at": datetime.now(timezone.utc).isoformat()}})
+        _audit("api_key.revoked", request=request, actor_user_id=current_user.id,
+               actor_email=current_user.email, organization_id=current_user.organization_id,
+               target_type="api_key", target_id=key_id, target_label=doc.get("name"),
+               category="security", metadata={"key_prefix": doc.get("key_prefix")})
+    return Response(status_code=204)
 
 
 @app.delete("/api/org/members/{user_id}", status_code=204)
@@ -14937,6 +15190,7 @@ def seed_data():
         # Migration feature #13 — carnet de route / kilométrage (idempotente)
         _run_migration(migrate_mileage_logbook_v1, "mileage_logbook_v1")
         _run_migration(migrate_updated_at_v1, "updated_at_v1")
+        _run_migration(migrate_api_keys_v1, "api_keys_v1")
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
         # ajoutés aux plans comptables existants (idempotente, additive)
         _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")
