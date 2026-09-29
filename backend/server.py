@@ -5087,6 +5087,11 @@ def _webhook_deliver_due(limite: int = 20) -> int:
                 headers={
                     "Content-Type": "application/json",
                     "X-FacturePro-Signature": _webhook_signature_header(corps, ep["secret"]),
+                    # ⚠️ NON COUVERT PAR LE HMAC, qui porte sur f"{t}.{corps}". Un
+                    # destinataire qui dédupliquerait sur cet en-tête laisserait passer un
+                    # rejeu : l'attaquant le modifie librement. La déduplication doit se
+                    # faire sur l'`id` du CORPS (`evt_...`), qui est signé. Cet en-tête n'est
+                    # qu'un confort de journalisation.
                     "X-FacturePro-Event": livr.get("event_id") or "",
                 },
                 timeout=_WEBHOOK_TIMEOUT_SEC)
@@ -5446,8 +5451,24 @@ def integration_create_quote(
     except (TypeError, ValueError):
         raise HTTPException(422, "Lignes invalides : quantity et unit_price doivent être des nombres")
 
+    # [LOT D] La province décide du taux. Le chemin public la prend du formulaire, par
+    # document ; ici elle est optionnelle dans le corps, avec repli sur les réglages de
+    # l'organisation. Sans ce paramètre, un intégrateur ne pouvait pas la contrôler du tout.
+    #
+    # ⚠️ VALIDÉE contre PROVINCES_VALID, et c'est essentiel : `calculate_taxes` retombe
+    # SILENCIEUSEMENT sur 5 % de TPS pour toute valeur inconnue. « Quebec » au lieu de « QC »
+    # amputerait la taxe des deux tiers (14,975 % -> 5 %) sans lever, et la soumission mal
+    # taxée partirait ensuite au client.
     reglages = db.company_settings.find_one(scope, {"_id": 0, "province": 1}) or {}
-    province = reglages.get("province") or "QC"
+    # Rognage AVANT le repli : une chaîne vide ou blanche signifie « non fournie », et doit
+    # retomber sur les réglages comme une absence — pas lever. Sans ce rognage préalable,
+    # "" retombait mais "  " levait un 422, pour la même intention.
+    _prov_demandee = str(payload.get("province") or "").strip()
+    province = _prov_demandee or str(reglages.get("province") or "QC").strip()
+    if province not in PROVINCES_VALID:
+        raise HTTPException(
+            422, f"province invalide : « {province} ». Attendu un code à deux lettres parmi "
+                 f"{', '.join(sorted(PROVINCES_VALID))}.")
     gst, pst, hst, total_tax = calculate_taxes(subtotal, province)
     total = round(subtotal + total_tax, 2)
 
@@ -5599,6 +5620,37 @@ def delete_webhook_endpoint(endpoint_id: str, request: Request,
            target_type="webhook_endpoint", target_id=endpoint_id,
            target_label=ep.get("url"), category="security")
     return Response(status_code=204)
+
+
+@app.post("/api/org/webhooks/{endpoint_id}/enable")
+def enable_webhook_endpoint(endpoint_id: str, request: Request,
+                            current_user: CurrentUser = Depends(get_current_user_with_access)):
+    """Remet un endpoint en service.
+
+    Sans cette remise en service, désactiver était sans retour — or c'est exactement le geste
+    dont on a besoin pour une mise en service sûre : créer l'endpoint (ce qui génère le
+    secret), le désactiver le temps que le destinataire pose ce secret chez lui, puis le
+    réactiver. Sinon les premiers événements partent vers un destinataire qui répond 503, et
+    les réessais abandonnent après la cinquième tentative.
+
+    `last_error` est effacé : une erreur d'une période où le secret n'était pas encore posé
+    ne doit pas rester affichée après la remise en service.
+    """
+    _enforce_org_mfa(current_user)
+    _audit_require_owner(current_user)
+    ep = db.webhook_endpoints.find_one(
+        {"id": endpoint_id, "organization_id": current_user.organization_id},
+        {"_id": 0, "url": 1, "actif": 1})
+    if not ep:
+        raise HTTPException(404, "Endpoint introuvable")
+    db.webhook_endpoints.update_one(
+        {"id": endpoint_id, "organization_id": current_user.organization_id},
+        {"$set": {"actif": True, "last_error": None}})
+    _audit("webhook_endpoint.enabled", request=request, actor_user_id=current_user.id,
+           actor_email=current_user.email, organization_id=current_user.organization_id,
+           target_type="webhook_endpoint", target_id=endpoint_id,
+           target_label=ep.get("url"), category="security")
+    return {"id": endpoint_id, "actif": True}
 
 
 @app.post("/api/org/webhooks/{endpoint_id}/test")

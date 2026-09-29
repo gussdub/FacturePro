@@ -131,6 +131,10 @@ Réponse `201`, au format d'une soumission lue (les 13 champs ci-dessus).
 - `client_id` doit exister **dans l'organisation de la clé**, sinon `404`. Tu ne peux pas créer de
   client : la circulation est à sens unique.
 - `items` vide → `422`.
+- `province` est **optionnel** et décide du taux de taxe. Omis ou vide → repli sur la province de
+  l'organisation. **Validé** contre les 13 codes à deux lettres : « Quebec » au lieu de « QC » est
+  refusé en `422` et non accepté à 5 % de TPS au lieu de 14,975 %.
+- `currency` **ne peut pas être imposée** : une soumission créée par l'API est toujours en `CAD`.
 - `external_ref` est **libre**. Stocké tel quel, relu à l'identique, y compris les objets
   imbriqués. Sers-t'en pour reconnaître tes propres soumissions et ne pas en produire deux pour la
   même période.
@@ -179,8 +183,16 @@ Charge utile :
 `data` est **exactement** l'objet que renvoie l'endpoint de lecture correspondant. Tu peux donc
 réutiliser le même code de désérialisation pour les deux chemins.
 
-En-têtes : `X-FacturePro-Signature` et `X-FacturePro-Event` (l'identifiant d'événement, utile pour
-dédupliquer).
+En-têtes : `X-FacturePro-Signature` et `X-FacturePro-Event`.
+
+⚠️ **Ne déduplique PAS sur `X-FacturePro-Event`.** Cet en-tête n'est **pas couvert par le HMAC**,
+qui porte sur `f"{t}.{corps}"`. Un attaquant rejouant une requête interceptée peut le modifier
+librement : un récepteur qui déduplique dessus verrait deux événements distincts là où il n'y en a
+qu'un, et le rejeu passerait. **Déduplique sur l'`id` du CORPS** (`evt_...`), qui est signé. Cet
+en-tête n'est qu'un confort de journalisation.
+
+*(Correction du 2026-09-28. La version d'origine conseillait l'inverse — c'était une erreur, et
+elle ouvrait précisément le trou que la vérification d'horodatage sert à fermer.)*
 
 ### Vérification de la signature — à implémenter exactement ainsi
 

@@ -260,3 +260,146 @@ class TestBrouillonsExclusDuTableauDeBord:
             assert n == 2, f"attendu 2 (pending + accepted), obtenu {n}"
         finally:
             server_module.db.quotes.delete_many({"id": {"$in": ids}})
+
+
+class TestProvinceEtTaxes:
+    """Lot D — questions (b) de PFM sur les taxes.
+
+    Le chemin PUBLIC prend la province du formulaire, par document. Mon endpoint
+    d'intégration la prenait des réglages de l'organisation : divergence non documentée, et
+    PFM n'avait aucun moyen de la contrôler. La province devient donc un paramètre optionnel
+    du corps, avec repli sur les réglages.
+    """
+
+    @pytest.fixture
+    def ctx_prov(self):
+        server_module._API_KEY_RATE.clear()
+        kid, sec = _cle(ORG_W, ["quotes:write", "quotes:read"])
+        cid = f"test-prov-{uuid.uuid4().hex[:6]}"
+        server_module.db.clients.insert_one({
+            "id": cid, "organization_id": ORG_W, "name": "Client province",
+            "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00"})
+        server_module.db.company_settings.insert_one({
+            "id": f"st-{uuid.uuid4().hex[:6]}", "organization_id": ORG_W, "province": "QC"})
+        yield sec, cid
+        server_module.db.quotes.delete_many({"organization_id": ORG_W})
+        server_module.db.clients.delete_one({"id": cid})
+        server_module.db.company_settings.delete_many({"organization_id": ORG_W})
+        server_module.db.api_keys.delete_one({"id": kid})
+        server_module.db.api_idempotency.delete_many({"organization_id": ORG_W})
+
+    def test_total_egale_subtotal_plus_taxes(self, client, ctx_prov):
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        c = r.json()
+        assert c["subtotal"] == 840.0
+        assert c["total"] == pytest.approx(c["subtotal"] + c["total_tax"])
+        assert c["total_tax"] == pytest.approx(125.79), "QC = 5 % TPS + 9,975 % TVQ"
+
+    def test_province_du_corps_prioritaire(self, client, ctx_prov):
+        """PFM doit pouvoir imposer la province, comme le fait le formulaire."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, province="ON"),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        assert r.json()["total_tax"] == pytest.approx(109.20), "ON = 13 % TVH"
+
+    def test_repli_sur_les_reglages(self, client, ctx_prov):
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid),
+                        headers={"X-API-Key": sec})
+        assert r.json()["total_tax"] == pytest.approx(125.79)
+
+    @pytest.mark.parametrize("mauvaise", ["Quebec", "quebec", "QUE", "XX", "Q", "ONT"])
+    def test_province_invalide_refusee(self, client, ctx_prov, mauvaise):
+        """RÉGRESSION. `calculate_taxes` retombe silencieusement sur 5 % de TPS pour toute
+        valeur inconnue : « Quebec » au lieu de « QC » amputerait la taxe des deux tiers,
+        sans erreur. Une soumission mal taxée part ensuite au client."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, province=mauvaise),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 422, f"« {mauvaise} » accepté à tort"
+
+    @pytest.mark.parametrize("vide", ["", "   ", None])
+    def test_province_vide_retombe_sur_les_reglages(self, client, ctx_prov, vide):
+        """Vide ou blanc = « non fournie ». Les deux doivent retomber, pas lever : sans
+        rognage préalable, "" retombait mais "  " levait un 422 pour la même intention."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, province=vide),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        assert r.json()["total_tax"] == pytest.approx(125.79), "repli sur QC des réglages"
+
+    def test_devise_toujours_cad(self, client, ctx_prov):
+        """Question (c) de PFM : l'appelant ne peut pas imposer une devise."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, currency="USD"),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        assert r.json()["currency"] == "CAD"
+
+
+class TestWebhookReactivation:
+    """Lot D §4 — PFM doit poser le secret AVANT que les événements partent, sinon son
+    endpoint répond 503 et les réessais abandonnent après ~8 h 45.
+
+    Sans réactivation, désactiver l'endpoint le temps de la bascule était sans retour.
+    """
+
+    @pytest.fixture
+    def cli(self):
+        from fastapi.testclient import TestClient
+        c = TestClient(server_module.app)
+        r = c.post("/api/auth/login",
+                   json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        assert r.status_code == 200, r.text
+        return c, {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    @pytest.fixture(autouse=True)
+    def _menage(self):
+        yield
+        server_module.db.webhook_endpoints.delete_many(
+            {"url": {"$regex": "^https://test-reactiv"}})
+
+    def test_reactivation_apres_desactivation(self, cli):
+        c, h = cli
+        eid = c.post("/api/org/webhooks",
+                     json={"url": "https://test-reactiv.example/h",
+                           "events": ["client.created"]}, headers=h).json()["id"]
+        assert c.delete(f"/api/org/webhooks/{eid}", headers=h).status_code == 204
+        assert server_module.db.webhook_endpoints.find_one({"id": eid})["actif"] is False
+
+        r = c.post(f"/api/org/webhooks/{eid}/enable", headers=h)
+        assert r.status_code == 200, r.text
+        assert server_module.db.webhook_endpoints.find_one({"id": eid})["actif"] is True
+
+    def test_reactivation_efface_la_derniere_erreur(self, cli):
+        """Une erreur d'une période où le secret n'était pas encore posé chez le
+        destinataire ne doit pas rester affichée après la remise en service."""
+        c, h = cli
+        eid = c.post("/api/org/webhooks",
+                     json={"url": "https://test-reactiv2.example/h",
+                           "events": ["client.created"]}, headers=h).json()["id"]
+        server_module.db.webhook_endpoints.update_one(
+            {"id": eid}, {"$set": {"actif": False, "last_error": "HTTP 503"}})
+        c.post(f"/api/org/webhooks/{eid}/enable", headers=h)
+        ep = server_module.db.webhook_endpoints.find_one({"id": eid})
+        assert ep["actif"] is True
+        assert ep["last_error"] is None
+
+    def test_reactivation_autre_organisation_404(self, cli):
+        c, h = cli
+        etranger = str(uuid.uuid4())
+        server_module.db.webhook_endpoints.insert_one({
+            "id": etranger, "organization_id": "org-tierce-reactiv",
+            "url": "https://test-reactiv-etranger.example/h", "secret": "whsec_x",
+            "events": ["client.created"], "actif": False,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "last_success_at": None, "last_error": None})
+        try:
+            assert c.post(f"/api/org/webhooks/{etranger}/enable",
+                          headers=h).status_code == 404
+        finally:
+            server_module.db.webhook_endpoints.delete_one({"id": etranger})
