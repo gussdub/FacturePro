@@ -15,6 +15,7 @@ import sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import server as server_module
@@ -260,3 +261,244 @@ class TestBrouillonsExclusDuTableauDeBord:
             assert n == 2, f"attendu 2 (pending + accepted), obtenu {n}"
         finally:
             server_module.db.quotes.delete_many({"id": {"$in": ids}})
+
+
+class TestProvinceEtTaxes:
+    """Lot D — questions (b) de PFM sur les taxes.
+
+    Le chemin PUBLIC prend la province du formulaire, par document. Mon endpoint
+    d'intégration la prenait des réglages de l'organisation : divergence non documentée, et
+    PFM n'avait aucun moyen de la contrôler. La province devient donc un paramètre optionnel
+    du corps, avec repli sur les réglages.
+    """
+
+    @pytest.fixture
+    def ctx_prov(self):
+        server_module._API_KEY_RATE.clear()
+        kid, sec = _cle(ORG_W, ["quotes:write", "quotes:read"])
+        cid = f"test-prov-{uuid.uuid4().hex[:6]}"
+        server_module.db.clients.insert_one({
+            "id": cid, "organization_id": ORG_W, "name": "Client province",
+            "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00"})
+        server_module.db.company_settings.insert_one({
+            "id": f"st-{uuid.uuid4().hex[:6]}", "organization_id": ORG_W, "province": "QC"})
+        yield sec, cid
+        server_module.db.quotes.delete_many({"organization_id": ORG_W})
+        server_module.db.clients.delete_one({"id": cid})
+        server_module.db.company_settings.delete_many({"organization_id": ORG_W})
+        server_module.db.api_keys.delete_one({"id": kid})
+        server_module.db.api_idempotency.delete_many({"organization_id": ORG_W})
+
+    def test_total_egale_subtotal_plus_taxes(self, client, ctx_prov):
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        c = r.json()
+        assert c["subtotal"] == 840.0
+        assert c["total"] == pytest.approx(c["subtotal"] + c["total_tax"])
+        assert c["total_tax"] == pytest.approx(125.79), "QC = 5 % TPS + 9,975 % TVQ"
+
+    def test_province_du_corps_prioritaire(self, client, ctx_prov):
+        """PFM doit pouvoir imposer la province, comme le fait le formulaire."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, province="ON"),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        assert r.json()["total_tax"] == pytest.approx(109.20), "ON = 13 % TVH"
+
+    def test_repli_sur_les_reglages(self, client, ctx_prov):
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid),
+                        headers={"X-API-Key": sec})
+        assert r.json()["total_tax"] == pytest.approx(125.79)
+
+    @pytest.mark.parametrize("mauvaise", ["Quebec", "quebec", "QUE", "XX", "Q", "ONT"])
+    def test_province_invalide_refusee(self, client, ctx_prov, mauvaise):
+        """RÉGRESSION. `calculate_taxes` retombe silencieusement sur 5 % de TPS pour toute
+        valeur inconnue : « Quebec » au lieu de « QC » amputerait la taxe des deux tiers,
+        sans erreur. Une soumission mal taxée part ensuite au client."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, province=mauvaise),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 422, f"« {mauvaise} » accepté à tort"
+
+    @pytest.mark.parametrize("vide", ["", "   ", None])
+    def test_province_vide_retombe_sur_les_reglages(self, client, ctx_prov, vide):
+        """Vide ou blanc = « non fournie ». Les deux doivent retomber, pas lever : sans
+        rognage préalable, "" retombait mais "  " levait un 422 pour la même intention."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, province=vide),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        assert r.json()["total_tax"] == pytest.approx(125.79), "repli sur QC des réglages"
+
+    def test_devise_toujours_cad(self, client, ctx_prov):
+        """Question (c) de PFM : l'appelant ne peut pas imposer une devise."""
+        sec, cid = ctx_prov
+        r = client.post("/api/v1/integration/quotes", json=_corps(cid, currency="USD"),
+                        headers={"X-API-Key": sec})
+        assert r.status_code == 201, r.text
+        assert r.json()["currency"] == "CAD"
+
+
+class TestWebhookReactivation:
+    """Lot D §4 — PFM doit poser le secret AVANT que les événements partent, sinon son
+    endpoint répond 503 et les réessais abandonnent après ~8 h 45.
+
+    Sans réactivation, désactiver l'endpoint le temps de la bascule était sans retour.
+    """
+
+    @pytest.fixture
+    def cli(self):
+        from fastapi.testclient import TestClient
+        c = TestClient(server_module.app)
+        r = c.post("/api/auth/login",
+                   json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        assert r.status_code == 200, r.text
+        return c, {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+    @pytest.fixture(autouse=True)
+    def _menage(self):
+        yield
+        server_module.db.webhook_endpoints.delete_many(
+            {"url": {"$regex": "^https://test-reactiv"}})
+
+    def test_reactivation_apres_desactivation(self, cli):
+        c, h = cli
+        eid = c.post("/api/org/webhooks",
+                     json={"url": "https://test-reactiv.example/h",
+                           "events": ["client.created"]}, headers=h).json()["id"]
+        assert c.delete(f"/api/org/webhooks/{eid}", headers=h).status_code == 204
+        assert server_module.db.webhook_endpoints.find_one({"id": eid})["actif"] is False
+
+        r = c.post(f"/api/org/webhooks/{eid}/enable", headers=h)
+        assert r.status_code == 200, r.text
+        assert server_module.db.webhook_endpoints.find_one({"id": eid})["actif"] is True
+
+    def test_reactivation_efface_la_derniere_erreur(self, cli):
+        """Une erreur d'une période où le secret n'était pas encore posé chez le
+        destinataire ne doit pas rester affichée après la remise en service."""
+        c, h = cli
+        eid = c.post("/api/org/webhooks",
+                     json={"url": "https://test-reactiv2.example/h",
+                           "events": ["client.created"]}, headers=h).json()["id"]
+        server_module.db.webhook_endpoints.update_one(
+            {"id": eid}, {"$set": {"actif": False, "last_error": "HTTP 503"}})
+        c.post(f"/api/org/webhooks/{eid}/enable", headers=h)
+        ep = server_module.db.webhook_endpoints.find_one({"id": eid})
+        assert ep["actif"] is True
+        assert ep["last_error"] is None
+
+    def test_reactivation_autre_organisation_404(self, cli):
+        c, h = cli
+        etranger = str(uuid.uuid4())
+        server_module.db.webhook_endpoints.insert_one({
+            "id": etranger, "organization_id": "org-tierce-reactiv",
+            "url": "https://test-reactiv-etranger.example/h", "secret": "whsec_x",
+            "events": ["client.created"], "actif": False,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "last_success_at": None, "last_error": None})
+        try:
+            assert c.post(f"/api/org/webhooks/{etranger}/enable",
+                          headers=h).status_code == 404
+        finally:
+            server_module.db.webhook_endpoints.delete_one({"id": etranger})
+
+
+class TestValidUntil:
+    """Lot D — question (d) de PFM. `valid_until` n'était pas validée du tout.
+
+    Le vrai danger n'est pas une date malformée, c'est une date PASSÉE : le brouillon arrive
+    déjà expiré, Guillaume l'ouvre, l'envoie, et la caserne reçoit une soumission périmée.
+    Une création par programme rend ce cas fréquent (décalage de fuseau, période mal calculée).
+
+    Le chemin PUBLIC n'est délibérément PAS touché : un humain qui saisit une date passée peut
+    le faire exprès (antidatage), et resserrer un formulaire déployé casserait son usage.
+    """
+
+    @pytest.fixture
+    def ctx_vu(self):
+        server_module._API_KEY_RATE.clear()
+        kid, sec = _cle(ORG_W, ["quotes:write", "quotes:read"])
+        cid = f"test-vu-{uuid.uuid4().hex[:6]}"
+        server_module.db.clients.insert_one({
+            "id": cid, "organization_id": ORG_W, "name": "Client valid_until",
+            "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00"})
+        yield sec, cid
+        server_module.db.quotes.delete_many({"organization_id": ORG_W})
+        server_module.db.clients.delete_one({"id": cid})
+        server_module.db.api_keys.delete_one({"id": kid})
+        server_module.db.api_idempotency.delete_many({"organization_id": ORG_W})
+
+    def _poste(self, client, sec, cid, **kw):
+        return client.post("/api/v1/integration/quotes", json=_corps(cid, **kw),
+                           headers={"X-API-Key": sec})
+
+    def test_date_future_acceptee(self, client, ctx_vu):
+        sec, cid = ctx_vu
+        futur = (datetime.now(timezone.utc) + timedelta(days=90)).date().isoformat()
+        r = self._poste(client, sec, cid, valid_until=futur)
+        assert r.status_code == 201, r.text
+        assert r.json()["valid_until"] == futur
+
+    def test_aujourd_hui_accepte(self, client, ctx_vu):
+        """Une soumission valide le jour même est légitime — la borne est le passé STRICT."""
+        sec, cid = ctx_vu
+        r = self._poste(client, sec, cid,
+                        valid_until=datetime.now(timezone.utc).date().isoformat())
+        assert r.status_code == 201, r.text
+
+    def test_date_passee_refusee(self, client, ctx_vu):
+        """LE cas qui compte : un brouillon déjà expiré à la création."""
+        sec, cid = ctx_vu
+        passe = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+        r = self._poste(client, sec, cid, valid_until=passe)
+        assert r.status_code == 422, r.text
+        assert "valid_until" in r.text
+
+    @pytest.mark.parametrize("mauvaise", ["31/01/2027", "2027-13-01", "2027-02-30",
+                                          "demain", "2027", "janvier"])
+    def test_format_invalide_refuse(self, client, ctx_vu, mauvaise):
+        sec, cid = ctx_vu
+        assert self._poste(client, sec, cid, valid_until=mauvaise).status_code == 422
+
+    def test_forme_compacte_normalisee(self, client, ctx_vu):
+        """`date.fromisoformat` accepte « 20270131 » en Python 3.11. Stockée telle quelle, PFM
+        relirait un format différent de celui du contrat. On normalise en AAAA-MM-JJ."""
+        sec, cid = ctx_vu
+        futur = datetime.now(timezone.utc) + timedelta(days=200)
+        r = self._poste(client, sec, cid, valid_until=futur.strftime("%Y%m%d"))
+        assert r.status_code == 201, r.text
+        assert r.json()["valid_until"] == futur.date().isoformat()
+
+    def test_trop_loin_refusee(self, client, ctx_vu):
+        """Borne haute contre la faute de frappe d'année (« 20270 »). Une soumission valide
+        dix ans n'a pas de sens commercial."""
+        sec, cid = ctx_vu
+        loin = (datetime.now(timezone.utc) + timedelta(days=365 * 6)).date().isoformat()
+        r = self._poste(client, sec, cid, valid_until=loin)
+        assert r.status_code == 422, r.text
+
+    @pytest.mark.parametrize("vide", ["", "   ", None])
+    def test_omise_reste_acceptee(self, client, ctx_vu, vide):
+        """Rétrocompatible : une soumission sans date de validité est légitime (offre
+        ouverte). Omise, elle reste vide — pas de 422, pas de défaut inventé."""
+        sec, cid = ctx_vu
+        r = self._poste(client, sec, cid, valid_until=vide)
+        assert r.status_code == 201, r.text
+        assert r.json()["valid_until"] == ""
+
+    def test_chemin_public_non_touche(self, client):
+        """NON-RÉGRESSION explicite : le formulaire déployé accepte toujours une date passée."""
+        r = client.post("/api/auth/login",
+                        json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        cree = client.post("/api/quotes", json={
+            "client_id": "x", "valid_until": "2020-01-01",
+            "items": [{"description": "d", "quantity": 1, "unit_price": 10}]}, headers=h)
+        assert cree.status_code == 200, cree.text
+        try:
+            assert cree.json()["valid_until"] == "2020-01-01"
+        finally:
+            server_module.db.quotes.delete_one({"id": cree.json()["id"]})
