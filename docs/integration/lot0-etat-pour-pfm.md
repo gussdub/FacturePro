@@ -135,6 +135,14 @@ Réponse `201`, au format d'une soumission lue (les 13 champs ci-dessus).
   l'organisation. **Validé** contre les 13 codes à deux lettres : « Quebec » au lieu de « QC » est
   refusé en `422` et non accepté à 5 % de TPS au lieu de 14,975 %.
 - `currency` **ne peut pas être imposée** : une soumission créée par l'API est toujours en `CAD`.
+- `valid_until` est **validée** (2026-09-28) : format `AAAA-MM-JJ`, **jamais dans le passé**,
+  maximum 5 ans. La forme compacte `20270131` est acceptée mais **normalisée** en `2027-01-31` —
+  tu relis donc toujours le format du contrat. Omise ou vide → chaîne vide, **pas** de `422` et
+  pas de défaut inventé : une soumission sans date de validité reste légitime.
+
+  Le rejet du passé est le point utile : un brouillon né expiré serait ouvert puis envoyé, et la
+  caserne recevrait une soumission périmée. Le chemin public n'est **pas** soumis à cette règle —
+  un humain peut antidater volontairement.
 - `external_ref` est **libre**. Stocké tel quel, relu à l'identique, y compris les objets
   imbriqués. Sers-t'en pour reconnaître tes propres soumissions et ne pas en produire deux pour la
   même période.

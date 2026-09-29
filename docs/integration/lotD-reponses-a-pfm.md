@@ -102,15 +102,36 @@ facture est **exacte** et vaut pour les factures créées **dans FacturePro** �
 soumissions que tu crées. Ne sommer que le CAD est la bonne décision. Si `total_cad` t'est utile
 un jour, demande : c'est un ajout additif, sans risque pour toi.
 
-### d) `valid_until` — aucune contrainte aujourd'hui
+### d) `valid_until` — maintenant validée (mise à jour du 2026-09-28)
 
-Pas de validation. Pas d'exigence de date future, pas de maximum. Omise, elle vaut la **chaîne
-vide**, et il n'y a pas de `422`.
+Ma première réponse disait « aucune contrainte », en signalant que c'était une faiblesse.
+Guillaume a tranché : **elle est validée**, et c'est fait avant que tu écrives ton lot D plutôt
+qu'après.
 
-Je le dis franchement parce que c'est une faiblesse, pas une fonctionnalité : une date passée ou
-malformée est acceptée telle quelle. Envoie une date ISO `AAAA-MM-JJ` dans le futur et tu es en
-terrain sûr. Dis-moi si tu veux que je la valide — je n'ai pas voulu resserrer un champ sans te
-prévenir, tu aurais découvert le `422` en production.
+| Cas | Comportement |
+|---|---|
+| `2027-01-31` dans le futur | accepté |
+| aujourd'hui | accepté — la borne est le passé **strict** |
+| hier ou avant | **`422`** |
+| `20270131` (forme compacte) | accepté, **normalisé** en `2027-01-31` |
+| `31/01/2027`, `2027-13-01`, `demain` | **`422`** |
+| au-delà de 5 ans | **`422`** |
+| omise, vide ou blanche | `""` — **pas** de `422`, pas de défaut inventé |
+
+Trois choses à en retenir pour ton code :
+
+1. **Envoie du `AAAA-MM-JJ`.** La forme compacte passe, mais tu la reliras normalisée — autant
+   éviter la surprise.
+2. **Le rejet du passé est le point utile.** Un brouillon né expiré serait ouvert par Guillaume,
+   envoyé, et la caserne recevrait une soumission périmée. Une création par programme rend ce cas
+   fréquent (décalage de fuseau, période mal dérivée). Si tu dérives `valid_until` d'une période
+   de renouvellement, vérifie ton calcul avant de poster — sinon tu prendras un `422` que tu ne
+   sauras pas expliquer.
+3. **Omise reste valide.** Une soumission sans date de validité est une offre ouverte, pas une
+   erreur. Je n'invente pas de défaut à ta place.
+
+Le chemin **public** n'est délibérément pas soumis à ces règles : un humain peut antidater
+volontairement, et resserrer un formulaire déployé casserait son usage.
 
 ### e) `external_ref` n'est **pas** dédupliqué. C'est à toi de t'en protéger.
 
@@ -182,6 +203,8 @@ Trois correctifs, tous testés et vérifiés par mutation :
    frappe ne peut plus produire une soumission sous-taxée en silence.
 3. `POST /api/org/webhooks/{id}/enable`, sans quoi la mise en service sûre que tu décris était
    impossible.
+4. `valid_until` validée et normalisée (cf. §3d ci-dessus) — seule modification qui **resserre**
+   le contrat. Faite maintenant, avant ton lot D, pour que tu ne la découvres pas en production.
 
 Rien de ce qui existait ne change de forme. Ton lot D peut s'écrire sur le contrat tel qu'il est,
 avec `province` en option et la déduplication sur l'`id` du corps.

@@ -5413,6 +5413,51 @@ def integration_list_invoices(
                              updated_since, limit, cursor)
 
 
+# [LOT D] Bornes de `valid_until` sur le chemin API.
+#
+# Le chemin PUBLIC n'est délibérément PAS soumis à ces règles : un humain qui saisit une date
+# passée peut le faire exprès (antidatage), et resserrer un formulaire déployé casserait son
+# usage. Une création par PROGRAMME a un profil de risque différent — une date passée y est
+# presque toujours un défaut de calcul (décalage de fuseau, période mal dérivée).
+_QUOTE_VALID_UNTIL_MAX_YEARS = 5
+
+
+def _integration_parse_valid_until(brut):
+    """Valide et NORMALISE `valid_until`. Renvoie "" si non fournie.
+
+    Trois règles, dans cet ordre :
+      1. vide ou blanc -> "" (une soumission sans date de validité est légitime : offre
+         ouverte). Rétrocompatible, et aucun défaut n'est inventé à la place de l'appelant ;
+      2. format AAAA-MM-JJ obligatoire, mais la forme compacte « 20270131 » est NORMALISÉE —
+         `date.fromisoformat` l'accepte en Python 3.11, et la stocker telle quelle ferait
+         relire à l'appelant un format différent de celui du contrat ;
+      3. jamais dans le passé, et pas au-delà de 5 ans. Le passé est le cas qui compte : un
+         brouillon déjà expiré à la création est ouvert puis envoyé, et la caserne reçoit une
+         soumission périmée. La borne haute attrape la faute de frappe d'année.
+    """
+    from datetime import date as _date
+    texte = str(brut or "").strip()
+    if not texte:
+        return ""
+    try:
+        parsee = _date.fromisoformat(texte)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            422, "valid_until invalide : format attendu AAAA-MM-JJ "
+                 f"(reçu « {texte[:40]} »)")
+    aujourdhui = datetime.now(timezone.utc).date()
+    if parsee < aujourdhui:
+        raise HTTPException(
+            422, f"valid_until est dans le passé ({parsee.isoformat()}). Une soumission créée "
+                 "par l'API ne doit pas naître expirée.")
+    limite = aujourdhui.replace(year=aujourdhui.year + _QUOTE_VALID_UNTIL_MAX_YEARS)
+    if parsee > limite:
+        raise HTTPException(
+            422, f"valid_until trop éloignée ({parsee.isoformat()}). Maximum "
+                 f"{_QUOTE_VALID_UNTIL_MAX_YEARS} ans, soit {limite.isoformat()}.")
+    return parsee.isoformat()      # canonique AAAA-MM-JJ
+
+
 @app.post("/api/v1/integration/quotes", status_code=201)
 def integration_create_quote(
         payload: dict,
@@ -5480,7 +5525,7 @@ def integration_create_quote(
         "client_id": client_id,
         "quote_number": _next_document_number("quotes", "quote_number", "QUO", scope),
         "issue_date": payload.get("issue_date") or datetime.now(timezone.utc).isoformat(),
-        "valid_until": payload.get("valid_until") or "",
+        "valid_until": _integration_parse_valid_until(payload.get("valid_until")),
         "items": items,
         "subtotal": round(subtotal, 2),
         "gst_amount": gst, "pst_amount": pst, "hst_amount": hst,

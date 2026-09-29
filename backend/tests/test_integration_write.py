@@ -15,6 +15,7 @@ import sys as _sys
 _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import server as server_module
@@ -403,3 +404,101 @@ class TestWebhookReactivation:
                           headers=h).status_code == 404
         finally:
             server_module.db.webhook_endpoints.delete_one({"id": etranger})
+
+
+class TestValidUntil:
+    """Lot D — question (d) de PFM. `valid_until` n'était pas validée du tout.
+
+    Le vrai danger n'est pas une date malformée, c'est une date PASSÉE : le brouillon arrive
+    déjà expiré, Guillaume l'ouvre, l'envoie, et la caserne reçoit une soumission périmée.
+    Une création par programme rend ce cas fréquent (décalage de fuseau, période mal calculée).
+
+    Le chemin PUBLIC n'est délibérément PAS touché : un humain qui saisit une date passée peut
+    le faire exprès (antidatage), et resserrer un formulaire déployé casserait son usage.
+    """
+
+    @pytest.fixture
+    def ctx_vu(self):
+        server_module._API_KEY_RATE.clear()
+        kid, sec = _cle(ORG_W, ["quotes:write", "quotes:read"])
+        cid = f"test-vu-{uuid.uuid4().hex[:6]}"
+        server_module.db.clients.insert_one({
+            "id": cid, "organization_id": ORG_W, "name": "Client valid_until",
+            "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00"})
+        yield sec, cid
+        server_module.db.quotes.delete_many({"organization_id": ORG_W})
+        server_module.db.clients.delete_one({"id": cid})
+        server_module.db.api_keys.delete_one({"id": kid})
+        server_module.db.api_idempotency.delete_many({"organization_id": ORG_W})
+
+    def _poste(self, client, sec, cid, **kw):
+        return client.post("/api/v1/integration/quotes", json=_corps(cid, **kw),
+                           headers={"X-API-Key": sec})
+
+    def test_date_future_acceptee(self, client, ctx_vu):
+        sec, cid = ctx_vu
+        futur = (datetime.now(timezone.utc) + timedelta(days=90)).date().isoformat()
+        r = self._poste(client, sec, cid, valid_until=futur)
+        assert r.status_code == 201, r.text
+        assert r.json()["valid_until"] == futur
+
+    def test_aujourd_hui_accepte(self, client, ctx_vu):
+        """Une soumission valide le jour même est légitime — la borne est le passé STRICT."""
+        sec, cid = ctx_vu
+        r = self._poste(client, sec, cid,
+                        valid_until=datetime.now(timezone.utc).date().isoformat())
+        assert r.status_code == 201, r.text
+
+    def test_date_passee_refusee(self, client, ctx_vu):
+        """LE cas qui compte : un brouillon déjà expiré à la création."""
+        sec, cid = ctx_vu
+        passe = (datetime.now(timezone.utc) - timedelta(days=1)).date().isoformat()
+        r = self._poste(client, sec, cid, valid_until=passe)
+        assert r.status_code == 422, r.text
+        assert "valid_until" in r.text
+
+    @pytest.mark.parametrize("mauvaise", ["31/01/2027", "2027-13-01", "2027-02-30",
+                                          "demain", "2027", "janvier"])
+    def test_format_invalide_refuse(self, client, ctx_vu, mauvaise):
+        sec, cid = ctx_vu
+        assert self._poste(client, sec, cid, valid_until=mauvaise).status_code == 422
+
+    def test_forme_compacte_normalisee(self, client, ctx_vu):
+        """`date.fromisoformat` accepte « 20270131 » en Python 3.11. Stockée telle quelle, PFM
+        relirait un format différent de celui du contrat. On normalise en AAAA-MM-JJ."""
+        sec, cid = ctx_vu
+        futur = datetime.now(timezone.utc) + timedelta(days=200)
+        r = self._poste(client, sec, cid, valid_until=futur.strftime("%Y%m%d"))
+        assert r.status_code == 201, r.text
+        assert r.json()["valid_until"] == futur.date().isoformat()
+
+    def test_trop_loin_refusee(self, client, ctx_vu):
+        """Borne haute contre la faute de frappe d'année (« 20270 »). Une soumission valide
+        dix ans n'a pas de sens commercial."""
+        sec, cid = ctx_vu
+        loin = (datetime.now(timezone.utc) + timedelta(days=365 * 6)).date().isoformat()
+        r = self._poste(client, sec, cid, valid_until=loin)
+        assert r.status_code == 422, r.text
+
+    @pytest.mark.parametrize("vide", ["", "   ", None])
+    def test_omise_reste_acceptee(self, client, ctx_vu, vide):
+        """Rétrocompatible : une soumission sans date de validité est légitime (offre
+        ouverte). Omise, elle reste vide — pas de 422, pas de défaut inventé."""
+        sec, cid = ctx_vu
+        r = self._poste(client, sec, cid, valid_until=vide)
+        assert r.status_code == 201, r.text
+        assert r.json()["valid_until"] == ""
+
+    def test_chemin_public_non_touche(self, client):
+        """NON-RÉGRESSION explicite : le formulaire déployé accepte toujours une date passée."""
+        r = client.post("/api/auth/login",
+                        json={"email": "gussdub@gmail.com", "password": "testpass123"})
+        h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+        cree = client.post("/api/quotes", json={
+            "client_id": "x", "valid_until": "2020-01-01",
+            "items": [{"description": "d", "quantity": 1, "unit_price": 10}]}, headers=h)
+        assert cree.status_code == 200, cree.text
+        try:
+            assert cree.json()["valid_until"] == "2020-01-01"
+        finally:
+            server_module.db.quotes.delete_one({"id": cree.json()["id"]})
