@@ -56,7 +56,10 @@ const QuotesPage = () => {
 
   const filteredQuotes = useMemo(() => {
     let list = [...quotes];
-    if (filterStatus !== 'all') list = list.filter(q => q.status === filterStatus);
+    // Une soumission convertie en facture vit désormais dans Factures : on la masque de la vue
+    // par défaut. Elle reste en base et accessible via le filtre « Convertie ».
+    if (filterStatus === 'all') list = list.filter(q => q.status !== 'converted');
+    else list = list.filter(q => q.status === filterStatus);
     // Recherche rapide (client, n°, montant, date, statut) — insensible casse + accents.
     const query = norm(search).trim();
     if (query) {
@@ -286,7 +289,7 @@ const QuotesPage = () => {
         </div>
         <select data-testid="filter-status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
           style={{ ...inputStyle, width: 'auto', minWidth: '160px' }}>
-          <option value="all">Tous les statuts</option>
+          <option value="all">Toutes (sauf converties)</option>
           {Object.entries(STATUS_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </select>
         <select data-testid="sort-quotes" value={sortBy} onChange={e => setSortBy(e.target.value)}
@@ -305,7 +308,9 @@ const QuotesPage = () => {
       ) : filteredQuotes.length === 0 ? (
         <div style={{ background: '#fff', border: '2px dashed #d1d5db', borderRadius: '12px', padding: '48px', textAlign: 'center' }}>
           <h3 style={{ fontSize: '20px', fontWeight: '700', color: '#374151', margin: '0 0 8px' }}>Aucune soumission</h3>
-          <p style={{ color: '#6b7280', margin: '0 0 16px' }}>Créez votre première soumission pour commencer</p>
+          <p style={{ color: '#6b7280', margin: '0 0 16px' }}>
+            {quotes.length === 0 ? 'Créez votre première soumission pour commencer' : 'Aucune soumission ne correspond à ce filtre'}
+          </p>
           <button onClick={openNewForm} style={btnPrimary}>Créer une soumission</button>
         </div>
       ) : (
