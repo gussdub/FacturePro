@@ -21,6 +21,8 @@ import { PrivacyPolicyPage, TermsPage } from './pages/LegalPages';
 import SsoCallbackPage from './pages/SsoCallbackPage';
 import MfaSettings from './components/MfaSettings';
 
+const PUBLIC_PATHS = ['/accept-invite', '/privacy', '/cgu', '/sso/callback'];
+
 function App() {
   const [currentRoute, setCurrentRoute] = useState(
     window.location.pathname === '/' ? '/dashboard' : window.location.pathname
@@ -34,6 +36,14 @@ function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Après une déconnexion (ou un jeton expiré), on revient à l'accueil : la prochaine connexion
+  // atterrit sur le tableau de bord et non sur la dernière page visitée par la session précédente.
+  useEffect(() => {
+    if (isAuthenticated || PUBLIC_PATHS.includes(window.location.pathname)) return;
+    if (window.location.pathname !== '/') window.history.replaceState({}, '', '/');
+    setCurrentRoute('/dashboard');
+  }, [isAuthenticated]);
 
   const navigate = (path) => {
     window.history.pushState({}, '', path);

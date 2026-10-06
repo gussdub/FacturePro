@@ -76,11 +76,14 @@ export const AuthProvider = ({ children }) => {
     }
   }, [token, fetchUserAndOrg]);
 
+  // On ne bascule `token` (donc `isAuthenticated`) qu'APRÈS avoir chargé l'utilisateur et ses
+  // permissions. Dans l'ordre inverse, l'app se rendait un instant authentifiée avec
+  // `permissions = []` et chaque RouteGuard affichait « Accès refusé » le temps du fetch.
   const _completeLogin = async (access_token) => {
-    setToken(access_token);
     localStorage.setItem('token', access_token);
     axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
     await fetchUserAndOrg(access_token);
+    if (localStorage.getItem('token') === access_token) setToken(access_token);
   };
 
   // [Révocation de session] Bascule vers un jeton RÉ-ÉMIS (après « déconnecter les autres sessions »
@@ -122,11 +125,7 @@ export const AuthProvider = ({ children }) => {
   const register = async (email, password, company_name) => {
     try {
       const response = await axios.post(`${BACKEND_URL}/api/auth/register`, { email, password, company_name });
-      const { access_token } = response.data;
-      setToken(access_token);
-      localStorage.setItem('token', access_token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      await fetchUserAndOrg(access_token);
+      await _completeLogin(response.data.access_token);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.response?.data?.detail || "Erreur d'inscription" };
@@ -138,11 +137,7 @@ export const AuthProvider = ({ children }) => {
       const response = await axios.post(`${BACKEND_URL}/api/auth/accept-invite`, {
         token: inviteToken, password, pipeda_consent,
       });
-      const { access_token } = response.data;
-      setToken(access_token);
-      localStorage.setItem('token', access_token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      await fetchUserAndOrg(access_token);
+      await _completeLogin(response.data.access_token);
       return { success: true };
     } catch (error) {
       return { success: false, error: error.response?.data?.detail || "Erreur lors de l'acceptation" };
