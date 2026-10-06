@@ -4,6 +4,8 @@ import { DollarSign, AlertTriangle } from 'lucide-react';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
 import PaymentModal from '../components/PaymentModal';
+import DocumentTotals from '../components/DocumentTotals';
+import { computeInvoiceTotals, computeSelectionTotals } from '../utils/documentTotals';
 import useIsMobile from '../hooks/useIsMobile';
 
 const STATUS_CONFIG = {
@@ -98,6 +100,9 @@ const InvoicesPage = () => {
     });
     return list;
   }, [invoices, filterStatus, sortBy, search, clients]);
+
+  const invoiceTotals = useMemo(() => computeInvoiceTotals(invoices), [invoices]);
+  const invoiceSelection = useMemo(() => computeSelectionTotals(filteredInvoices), [filteredInvoices]);
 
   const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Client inconnu';
 
@@ -292,6 +297,18 @@ const InvoicesPage = () => {
 
       {error && <div data-testid="invoice-error" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setError('')}>{error}</div>}
       {success && <div data-testid="invoice-success" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setSuccess('')}>{success}</div>}
+
+      {/* Totaux cumulatifs */}
+      {!loading && (
+        <DocumentTotals testId="invoice-totals"
+          cards={[
+            { label: 'Factures produites', value: invoiceTotals.count, sub: invoiceTotals.draftCount ? `dont ${invoiceTotals.draftCount} brouillon(s)` : undefined },
+            { label: 'Total facturé', value: formatCurrency(invoiceTotals.billedCad, 'CAD'), sub: 'TTC, hors brouillons' },
+            { label: 'Encaissé', value: formatCurrency(invoiceTotals.paidCad, 'CAD'), accent: '#166534' },
+            { label: 'À recevoir', value: formatCurrency(invoiceTotals.outstandingCad, 'CAD'), accent: '#b45309' },
+          ]}
+          selection={invoiceSelection.count !== invoiceTotals.count ? { ...invoiceSelection, noun: 'facture(s)' } : null} />
+      )}
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>

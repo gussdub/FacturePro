@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
 import CurrencySelector from '../components/CurrencySelector';
+import DocumentTotals from '../components/DocumentTotals';
+import { computeQuoteTotals, computeSelectionTotals } from '../utils/documentTotals';
 
 const STATUS_CONFIG = {
   pending:   { label: 'En attente', bg: '#fef3c7', color: '#92400e', icon: '⏳' },
@@ -85,6 +87,9 @@ const QuotesPage = () => {
     });
     return list;
   }, [quotes, filterStatus, sortBy, search, clients]);
+
+  const quoteTotals = useMemo(() => computeQuoteTotals(quotes), [quotes]);
+  const quoteSelection = useMemo(() => computeSelectionTotals(filteredQuotes), [filteredQuotes]);
 
   const getClientName = (id) => clients.find(c => c.id === id)?.name || 'Client inconnu';
 
@@ -257,6 +262,17 @@ const QuotesPage = () => {
 
       {error && <div data-testid="quote-error" style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setError('')}>{error}</div>}
       {success && <div data-testid="quote-success" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px', fontSize: '14px' }} onClick={() => setSuccess('')}>{success}</div>}
+
+      {/* Totaux cumulatifs */}
+      {!loading && (
+        <DocumentTotals testId="quote-totals"
+          cards={[
+            { label: 'Soumissions produites', value: quoteTotals.count, sub: 'converties incluses' },
+            { label: 'Montant total soumis', value: formatCurrency(quoteTotals.totalCad, 'CAD'), sub: 'TTC, en CAD' },
+            { label: 'Acceptées ou converties', value: formatCurrency(quoteTotals.wonCad, 'CAD'), sub: `${quoteTotals.wonCount} soumission(s)`, accent: '#166534' },
+          ]}
+          selection={quoteSelection.count !== quoteTotals.count ? { ...quoteSelection, noun: 'soumission(s)' } : null} />
+      )}
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
