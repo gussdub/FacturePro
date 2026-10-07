@@ -108,6 +108,10 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-10-07 — État des résultats tiré du grand livre + bilan qui inclut le résultat non clôturé (demande de la comptable)**
+  - **État des résultats GL** : `GET /api/ledger/income-statement{,/pdf}?start=&end=` (défaut : début d'exercice → aujourd'hui), onglet « État des résultats » dans `LedgerPage`. Lit **toutes** les écritures postées (auto + manuelles, ex. frais bancaires), contrairement au P&L des Rapports qui lit les documents sources. Les **écritures de clôture** (qui touchent un compte `sub_type=retained_earnings` ET un compte de résultat, cf. `_is_closing_entry`) sont exclues, sinon la période qui les contient afficherait 0.
+  - **Bilan** : en plus du résultat de l'exercice courant (désormais ventilé revenus / dépenses), ajoute « Résultats d'exercices antérieurs non clôturés » = cumul brut des comptes de résultat − exercice courant. Avant, un exercice passé non viré aux BNR rendait le bilan **déséquilibré**. Dès que la comptable passe sa clôture (manuelle, jamais automatisée), la ligne tombe à 0 et le montant apparaît dans 3200. Tests : `test_ledger_income_statement.py`.
+
 - **2026-09-15 — Bureau à domicile : prorata, plafond, report, limite québécoise et CTI/RTI (12 commits)**
   - **Spec** : `docs/superpowers/specs/2026-09-15-bureau-domicile-design.md` · **Plan** : `docs/superpowers/plans/2026-09-15-bureau-domicile.md` (9 tâches, TDD strict, subagent-driven).
   - **La demande** était d'ajouter un réglage pour proratiser l'électricité selon la superficie du bureau, « cochable comme le télécom ». La prémisse fiscale était juste — mais **le mécanisme demandé aurait produit un montant faux**.
