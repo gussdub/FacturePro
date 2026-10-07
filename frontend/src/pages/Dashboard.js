@@ -5,7 +5,7 @@ import { BACKEND_URL, formatCurrency } from '../config';
 import QuickActionCard from '../components/QuickActionCard';
 import useIsMobile from '../hooks/useIsMobile';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import { Users, FileText, FilePen, DollarSign, AlertTriangle, CheckCircle, ArrowUpRight, Receipt, Wallet } from 'lucide-react';
+import { Users, FileText, FilePen, DollarSign, AlertTriangle, CheckCircle, ArrowUpRight, Receipt, Wallet, TrendingUp } from 'lucide-react';
 
 const CHART_COLORS = ['#09090b', '#52525b', '#a1a1aa', '#002FA7', '#d4d4d8', '#71717a', '#3f3f46', '#e4e4e7'];
 
@@ -133,6 +133,44 @@ const Dashboard = ({ navigate }) => {
           <div style={{ fontSize: '11px', color: '#d97706', marginTop: '4px' }}>{outstanding.invoice_count} facture(s)</div>
         </div>
       </div>
+
+      {/* Conversion soumissions → factures */}
+      {(() => {
+        const d = stats.data || {};
+        const totalQuotes = d.total_quotes || 0;
+        const converted = d.quotes_converted || 0;
+        const rate = d.quote_conversion_rate || 0;
+        const clientsConverted = d.clients_converted || 0;
+        const clientsQuoted = d.clients_quoted || 0;
+        const fmtRate = rate.toLocaleString('fr-CA', { maximumFractionDigits: 1 });
+        return (
+          <div data-testid="quote-conversion" onClick={() => navigate('/quotes')} style={{
+            background: '#ffffff', border: '1px solid #e4e4e7', borderRadius: '6px', padding: '20px',
+            marginBottom: '28px', cursor: 'pointer'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+              <TrendingUp size={18} strokeWidth={1.5} color="#00A08C" />
+              <h3 style={{ fontSize: '15px', fontWeight: '600', color: '#09090b', margin: 0 }}>Conversion des soumissions en factures</h3>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)', gap: '20px' }}>
+              <div>
+                <div data-testid="quote-conversion-rate" style={{ fontSize: '28px', fontWeight: '700', color: '#00796B', letterSpacing: '-0.03em' }}>{fmtRate} %</div>
+                <div style={{ fontSize: '12px', color: '#71717a', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Taux de conversion</div>
+                <div role="progressbar" aria-valuenow={rate} aria-valuemin={0} aria-valuemax={100} aria-label="Taux de conversion"
+                  style={{ height: '8px', background: '#e6f6f3', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.min(rate, 100)}%`, height: '100%', background: '#00A08C', borderRadius: '4px' }} />
+                </div>
+                <div style={{ fontSize: '12px', color: '#71717a', marginTop: '6px' }}>{converted} sur {totalQuotes} soumission(s) convertie(s)</div>
+              </div>
+              <div>
+                <div data-testid="quote-conversion-clients" style={{ fontSize: '28px', fontWeight: '700', color: '#00796B', letterSpacing: '-0.03em' }}>{clientsConverted}</div>
+                <div style={{ fontSize: '12px', color: '#71717a', fontWeight: '500', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Clients convertis</div>
+                <div style={{ fontSize: '12px', color: '#71717a' }}>sur {clientsQuoted} client(s) ayant reçu une soumission</div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Overdue Tracker */}
       <div data-testid="overdue-tracker" style={{ background: '#ffffff', border: `1px solid ${hasOverdue ? '#fecaca' : '#e4e4e7'}`, borderRadius: '6px', padding: '20px', marginBottom: '28px' }}>

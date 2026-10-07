@@ -5184,6 +5184,28 @@ def _stats_quote_filter(scope: dict) -> dict:
     return {**scope, "status": {"$nin": list(_QUOTE_STATUSES_HORS_STATS)}}
 
 
+def _quote_conversion_stats(scope: dict) -> dict:
+    """Taux de conversion soumissions → factures pour le tableau de bord.
+
+    Dénominateur : les soumissions comptées au tableau de bord (`_stats_quote_filter`, donc
+    hors brouillons). Numérateur : celles au statut `converted`, posé par
+    `POST /api/quotes/{id}/convert`. Clients convertis = clients distincts ayant au moins une
+    soumission convertie.
+    """
+    total = db.quotes.count_documents(_stats_quote_filter(scope))
+    converted_filter = {**scope, "status": "converted"}
+    converted = db.quotes.count_documents(converted_filter)
+    clients_converted = len([c for c in db.quotes.distinct("client_id", converted_filter) if c])
+    clients_quoted = len([c for c in db.quotes.distinct("client_id", _stats_quote_filter(scope)) if c])
+    rate = round(converted / total * 100, 1) if total else 0.0
+    return {
+        "quotes_converted": converted,
+        "quote_conversion_rate": rate,
+        "clients_converted": clients_converted,
+        "clients_quoted": clients_quoted,
+    }
+
+
 # [INTÉGRATION PFM] Idempotence de la création par API.
 #
 # PFM réessaiera sur délai dépassé — Render s'endort après 15 minutes et le premier appel prend
@@ -14010,7 +14032,8 @@ def get_stats(current_user: CurrentUser = Depends(require_permission("reports:re
         "total_clients": total_clients, "total_invoices": total_invoices,
         "total_quotes": total_quotes, "total_products": total_products,
         "total_employees": total_employees, "total_expenses": total_expenses,
-        "total_revenue": round(total_revenue, 2), "pending_invoices": pending_count
+        "total_revenue": round(total_revenue, 2), "pending_invoices": pending_count,
+        **_quote_conversion_stats(scope),
     }
 
 @app.get("/api/dashboard/overdue")
