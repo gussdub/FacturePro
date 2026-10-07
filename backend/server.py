@@ -6736,6 +6736,82 @@ def trial_balance(
     return _trial_balance_rows(current_user.organization_id, as_of)
 
 
+def _is_closing_entry(entry: dict, re_ids: set, pl_ids: set) -> bool:
+    """[COMPTA] Écriture de CLÔTURE annuelle : touche à la fois un compte de Bénéfices non
+    répartis (sub_type `retained_earnings`, 3200 par défaut) ET au moins un compte de résultat
+    (revenu/dépense). Elle est passée manuellement par la comptable (aucune automatisation) ;
+    on la reconnaît pour que l'état des résultats d'une période qui la contient ne tombe pas à
+    zéro. Son miroir de contre-passation est reconnu de la même façon (net zéro préservé)."""
+    ids = {ln.get("account_id") for ln in entry.get("lines", [])}
+    return bool(ids & re_ids) and bool(ids & pl_ids)
+
+
+def _pl_movements(org_id: str, accounts: list, start: str = None, end: str = None,
+                  exclude_closing: bool = False) -> tuple:
+    """Mouvements nets des comptes de RÉSULTAT (revenus/dépenses) sur [start, end] inclusifs,
+    en UNE passe sur journal_entries posted (toutes origines : auto, manuelles, ouverture,
+    contre-passations). Retourne ({account_id: net orienté par le solde normal}, nb d'écritures
+    de clôture exclues)."""
+    pl = {a["id"]: a for a in accounts if a["account_type"] in ("revenue", "expense")}
+    re_ids = {a["id"] for a in accounts if a.get("sub_type") == "retained_earnings"}
+    match = {"organization_id": org_id, "status": "posted"}
+    df = {}
+    if start:
+        df["$gte"] = start
+    if end:
+        df["$lte"] = end
+    if df:
+        match["entry_date"] = df
+    net = {}
+    excluded = 0
+    for entry in db.journal_entries.find(match, {"_id": 0, "lines": 1}):
+        if exclude_closing and _is_closing_entry(entry, re_ids, set(pl)):
+            excluded += 1
+            continue
+        for ln in entry.get("lines", []):
+            acc = pl.get(ln.get("account_id"))
+            if not acc:
+                continue
+            d = float(ln.get("debit", 0) or 0)
+            c = float(ln.get("credit", 0) or 0)
+            delta = (c - d) if acc["account_type"] == "revenue" else (d - c)
+            net[acc["id"]] = net.get(acc["id"], 0.0) + delta
+    return net, excluded
+
+
+def _income_statement(org_id: str, start: str, end: str) -> dict:
+    """État des résultats tiré du GRAND LIVRE sur [start, end] : chaque compte de revenu et de
+    dépense, avec son mouvement net de la période. Inclut TOUTES les écritures postées (auto-
+    posting des factures/dépenses ET écritures manuelles, ex. frais bancaires), contrairement au
+    P&L des Rapports qui lit les documents sources. Les écritures de clôture annuelle (vers BNR)
+    sont exclues, sinon la période qui les contient afficherait un résultat nul."""
+    accounts = list(db.chart_of_accounts.find({"organization_id": org_id}, {"_id": 0}))
+    net, excluded = _pl_movements(org_id, accounts, start, end, exclude_closing=True)
+
+    def _rows(account_type):
+        rows = []
+        for a in accounts:
+            if a["account_type"] != account_type:
+                continue
+            amt = round(net.get(a["id"], 0.0), 2)
+            if abs(amt) < 0.005:
+                continue
+            rows.append({"account_number": a["account_number"], "name": a["name"],
+                         "amount": amt})
+        rows.sort(key=lambda r: r["account_number"])
+        return rows, round(sum(r["amount"] for r in rows), 2)
+
+    rev_rows, rev_total = _rows("revenue")
+    exp_rows, exp_total = _rows("expense")
+    return {
+        "start": start, "end": end,
+        "revenues": {"accounts": rev_rows, "total": rev_total},
+        "expenses": {"accounts": exp_rows, "total": exp_total},
+        "net_income": round(rev_total - exp_total, 2),
+        "closing_entries_excluded": excluded,
+    }
+
+
 @app.get("/api/ledger/balance-sheet")
 def balance_sheet(
     response: Response,
@@ -6752,7 +6828,9 @@ def balance_sheet(
     l'équation tant que le journal est équilibré (chaque écriture Dr==Cr, tous
     les posted comptent, contre-passations = origine + miroir → net zéro). Un
     exercice équilibré donne toujours `balanced=true` ; un déséquilibre resterait
-    VISIBLE plutôt qu'avalé.
+    VISIBLE plutôt qu'avalé. Le résultat d'un exercice ANTÉRIEUR pas encore viré aux
+    BNR (clôture manuelle non passée) est lui aussi ajouté, sur sa propre ligne : sinon
+    le bilan de l'exercice suivant serait déséquilibré.
 
     `as_of` (ISO YYYY-MM-DD, inclusif) ; défaut = aujourd'hui (UTC). L'exercice
     financier est borné par fiscal_year_end_month/day de company_settings
@@ -6794,18 +6872,24 @@ def balance_sheet(
     liability_rows, total_liabilities = _section("liability")
     equity_rows, equity_accounts_total = _section("equity")
 
-    # Résultat net de l'exercice = revenus - dépenses sur [fy_start, as_of]
-    revenue_total = 0.0
-    expense_total = 0.0
-    for acc in accounts:
-        if acc["account_type"] == "revenue":
-            revenue_total += _account_balance(org_id, acc["id"], "credit",
-                                              start_date=fy_start_iso, as_of_date=as_of)
-        elif acc["account_type"] == "expense":
-            expense_total += _account_balance(org_id, acc["id"], "debit",
-                                              start_date=fy_start_iso, as_of_date=as_of)
+    # [COMPTA] Revenus et dépenses NON ENCORE VIRÉS aux BNR, pour que Actif = Passif + CP.
+    # - Exercice courant : mouvements sur [fy_start, as_of], écritures de clôture exclues
+    #   (une clôture de l'exercice précédent datée après fy_start ne doit pas le gonfler/réduire).
+    # - Exercices antérieurs non clôturés : cumul brut de tous les comptes de résultat jusqu'à
+    #   as_of (clôtures incluses) MOINS l'exercice courant. Tant que la comptable n'a pas passé
+    #   son écriture de clôture, le résultat d'un exercice passé reste ici ; dès qu'elle la passe,
+    #   il tombe à 0 et apparaît dans 3200 BNR. Aucun double comptage, aucune automatisation.
+    cur, _ = _pl_movements(org_id, accounts, fy_start_iso, as_of, exclude_closing=True)
+    cum, _ = _pl_movements(org_id, accounts, None, as_of)
+    pl_types = {a["id"]: a["account_type"] for a in accounts}
+    revenue_total = round(sum(v for k, v in cur.items() if pl_types[k] == "revenue"), 2)
+    expense_total = round(sum(v for k, v in cur.items() if pl_types[k] == "expense"), 2)
     net_income = round(revenue_total - expense_total, 2)
-    total_equity = round(equity_accounts_total + net_income, 2)
+    cum_income = sum(v if pl_types[k] == "revenue" else -v for k, v in cum.items())
+    prior_unclosed = round(cum_income - net_income, 2)
+    if abs(prior_unclosed) < 0.005:
+        prior_unclosed = 0.0
+    total_equity = round(equity_accounts_total + net_income + prior_unclosed, 2)
     total_liab_and_equity = round(total_liabilities + total_equity, 2)
 
     # [COMPTA] DIAGNOSTIC ORPHELINS (même principe que la balance de vérif, T9).
@@ -6844,6 +6928,9 @@ def balance_sheet(
         "equity": {
             "accounts": equity_rows,
             "net_income_current_year": net_income,
+            "revenues_current_year": revenue_total,
+            "expenses_current_year": expense_total,
+            "unclosed_prior_years_income": prior_unclosed,
             "total": total_equity,
         },
         "total_assets": total_assets,
@@ -7305,8 +7392,16 @@ def balance_sheet_pdf(
     equity_rows = [(f"{a['account_number']} — {a['name']}",
                     _ledger_pdf_money(a["balance"]), False)
                    for a in bs["equity"]["accounts"]]
+    eq = bs["equity"]
+    if eq.get("unclosed_prior_years_income"):
+        equity_rows.append(("Résultats d'exercices antérieurs non clôturés",
+                            _ledger_pdf_money(eq["unclosed_prior_years_income"]), False))
+    equity_rows.append(("    Revenus de l'exercice",
+                        _ledger_pdf_money(eq["revenues_current_year"]), False))
+    equity_rows.append(("    Dépenses de l'exercice",
+                        _ledger_pdf_money(-eq["expenses_current_year"]), False))
     equity_rows.append(("Résultat net de l'exercice",
-                        _ledger_pdf_money(bs["equity"]["net_income_current_year"]), False))
+                        _ledger_pdf_money(eq["net_income_current_year"]), False))
     equity_rows.append(("Total des capitaux propres",
                         _ledger_pdf_money(bs["equity"]["total"]), True))
     equity_rows.append(("Total passif + capitaux propres",
@@ -7328,6 +7423,70 @@ def balance_sheet_pdf(
         current_user.organization_id)
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="bilan-{as_of}.pdf"',
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    })
+
+
+def _income_statement_params(org_id: str, start: str, end: str) -> tuple:
+    """Valide les dates ; défauts : `end` = aujourd'hui (Québec), `start` = début de
+    l'exercice financier qui contient `end` (fiscal_year_end_month/day)."""
+    from datetime import date as _date
+    start = _validate_iso_date_param(start, "du")
+    end = _validate_iso_date_param(end, "au") or _today_local_isodate()
+    if not start:
+        settings = db.company_settings.find_one({"organization_id": org_id}, {"_id": 0}) or {}
+        fy_start, _ = _current_fiscal_year(_date.fromisoformat(end),
+                                           settings.get("fiscal_year_end_month", 12),
+                                           settings.get("fiscal_year_end_day", 31))
+        start = fy_start.isoformat()
+    _validate_date_range(start, end)
+    return start, end
+
+
+@app.get("/api/ledger/income-statement")
+def income_statement(
+    response: Response,
+    start: str = None, end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """État des résultats calculé à partir du grand livre (toutes les écritures postées, y
+    compris les écritures manuelles) sur [start, end]. [COMPTA] no-store."""
+    _apply_ledger_no_store(response)
+    _ensure_chart_seeded(current_user.organization_id, current_user.id)
+    start, end = _income_statement_params(current_user.organization_id, start, end)
+    return _income_statement(current_user.organization_id, start, end)
+
+
+@app.get("/api/ledger/income-statement/pdf")
+def income_statement_pdf(
+    start: str = None, end: str = None,
+    current_user: CurrentUser = Depends(require_permission("accounting:read")),
+):
+    """PDF de l'état des résultats (grand livre). Mêmes chiffres que l'endpoint JSON."""
+    org_id = current_user.organization_id
+    _ensure_chart_seeded(org_id, current_user.id)
+    start, end = _income_statement_params(org_id, start, end)
+    inc = _income_statement(org_id, start, end)
+
+    def _rows(section, total_label):
+        rows = [(f"{a['account_number']} — {a['name']}", _ledger_pdf_money(a["amount"]), False)
+                for a in section["accounts"]]
+        rows.append((total_label, _ledger_pdf_money(section["total"]), True))
+        return rows
+
+    sections = [
+        ("Revenus", _rows(inc["revenues"], "Total des revenus")),
+        ("Dépenses", _rows(inc["expenses"], "Total des dépenses")),
+        ("", [("Résultat net", _ledger_pdf_money(inc["net_income"]), True)]),
+    ]
+    if inc["closing_entries_excluded"]:
+        sections.append(("Note", [(
+            f"{inc['closing_entries_excluded']} écriture(s) de clôture vers les BNR exclue(s)",
+            "", False)]))
+    pdf = _render_ledger_table_pdf(
+        "État des résultats", f"Du {start} au {end} — tiré du grand livre", sections, org_id)
+    return Response(content=pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="etat-resultats-{start}-au-{end}.pdf"',
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     })
 

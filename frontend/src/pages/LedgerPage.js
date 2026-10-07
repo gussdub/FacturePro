@@ -22,6 +22,7 @@ const TABS = [
   { key: 'contribution', label: 'Apport' },
   { key: 'ledger', label: 'Grand livre' },
   { key: 'trial', label: 'Balance de vérification' },
+  { key: 'income', label: 'État des résultats' },
   { key: 'balancesheet', label: 'Bilan' },
 ];
 
@@ -1007,6 +1008,70 @@ function TrialBalanceTab() {
   );
 }
 
+function IncomeStatementTab() {
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState(todayLocal());
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    const p = new URLSearchParams({ end });
+    if (start) p.set('start', start);
+    axios.get(`${BACKEND_URL}/api/ledger/income-statement?${p.toString()}`)
+      .then(r => { setData(r.data); setError(''); if (!start) setStart(r.data.start); })
+      .catch(e => setError(e?.response?.data?.detail || 'Erreur de chargement.'));
+  }, [start, end]);
+  const lbl = { display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 4 };
+  const inp = { padding: 6, border: '1px solid #d1d5db', borderRadius: 6 };
+  const row = { display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 14 };
+  const Section = ({ title, section, totalLabel }) => (
+    <div style={{ marginBottom: 16 }}>
+      <h3 style={{ fontSize: 15, borderBottom: '1px solid #e5e7eb', paddingBottom: 4 }}>{title}</h3>
+      {section.accounts.length === 0 && <div style={{ ...row, color: '#9ca3af' }}>(aucun)</div>}
+      {section.accounts.map(a => (
+        <div key={a.account_number} style={row}>
+          <span>{a.account_number} — {a.name}</span><span>{a.amount.toFixed(2)} $</span>
+        </div>
+      ))}
+      <div style={{ ...row, fontWeight: 700, borderTop: '1px solid #1f2937', marginTop: 4 }}>
+        <span>{totalLabel}</span><span>{section.total.toFixed(2)} $</span></div>
+    </div>
+  );
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <div><label style={lbl}>Du</label>
+          <input type="date" value={start} onChange={e => setStart(e.target.value)} style={inp} /></div>
+        <div><label style={lbl}>Au</label>
+          <input type="date" value={end} onChange={e => setEnd(e.target.value)} style={inp} /></div>
+        <button disabled={!data} onClick={() => downloadPdf(
+          `${BACKEND_URL}/api/ledger/income-statement/pdf?start=${start}&end=${end}`,
+          `etat-resultats-${start}-au-${end}.pdf`).catch(() => alert('Erreur lors du téléchargement.'))}
+          style={{ background: '#00A08C', color: '#fff', border: 'none', padding: '8px 14px',
+            borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>Télécharger PDF</button>
+      </div>
+      <p style={{ color: '#6b7280', fontSize: 13, marginTop: 0 }}>
+        Calculé à partir du grand livre : toutes les écritures postées, y compris les
+        écritures manuelles (ex. frais bancaires). Par défaut, du début de l'exercice à aujourd'hui.
+      </p>
+      {error && <p style={{ color: '#dc2626', fontSize: 14 }}>{error}</p>}
+      {data && !error && (
+        <>
+          <Section title="Revenus" section={data.revenues} totalLabel="Total des revenus" />
+          <Section title="Dépenses" section={data.expenses} totalLabel="Total des dépenses" />
+          <div style={{ ...row, fontWeight: 700, fontSize: 15, borderTop: '2px solid #1f2937', paddingTop: 8 }}>
+            <span>Résultat net</span><span>{data.net_income.toFixed(2)} $</span></div>
+          {data.closing_entries_excluded > 0 && (
+            <p style={{ color: '#6b7280', fontSize: 12 }}>
+              {data.closing_entries_excluded} écriture(s) de clôture vers les Bénéfices non répartis
+              exclue(s) de ce rapport.
+            </p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function BalanceSheetTab() {
   const [asOf, setAsOf] = useState(todayLocal());
   const [data, setData] = useState(null);
@@ -1057,6 +1122,20 @@ function BalanceSheetTab() {
                 <span>{r.account_number} — {r.name}</span><span>{r.balance.toFixed(2)} $</span>
               </div>
             ))}
+            {data.equity.unclosed_prior_years_income !== 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0',
+                fontSize: 14, fontStyle: 'italic' }}>
+                <span>Résultats d'exercices antérieurs non clôturés</span>
+                <span>{data.equity.unclosed_prior_years_income.toFixed(2)} $</span></div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0 2px 16px',
+              fontSize: 13, color: '#6b7280' }}>
+              <span>Revenus de l'exercice</span>
+              <span>{data.equity.revenues_current_year.toFixed(2)} $</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0 2px 16px',
+              fontSize: 13, color: '#6b7280' }}>
+              <span>Dépenses de l'exercice</span>
+              <span>{(-data.equity.expenses_current_year).toFixed(2)} $</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0',
               fontSize: 14, fontStyle: 'italic' }}>
               <span>Résultat net de l'exercice</span>
@@ -1065,11 +1144,11 @@ function BalanceSheetTab() {
             <div style={{ background: '#FEF3C7', border: '1px solid #F59E0B',
               borderRadius: 6, padding: '8px 12px', marginTop: 8, fontSize: 12,
               color: '#92400E' }}>
-              « Résultat net de l'exercice » est <strong>dérivé</strong> de l'exercice
-              courant. La <strong>clôture annuelle</strong> (virement vers Bénéfices non
-              répartis 3200) doit être passée manuellement <strong>à ou après la fin
-              d'exercice</strong>, jamais en cours d'exercice. Sans elle, le bilan de
-              l'exercice suivant sera <strong>déséquilibré</strong>.
+              Les revenus et dépenses pas encore virés aux Bénéfices non répartis (3200)
+              sont inclus ici pour que le bilan balance. La <strong>clôture annuelle</strong>
+              se passe manuellement, à ou après la fin d'exercice : tant qu'elle n'est pas
+              faite, le résultat d'un exercice passé apparaît sur la ligne « exercices
+              antérieurs non clôturés ».
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700,
               borderTop: '1px solid #1f2937', paddingTop: 4, marginTop: 4 }}>
@@ -1239,6 +1318,7 @@ export default function LedgerPage() {
         {tab === 'contribution' && <ContributionTab />}
         {tab === 'ledger' && <LedgerDetailTab />}
         {tab === 'trial' && <TrialBalanceTab />}
+        {tab === 'income' && <IncomeStatementTab />}
         {tab === 'balancesheet' && <BalanceSheetTab />}
       </div>
     </div>
