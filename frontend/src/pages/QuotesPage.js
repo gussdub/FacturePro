@@ -267,9 +267,9 @@ const QuotesPage = () => {
       {!loading && (
         <DocumentTotals testId="quote-totals"
           cards={[
-            { label: 'Soumissions produites', value: quoteTotals.count, sub: 'converties incluses' },
+            { label: 'Soumissions produites', value: quoteTotals.count, sub: 'hors converties en facture' },
             { label: 'Montant total soumis', value: formatCurrency(quoteTotals.totalCad, 'CAD'), sub: 'TTC, en CAD' },
-            { label: 'Acceptées ou converties', value: formatCurrency(quoteTotals.wonCad, 'CAD'), sub: `${quoteTotals.wonCount} soumission(s)`, accent: '#166534' },
+            { label: 'Acceptées', value: formatCurrency(quoteTotals.acceptedCad, 'CAD'), sub: `${quoteTotals.acceptedCount} soumission(s) à facturer`, accent: '#166534' },
           ]}
           selection={quoteSelection.count !== quoteTotals.count ? { ...quoteSelection, noun: 'soumission(s)' } : null} />
       )}

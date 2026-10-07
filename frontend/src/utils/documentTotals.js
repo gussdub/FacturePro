@@ -16,14 +16,16 @@ export const docTotalCad = (doc) => {
 
 const sumCad = (docs) => round2(docs.reduce((s, d) => s + docTotalCad(d), 0));
 
-// Soumissions : toutes comptées, converties incluses (« combien j'en ai produit »).
+// Soumissions : les converties sont EXCLUES — leur montant est déjà compté
+// dans les factures, on ne veut pas le comptabiliser deux fois.
 export const computeQuoteTotals = (quotes = []) => {
-  const won = quotes.filter(q => q.status === 'accepted' || q.status === 'converted');
+  const active = quotes.filter(q => q.status !== 'converted');
+  const accepted = active.filter(q => q.status === 'accepted');
   return {
-    count: quotes.length,
-    totalCad: sumCad(quotes),
-    wonCount: won.length,
-    wonCad: sumCad(won),
+    count: active.length,
+    totalCad: sumCad(active),
+    acceptedCount: accepted.length,
+    acceptedCad: sumCad(accepted),
   };
 };
 
