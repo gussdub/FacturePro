@@ -13,17 +13,17 @@ describe('docTotalCad', () => {
 });
 
 describe('computeQuoteTotals', () => {
-  it('compte toutes les soumissions, converties incluses', () => {
+  it('exclut les soumissions converties (déjà comptées en facture)', () => {
     const t = computeQuoteTotals([
       { status: 'pending', total_cad: 100 },
       { status: 'converted', total_cad: 200 },
       { status: 'accepted', total_cad: 50.1 },
       { status: 'refused', total_cad: 10 },
     ]);
-    expect(t).toEqual({ count: 4, totalCad: 360.1, wonCount: 2, wonCad: 250.1 });
+    expect(t).toEqual({ count: 3, totalCad: 160.1, acceptedCount: 1, acceptedCad: 50.1 });
   });
   it('liste vide', () => {
-    expect(computeQuoteTotals([])).toEqual({ count: 0, totalCad: 0, wonCount: 0, wonCad: 0 });
+    expect(computeQuoteTotals([])).toEqual({ count: 0, totalCad: 0, acceptedCount: 0, acceptedCad: 0 });
   });
 });
 
