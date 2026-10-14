@@ -1,12 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { X, Mail } from 'lucide-react';
 import { BACKEND_URL } from '../config';
 
 
-export default function InviteMemberModal({ onClose, onSuccess }) {
+export default function InviteMemberModal({ onClose, onSuccess, existingEmails = [] }) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('accountant');
+  const [employees, setEmployees] = useState([]);
+  const [employeeId, setEmployeeId] = useState('');
+
+  // Fiches employés déjà saisies : on propose celles qui ont un courriel et qui ne sont ni
+  // membres ni invitées, pour éviter de ressaisir le courriel.
+  useEffect(() => {
+    const taken = new Set(existingEmails.map(e => (e || '').trim().toLowerCase()));
+    axios.get(`${BACKEND_URL}/api/employees`)
+      .then(res => setEmployees((res.data || []).filter(emp => {
+        const em = (emp.email || '').trim().toLowerCase();
+        return em && !taken.has(em);
+      })))
+      .catch(() => setEmployees([]));  // sans permission employees:read : pas de sélecteur
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const pickEmployee = (id) => {
+    setEmployeeId(id);
+    const emp = employees.find(e => e.id === id);
+    if (emp) {
+      setEmail(emp.email.trim());
+      setRole('employee');
+    }
+  };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -47,12 +71,31 @@ export default function InviteMemberModal({ onClose, onSuccess }) {
         </div>
 
         <form onSubmit={submit}>
+          {employees.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: 'block', fontSize: 13, color: '#374151', marginBottom: 4, fontWeight: 600 }}>
+                Choisir un employé existant
+              </label>
+              <select value={employeeId} onChange={e => pickEmployee(e.target.value)}
+                      data-testid="invite-employee-select"
+                      style={{
+                        width: '100%', padding: 10, border: '1px solid #d1d5db',
+                        borderRadius: 6, fontSize: 14,
+                      }}>
+                <option value="">— Saisir un courriel manuellement —</option>
+                {employees.map(emp => (
+                  <option key={emp.id} value={emp.id}>{emp.name || emp.email} ({emp.email})</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div style={{ marginBottom: 16 }}>
             <label style={{ display: 'block', fontSize: 13, color: '#374151', marginBottom: 4, fontWeight: 600 }}>
               Email
             </label>
             <input type="email" required autoFocus value={email}
-                   onChange={e => setEmail(e.target.value)}
+                   onChange={e => { setEmail(e.target.value); setEmployeeId(''); }}
                    placeholder="comptable@exemple.com"
                    style={{
                      width: '100%', padding: 10, border: '1px solid #d1d5db',

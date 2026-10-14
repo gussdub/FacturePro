@@ -303,6 +303,10 @@ const SettingsPage = () => {
       )}
       {showInviteModal && (
         <InviteMemberModal
+          existingEmails={[
+            ...(orgData?.members || []).map(m => m.email),
+            ...invitations.map(i => i.email),
+          ]}
           onClose={() => setShowInviteModal(false)}
           onSuccess={() => { setShowInviteModal(false); fetchOrgData(); }}
         />

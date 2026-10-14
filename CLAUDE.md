@@ -115,6 +115,7 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
   - Orgs existantes : `employee` absent de la matrice stockée → reçoit ses défauts (`_org_role_permissions`) ; Comptable/Lecteur restent fail-closed. Aucune migration.
   - Frontend : l'employé atterrit sur Soumissions (le tableau de bord exige `reports:read`, entrée de menu masquée sinon) ; boutons Modifier/Email/Supprimer/Facture masqués sur les documents d'autrui.
   - Tests : `test_employee_role.py` (20), mutations vérifiées (retrait du filtre de propriété ou de la garde de conversion → 4 échecs).
+  - **Invitation depuis une fiche employé** : le modal « Inviter un membre » propose « Choisir un employé existant » (fiches actives avec courriel, ni membres ni déjà invitées) → préremplit le courriel et présélectionne Employé. Frontend seul ; sélecteur absent sans `employees:read`. Test : `InviteMemberModal.render.test.js`.
 
 - **2026-10-07 — État des résultats tiré du grand livre + bilan qui inclut le résultat non clôturé (demande de la comptable)**
   - **État des résultats GL** : `GET /api/ledger/income-statement{,/pdf}?start=&end=` (défaut : début d'exercice → aujourd'hui), onglet « État des résultats » dans `LedgerPage`. Lit **toutes** les écritures postées (auto + manuelles, ex. frais bancaires), contrairement au P&L des Rapports qui lit les documents sources. Les **écritures de clôture** (qui touchent un compte `sub_type=retained_earnings` ET un compte de résultat, cf. `_is_closing_entry`) sont exclues, sinon la période qui les contient afficherait 0.
