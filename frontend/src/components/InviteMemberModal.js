@@ -71,6 +71,7 @@ export default function InviteMemberModal({ onClose, onSuccess }) {
                     }}>
               <option value="accountant">Comptable — accès complet aux données métier</option>
               <option value="viewer">Lecteur — accès en lecture seule</option>
+              <option value="employee">Employé — crée des soumissions et des clients</option>
             </select>
           </div>
 

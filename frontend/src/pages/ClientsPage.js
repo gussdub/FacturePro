@@ -5,8 +5,10 @@ import { useAuth } from '../context/AuthContext';
 import TaxNumberInput from '../components/TaxNumberInput';
 
 const ClientsPage = () => {
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const isOwner = role === 'owner';
+  // Un employé ne modifie que les clients qu'il a créés (appliqué aussi côté serveur).
+  const canEdit = (c) => role !== 'employee' || c.created_by_user_id === user?.id;
   const [clients, setClients] = useState([]);
   const [filteredClients, setFilteredClients] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -178,12 +180,14 @@ const ClientsPage = () => {
                   )}
                 </h3>
                 <div style={{ display: 'flex', gap: '8px' }}>
+                  {canEdit(client) && (<>
                   <button onClick={() => handleEdit(client)} data-testid={`edit-client-${client.id}`} style={{
                     background: '#f0f9ff', color: '#0369a1', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
                   }}>Modifier</button>
                   <button onClick={() => handleDelete(client.id)} data-testid={`delete-client-${client.id}`} style={{
                     background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px'
                   }}>Supprimer</button>
+                  </>)}
                   {isOwner && !client.anonymized && (
                     <button onClick={() => { setEraseTarget(client); setEraseText(''); }}
                       data-testid={`erase-client-${client.id}`} title="Effacement Loi 25 (art. 28.1)" style={{

@@ -50,7 +50,7 @@ const Layout = ({ currentRoute, navigate, children, needsSubscription }) => {
   }, []);
 
   const allNavigation = [
-    { name: 'Tableau de bord', href: '/dashboard', icon: LayoutDashboard, permission: null, current: currentRoute === '/dashboard' },
+    { name: 'Tableau de bord', href: '/dashboard', icon: LayoutDashboard, permission: 'reports:read', current: currentRoute === '/dashboard' },
     { name: 'Clients', href: '/clients', icon: Users, permission: 'clients:read', current: currentRoute === '/clients' },
     { name: 'Produits', href: '/products', icon: Package, permission: 'products:read', current: currentRoute === '/products' },
     { name: 'Factures', href: '/invoices', icon: FileText, permission: 'invoices:read', current: currentRoute === '/invoices' },

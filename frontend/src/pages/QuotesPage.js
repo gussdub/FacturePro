@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { BACKEND_URL, formatCurrency } from '../config';
+import { useAuth } from '../context/AuthContext';
 import CurrencySelector from '../components/CurrencySelector';
 import DocumentTotals from '../components/DocumentTotals';
 import { computeQuoteTotals, computeSelectionTotals } from '../utils/documentTotals';
@@ -17,6 +18,11 @@ const STATUS_CONFIG = {
 const norm = (s) => (s ?? '').toString().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 
 const QuotesPage = () => {
+  const { role, user, hasPermission } = useAuth();
+  // Un employé ne modifie que ses propres soumissions et ne convertit pas en facture
+  // (appliqué aussi côté serveur).
+  const canEdit = (q) => role !== 'employee' || q.created_by_user_id === user?.id;
+  const canConvert = hasPermission('invoices:write');
   const [quotes, setQuotes] = useState([]);
   const [clients, setClients] = useState([]);
   const [products, setProducts] = useState([]);
@@ -343,33 +349,40 @@ const QuotesPage = () => {
                       <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>= {formatCurrency(q.total_cad, 'CAD')}</div>
                     )}
                     <select data-testid={`quote-status-select-${q.id}`} value={q.status || 'pending'}
+                      disabled={!canEdit(q)}
                       onChange={e => handleStatusChange(q.id, e.target.value)}
                       style={{ ...inputStyle, width: 'auto', fontSize: '12px', padding: '4px 8px', marginBottom: '8px' }}>
                       {Object.entries(STATUS_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                     </select>
                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                      {canEdit(q) && (
                       <button data-testid={`edit-quote-${q.id}`} onClick={() => openEditForm(q)}
                         title="Modifier" style={{ background: '#fef3c7', color: '#92400e', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Modifier
                       </button>
+                      )}
                       <button data-testid={`download-pdf-${q.id}`} onClick={() => handleDownloadPdf(q.id, q.quote_number)}
                         title="Télécharger PDF" style={{ background: '#eff6ff', color: '#1d4ed8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         PDF
                       </button>
+                      {canEdit(q) && (
                       <button data-testid={`send-email-${q.id}`} onClick={() => openEmailModal(q)}
                         title="Envoyer par email" style={{ background: '#f0fdf4', color: '#166534', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Email
                       </button>
-                      {q.status !== 'converted' && (
+                      )}
+                      {canConvert && canEdit(q) && q.status !== 'converted' && (
                         <button data-testid={`convert-quote-${q.id}`} onClick={() => handleConvert(q.id)}
                           title="Convertir en facture" style={{ background: '#f3e8ff', color: '#6b21a8', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                           Facture
                         </button>
                       )}
+                      {canEdit(q) && (
                       <button data-testid={`delete-quote-${q.id}`} onClick={() => handleDelete(q.id)}
                         title="Supprimer" style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Suppr.
                       </button>
+                      )}
                     </div>
                   </div>
                 </div>

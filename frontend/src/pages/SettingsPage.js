@@ -950,6 +950,7 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
                                    opacity: m.is_active === false ? 0.5 : 1 }}>
                     <option value="accountant">Comptable</option>
                     <option value="viewer">Lecteur</option>
+                    <option value="employee">Employé</option>
                   </select>
                 )}
               </td>
@@ -1055,7 +1056,7 @@ function TeamManagementSection({ orgData, invitations, loading, onRefresh, onInv
 
       {/* Section : Matrice permissions */}
       <h3 style={{ margin: '0 0 16px', fontSize: 18 }}>Rôles et permissions</h3>
-      {['accountant', 'viewer'].map(role => (
+      {['accountant', 'viewer', 'employee'].map(role => (
         <RoleMatrixCard
           key={role}
           role={role}
