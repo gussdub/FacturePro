@@ -2358,7 +2358,9 @@ PERMISSIONS_EDITABLE = [
     "expenses:read",   "expenses:write",
     "invoices:read",   "invoices:write",
     "quotes:read",     "quotes:write",
+    "quotes:edit_all", "quotes:delete_all",    # documents créés par d'AUTRES membres
     "clients:read",    "clients:write",
+    "clients:edit_all", "clients:delete_all",
     "products:read",   "products:write",
     "employees:read",  "employees:write",
     "reports:read",
@@ -2383,8 +2385,8 @@ DEFAULT_ROLE_PERMISSIONS = {
     ],
     # Employé : prépare des soumissions et crée des clients. Lecture des produits pour bâtir
     # les lignes de soumission. Aucun accès aux factures, dépenses, rapports, grand livre ni
-    # paramètres. Il ne modifie que les soumissions et clients qu'il a lui-même créés
-    # (cf. _own_docs_scope) et ne peut pas convertir une soumission en facture.
+    # paramètres. Par défaut il ne modifie et ne supprime que ce qu'il a créé ; l'owner peut lui
+    # cocher *:edit_all / *:delete_all (cf. _write_scope). Il ne convertit pas en facture.
     "employee": [
         "quotes:read", "quotes:write",
         "clients:read", "clients:write",
@@ -2737,14 +2739,15 @@ def _org_scope(current_user: CurrentUser) -> dict:
     ]}
 
 
-def _own_docs_scope(current_user: CurrentUser) -> dict:
-    """Filtre d'ÉCRITURE sur un document métier (soumission, client) : l'org entière, sauf pour
-    un employé qui ne modifie que ce qu'il a lui-même créé. Un document d'autrui renvoie donc
-    404 à l'employé, sans révéler s'il existe."""
+def _write_scope(current_user: CurrentUser, resource: str, action: str) -> dict:
+    """Filtre d'ÉCRITURE sur un document métier (resource ∈ quotes|clients, action ∈ edit|delete).
+    `<resource>:write` permet d'agir sur ses propres documents ; agir sur ceux des AUTRES membres
+    exige `<resource>:edit_all` ou `<resource>:delete_all`. Sans ce droit, le document d'autrui
+    renvoie 404, sans révéler s'il existe. L'owner a toujours tous les codes."""
     scope = _org_scope(current_user)
-    if current_user.role == "employee":
-        return {**scope, "created_by_user_id": current_user.id}
-    return scope
+    if f"{resource}:{action}_all" in current_user.permissions:
+        return scope
+    return {**scope, "created_by_user_id": current_user.id}
 
 
 # Collections metier scopees par organisation (utilisees par migration + queries).
@@ -4050,6 +4053,23 @@ def migrate_organizations_v1():
         print(f"MIGRATION organizations_v1 : {len(users_without_org)} orgs creees")
     if perms_backfilled:
         print(f"MIGRATION settings perms : {perms_backfilled} orgs mises a jour")
+
+
+def migrate_doc_scope_perms_v1():
+    """One-shot par org (flag `doc_scope_perms_backfilled`) : depuis l'ajout de
+    quotes/clients:edit_all|delete_all, agir sur le document d'un autre membre exige ces codes.
+    Le Comptable, qui le pouvait avant, les reçoit une fois ; un owner qui les retire ensuite ne
+    se les voit pas ré-accordés. L'Employé et le Lecteur ne les reçoivent pas."""
+    codes = ("quotes:edit_all", "quotes:delete_all", "clients:edit_all", "clients:delete_all")
+    for org in db.organizations.find({"doc_scope_perms_backfilled": {"$ne": True}},
+                                     {"id": 1, "role_permissions": 1}):
+        rp = org.get("role_permissions") or {}
+        upd = {"doc_scope_perms_backfilled": True}
+        if "accountant" in rp:
+            acc = list(rp["accountant"])
+            acc += [c for c in codes if c not in acc]
+            upd["role_permissions.accountant"] = acc
+        db.organizations.update_one({"id": org["id"]}, {"$set": upd})
 
 
 def migrate_general_ledger_v1():
@@ -9841,7 +9861,7 @@ def update_client(client_id: str, client_data: dict, current_user: CurrentUser =
     for k in ("id", "user_id", "organization_id", "created_by_user_id", "_id"):
         client_data.pop(k, None)
     normalize_tax_fields(client_data)
-    result = _sync_update_one("clients", {"id": client_id, **_own_docs_scope(current_user)}, {"$set": client_data})
+    result = _sync_update_one("clients", {"id": client_id, **_write_scope(current_user, "clients", "edit")}, {"$set": client_data})
     if result.matched_count:
         _webhook_emit("clients", client_id, "client.updated",
                       current_user.organization_id)
@@ -9851,7 +9871,7 @@ def update_client(client_id: str, client_data: dict, current_user: CurrentUser =
 
 @app.delete("/api/clients/{client_id}")
 def delete_client(client_id: str, current_user: CurrentUser = Depends(require_permission("clients:write"))):
-    result = db.clients.delete_one({"id": client_id, **_own_docs_scope(current_user)})
+    result = db.clients.delete_one({"id": client_id, **_write_scope(current_user, "clients", "delete")})
     if result.deleted_count == 0:
         raise HTTPException(404, "Client not found")
     return {"message": "Client deleted"}
@@ -12302,12 +12322,12 @@ def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = De
             "total_tax": total_tax, "total": total, "currency": currency,
             "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
         })
-    existing = db.quotes.find_one({"id": quote_id, **_own_docs_scope(current_user)}, {"_id": 0})
+    existing = db.quotes.find_one({"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Quote not found")
     client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
     quote_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
-    _sync_update_one("quotes", {"id": quote_id, **_own_docs_scope(current_user)}, {"$set": quote_data})
+    _sync_update_one("quotes", {"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
 @app.post("/api/quotes/{quote_id}/convert")
@@ -12315,7 +12335,7 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
     # Convertir crée une FACTURE : exiger aussi le droit d'écrire les factures (l'employé ne l'a pas).
     if "invoices:write" not in current_user.permissions:
         raise HTTPException(403, "Permission requise : invoices:write")
-    quote = db.quotes.find_one({"id": quote_id, **_own_docs_scope(current_user)}, {"_id": 0})
+    quote = db.quotes.find_one({"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
     count = db.invoices.count_documents(_org_scope(current_user))
@@ -12351,7 +12371,7 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
 @app.put("/api/quotes/{quote_id}/status")
 def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     new_status = status_data.get("status", "pending")
-    result = _sync_update_one("quotes", {"id": quote_id, **_own_docs_scope(current_user)}, {"$set": {"status": new_status}})
+    result = _sync_update_one("quotes", {"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"$set": {"status": new_status}})
     if result.matched_count:
         _webhook_emit("quotes", quote_id, "quote.status_changed",
                       current_user.organization_id)
@@ -12361,7 +12381,7 @@ def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentU
 
 @app.delete("/api/quotes/{quote_id}")
 def delete_quote(quote_id: str, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
-    result = db.quotes.delete_one({"id": quote_id, **_own_docs_scope(current_user)})
+    result = db.quotes.delete_one({"id": quote_id, **_write_scope(current_user, "quotes", "delete")})
     if result.deleted_count == 0:
         raise HTTPException(404, "Quote not found")
     return {"message": "Quote deleted"}
@@ -14774,7 +14794,7 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
 
-    quote = db.quotes.find_one({"id": quote_id, **_own_docs_scope(current_user)}, {"_id": 0})
+    quote = db.quotes.find_one({"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
@@ -16340,6 +16360,7 @@ def seed_data():
         _run_migration(migrate_integration_org_backfill_v1, "integration_org_backfill_v1")
         _run_migration(migrate_api_idempotency_v1, "api_idempotency_v1")
         _run_migration(migrate_webhooks_v1, "webhooks_v1")
+        _run_migration(migrate_doc_scope_perms_v1, "doc_scope_perms_v1")
         # Migration feature #14 — comptes télécom (5050/5051) + 1300 Dû par un actionnaire
         # ajoutés aux plans comptables existants (idempotente, additive)
         _run_migration(migrate_chart_add_accounts_v1, "chart_add_accounts_v1")
