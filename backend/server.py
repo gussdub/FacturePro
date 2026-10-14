@@ -2277,7 +2277,7 @@ class CurrentUser(BaseModel):
     id: str
     email: str
     organization_id: str
-    role: str                      # "owner" | "accountant" | "viewer"
+    role: str                      # "owner" | "accountant" | "viewer" | "employee"
     permissions: List[str]         # résolues à chaque requête
     is_exempt: bool = False
 
@@ -2381,7 +2381,29 @@ DEFAULT_ROLE_PERMISSIONS = {
         "reports:read", "bank:read", "settings:read",
         "accounting:read",
     ],
+    # Employé : prépare des soumissions et crée des clients. Lecture des produits pour bâtir
+    # les lignes de soumission. Aucun accès aux factures, dépenses, rapports, grand livre ni
+    # paramètres. Il ne modifie que les soumissions et clients qu'il a lui-même créés
+    # (cf. _own_docs_scope) et ne peut pas convertir une soumission en facture.
+    "employee": [
+        "quotes:read", "quotes:write",
+        "clients:read", "clients:write",
+        "products:read",
+    ],
 }
+
+# Rôles attribuables à un membre (jamais "owner" : l'owner change par transfert de propriété).
+ASSIGNABLE_ROLES = ("accountant", "viewer", "employee")
+_ROLE_ERROR = "Role must be 'accountant', 'viewer' or 'employee'"
+
+
+def _org_role_permissions(org: dict) -> dict:
+    """Matrice effective des rôles de l'org. Fail-closed : un rôle absent de la matrice n'a
+    aucune permission — SAUF « employee », ajouté après la création des organisations
+    existantes, qui reçoit ses défauts tant que l'owner n'a pas enregistré sa propre version."""
+    stored = (org or {}).get("role_permissions") or {}
+    return {r: stored.get(r, DEFAULT_ROLE_PERMISSIONS["employee"] if r == "employee" else [])
+            for r in ASSIGNABLE_ROLES}
 
 
 def _resolve_permissions(org: dict, role: str) -> list:
@@ -2390,7 +2412,9 @@ def _resolve_permissions(org: dict, role: str) -> list:
     Codes inconnus sont ignorés (protection contre matrice polluée)."""
     if role == "owner":
         return list(PERMISSIONS_EDITABLE) + list(PERMISSIONS_OWNER_ONLY)
-    role_perms = (org.get("role_permissions") or {}).get(role, [])
+    if role not in ASSIGNABLE_ROLES:
+        return []
+    role_perms = _org_role_permissions(org).get(role, [])
     return [p for p in role_perms if p in PERMISSIONS_EDITABLE]
 
 
@@ -2711,6 +2735,16 @@ def _org_scope(current_user: CurrentUser) -> dict:
         {"organization_id": current_user.organization_id},
         {"user_id": current_user.id, "organization_id": {"$exists": False}},
     ]}
+
+
+def _own_docs_scope(current_user: CurrentUser) -> dict:
+    """Filtre d'ÉCRITURE sur un document métier (soumission, client) : l'org entière, sauf pour
+    un employé qui ne modifie que ce qu'il a lui-même créé. Un document d'autrui renvoie donc
+    404 à l'employé, sans révéler s'il existe."""
+    scope = _org_scope(current_user)
+    if current_user.role == "employee":
+        return {**scope, "created_by_user_id": current_user.id}
+    return scope
 
 
 # Collections metier scopees par organisation (utilisees par migration + queries).
@@ -4537,7 +4571,8 @@ def get_org_me(current_user: CurrentUser = Depends(get_current_user_with_access)
             "owner_id": org.get("owner_id"),
             "subscription_status": org.get("subscription_status"),
             "trial_ends_at": org.get("trial_ends_at"),
-            "role_permissions": org.get("role_permissions") or DEFAULT_ROLE_PERMISSIONS,
+            "role_permissions": _org_role_permissions(
+                {"role_permissions": org.get("role_permissions") or DEFAULT_ROLE_PERMISSIONS}),
             "scan_count_this_month": org.get("scan_count_this_month", 0),
             "scan_quota_limit": SCAN_QUOTA_LIMIT,
             "require_mfa": bool(org.get("require_mfa")),
@@ -4559,12 +4594,12 @@ def update_role_permissions(
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     """Éditer la matrice de permissions pour un rôle donné.
-    - role ∈ {"accountant", "viewer"} — jamais "owner".
+    - role ∈ ASSIGNABLE_ROLES — jamais "owner".
     - Chaque code doit être dans PERMISSIONS_EDITABLE — 400 si code owner-only ou inconnu."""
     role = body.get("role")
     permissions = body.get("permissions", [])
-    if role not in ("accountant", "viewer"):
-        raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
+    if role not in ASSIGNABLE_ROLES:
+        raise HTTPException(400, _ROLE_ERROR)
     if not isinstance(permissions, list):
         raise HTTPException(400, "permissions must be a list")
     for code in permissions:
@@ -4574,7 +4609,7 @@ def update_role_permissions(
     # changements de droits d'accès).
     _org = db.organizations.find_one({"id": current_user.organization_id},
                                      {"_id": 0, "role_permissions": 1})
-    old_perms = ((_org or {}).get("role_permissions") or {}).get(role, [])
+    old_perms = _org_role_permissions(_org).get(role, [])
     # Persist (idempotent update on the org)
     db.organizations.update_one(
         {"id": current_user.organization_id},
@@ -4643,8 +4678,8 @@ def create_invitation(
     role = body.get("role")
     if not email or not _EMAIL_RE.match(email):
         raise HTTPException(400, "Email invalide")
-    if role not in ("accountant", "viewer"):
-        raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
+    if role not in ASSIGNABLE_ROLES:
+        raise HTTPException(400, _ROLE_ERROR)
 
     # Check no duplicate pending invitation in this org.
     # Safe to compare exact-match: invariant — invitations.email is always
@@ -4909,8 +4944,8 @@ def update_member_role(
     current_user: CurrentUser = Depends(require_permission("team:manage"))
 ):
     role = body.get("role")
-    if role not in ("accountant", "viewer"):
-        raise HTTPException(400, "Role must be 'accountant' or 'viewer'")
+    if role not in ASSIGNABLE_ROLES:
+        raise HTTPException(400, _ROLE_ERROR)
     target = db.users.find_one({
         "id": user_id,
         "organization_id": current_user.organization_id,
@@ -9803,10 +9838,10 @@ def create_client(client_data: dict, current_user: CurrentUser = Depends(require
 
 @app.put("/api/clients/{client_id}")
 def update_client(client_id: str, client_data: dict, current_user: CurrentUser = Depends(require_permission("clients:write"))):
-    for k in ("id", "user_id", "organization_id", "_id"):
+    for k in ("id", "user_id", "organization_id", "created_by_user_id", "_id"):
         client_data.pop(k, None)
     normalize_tax_fields(client_data)
-    result = _sync_update_one("clients", {"id": client_id, **_org_scope(current_user)}, {"$set": client_data})
+    result = _sync_update_one("clients", {"id": client_id, **_own_docs_scope(current_user)}, {"$set": client_data})
     if result.matched_count:
         _webhook_emit("clients", client_id, "client.updated",
                       current_user.organization_id)
@@ -9816,7 +9851,7 @@ def update_client(client_id: str, client_data: dict, current_user: CurrentUser =
 
 @app.delete("/api/clients/{client_id}")
 def delete_client(client_id: str, current_user: CurrentUser = Depends(require_permission("clients:write"))):
-    result = db.clients.delete_one({"id": client_id, **_org_scope(current_user)})
+    result = db.clients.delete_one({"id": client_id, **_own_docs_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Client not found")
     return {"message": "Client deleted"}
@@ -12251,7 +12286,7 @@ def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_p
 
 @app.put("/api/quotes/{quote_id}")
 def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
-    for k in ("id", "user_id", "organization_id", "_id"):
+    for k in ("id", "user_id", "organization_id", "created_by_user_id", "_id"):
         quote_data.pop(k, None)
     if "items" in quote_data:
         items = quote_data["items"]
@@ -12267,17 +12302,20 @@ def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = De
             "total_tax": total_tax, "total": total, "currency": currency,
             "exchange_rate_to_cad": exchange_rate, "total_cad": total_cad
         })
-    existing = db.quotes.find_one({"id": quote_id, **_org_scope(current_user)}, {"_id": 0})
+    existing = db.quotes.find_one({"id": quote_id, **_own_docs_scope(current_user)}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Quote not found")
     client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
     quote_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
-    _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": quote_data})
+    _sync_update_one("quotes", {"id": quote_id, **_own_docs_scope(current_user)}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
 @app.post("/api/quotes/{quote_id}/convert")
 def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
-    quote = db.quotes.find_one({"id": quote_id, **_org_scope(current_user)}, {"_id": 0})
+    # Convertir crée une FACTURE : exiger aussi le droit d'écrire les factures (l'employé ne l'a pas).
+    if "invoices:write" not in current_user.permissions:
+        raise HTTPException(403, "Permission requise : invoices:write")
+    quote = db.quotes.find_one({"id": quote_id, **_own_docs_scope(current_user)}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
     count = db.invoices.count_documents(_org_scope(current_user))
@@ -12313,7 +12351,7 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
 @app.put("/api/quotes/{quote_id}/status")
 def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
     new_status = status_data.get("status", "pending")
-    result = _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": new_status}})
+    result = _sync_update_one("quotes", {"id": quote_id, **_own_docs_scope(current_user)}, {"$set": {"status": new_status}})
     if result.matched_count:
         _webhook_emit("quotes", quote_id, "quote.status_changed",
                       current_user.organization_id)
@@ -12323,7 +12361,7 @@ def update_quote_status(quote_id: str, status_data: dict, current_user: CurrentU
 
 @app.delete("/api/quotes/{quote_id}")
 def delete_quote(quote_id: str, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
-    result = db.quotes.delete_one({"id": quote_id, **_org_scope(current_user)})
+    result = db.quotes.delete_one({"id": quote_id, **_own_docs_scope(current_user)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Quote not found")
     return {"message": "Quote deleted"}
@@ -14736,7 +14774,7 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
 
-    quote = db.quotes.find_one({"id": quote_id, **_org_scope(current_user)}, {"_id": 0})
+    quote = db.quotes.find_one({"id": quote_id, **_own_docs_scope(current_user)}, {"_id": 0})
     if not quote:
         raise HTTPException(404, "Quote not found")
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}

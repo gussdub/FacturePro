@@ -29,6 +29,7 @@ export const ROLE_LABELS = {
   owner: 'Propriétaire',
   accountant: 'Comptable',
   viewer: 'Lecteur',
+  employee: 'Employé',
 };
 
 export const roleLabel = (code) => ROLE_LABELS[code] || code;

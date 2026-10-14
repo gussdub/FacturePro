@@ -108,6 +108,14 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-10-14 — Rôle « Employé » dans l'équipe**
+  - Nouveau rôle `employee` (invitation, changement de rôle, matrice éditable) à côté de Comptable et Lecteur. Défauts : `quotes:read/write`, `clients:read/write`, `products:read` (pour bâtir les lignes). Aucun accès aux factures, dépenses, rapports, grand livre, employés ni paramètres.
+  - **Propriété appliquée côté serveur** via `_own_docs_scope` : un employé ne modifie, change le statut, envoie ou supprime QUE les soumissions et clients qu'il a créés (`created_by_user_id`) ; un document d'autrui → 404. Lecture (liste, PDF) de toute l'org. `created_by_user_id` n'est plus réassignable via PUT.
+  - **Conversion soumission → facture exige aussi `invoices:write`** (sinon 403) : avant, `quotes:write` suffisait à créer une facture.
+  - Orgs existantes : `employee` absent de la matrice stockée → reçoit ses défauts (`_org_role_permissions`) ; Comptable/Lecteur restent fail-closed. Aucune migration.
+  - Frontend : l'employé atterrit sur Soumissions (le tableau de bord exige `reports:read`, entrée de menu masquée sinon) ; boutons Modifier/Email/Supprimer/Facture masqués sur les documents d'autrui.
+  - Tests : `test_employee_role.py` (20), mutations vérifiées (retrait du filtre de propriété ou de la garde de conversion → 4 échecs).
+
 - **2026-10-07 — État des résultats tiré du grand livre + bilan qui inclut le résultat non clôturé (demande de la comptable)**
   - **État des résultats GL** : `GET /api/ledger/income-statement{,/pdf}?start=&end=` (défaut : début d'exercice → aujourd'hui), onglet « État des résultats » dans `LedgerPage`. Lit **toutes** les écritures postées (auto + manuelles, ex. frais bancaires), contrairement au P&L des Rapports qui lit les documents sources. Les **écritures de clôture** (qui touchent un compte `sub_type=retained_earnings` ET un compte de résultat, cf. `_is_closing_entry`) sont exclues, sinon la période qui les contient afficherait 0.
   - **Bilan** : en plus du résultat de l'exercice courant (désormais ventilé revenus / dépenses), ajoute « Résultats d'exercices antérieurs non clôturés » = cumul brut des comptes de résultat − exercice courant. Avant, un exercice passé non viré aux BNR rendait le bilan **déséquilibré**. Dès que la comptable passe sa clôture (manuelle, jamais automatisée), la ligne tombe à 0 et le montant apparaît dans 3200. Tests : `test_ledger_income_statement.py`.

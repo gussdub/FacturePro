@@ -27,7 +27,7 @@ function App() {
   const [currentRoute, setCurrentRoute] = useState(
     window.location.pathname === '/' ? '/dashboard' : window.location.pathname
   );
-  const { isAuthenticated, user, logout } = useAuth();
+  const { isAuthenticated, user, logout, hasPermission } = useAuth();
 
   useEffect(() => {
     const handlePopState = () => {
@@ -126,7 +126,13 @@ function App() {
       case '/ledger': return <RouteGuard permission="accounting:read"><LedgerPage /></RouteGuard>;
       case '/settings': return <SettingsPage />;
       case '/subscription': return <RouteGuard permission="billing:manage"><SubscriptionPage /></RouteGuard>;
-      default: return <Dashboard navigate={navigate} />;
+      default:
+        // Le tableau de bord lit les rapports : un membre sans cette permission (ex. Employé)
+        // atterrit directement sur ses soumissions.
+        if (!hasPermission('reports:read') && hasPermission('quotes:read')) {
+          return <RouteGuard permission="quotes:read"><QuotesPage /></RouteGuard>;
+        }
+        return <Dashboard navigate={navigate} />;
     }
   };
 
