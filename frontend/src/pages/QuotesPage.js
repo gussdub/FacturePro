@@ -126,7 +126,6 @@ const QuotesPage = () => {
     setFormData(prev => ({ ...prev, items: prev.items.filter((_, idx) => idx !== i) }));
   };
 
-  const addBlankItem = () => setFormData(prev => ({ ...prev, items: [...prev.items, { description: '', quantity: 1, unit_price: 0 }] }));
 
   const formSubtotal = formData.items.reduce((s, it) => s + (it.quantity * it.unit_price), 0);
   const computeFormTaxes = (subtotal, province) => {
@@ -471,7 +470,9 @@ const QuotesPage = () => {
                   </div>
                   {formData.items.length === 0 ? (
                     <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '14px' }}>
-                      Sélectionnez un produit ou ajoutez un article manuellement
+                      {products.length > 0
+                        ? 'Sélectionnez un produit du catalogue ci-dessus'
+                        : 'Aucun produit au catalogue. Créez d\'abord vos produits dans la page Produits.'}
                     </div>
                   ) : formData.items.map((item, i) => (
                     <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 80px 110px 110px 40px', gap: '8px', padding: '10px 12px', background: i % 2 === 0 ? '#fff' : '#f9fafb', alignItems: 'center' }}>
@@ -494,10 +495,6 @@ const QuotesPage = () => {
                     </div>
                   ))}
                 </div>
-                <button type="button" data-testid="add-blank-item" onClick={addBlankItem}
-                  style={{ marginTop: '8px', background: 'none', border: '1px dashed #00A08C', color: '#00A08C', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '600' }}>
-                  + Ajouter un article
-                </button>
               </div>
 
               <div style={{ background: '#f8fafb', border: '1px solid #e5e7eb', borderRadius: '10px', padding: '14px 16px', marginBottom: '20px' }}>
