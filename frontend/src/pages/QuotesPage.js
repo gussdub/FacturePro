@@ -18,10 +18,12 @@ const STATUS_CONFIG = {
 const norm = (s) => (s ?? '').toString().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 
 const QuotesPage = () => {
-  const { role, user, hasPermission } = useAuth();
-  // Un employé ne modifie que ses propres soumissions et ne convertit pas en facture
-  // (appliqué aussi côté serveur).
-  const canEdit = (q) => role !== 'employee' || q.created_by_user_id === user?.id;
+  const { user, hasPermission } = useAuth();
+  // Ses propres soumissions, ou celles des autres si le rôle a le droit (appliqué aussi côté
+  // serveur). Convertir crée une facture : il faut aussi le droit sur les factures.
+  const mine = (q) => q.created_by_user_id === user?.id;
+  const canEdit = (q) => hasPermission('quotes:write') && (mine(q) || hasPermission('quotes:edit_all'));
+  const canDelete = (q) => hasPermission('quotes:write') && (mine(q) || hasPermission('quotes:delete_all'));
   const canConvert = hasPermission('invoices:write');
   const [quotes, setQuotes] = useState([]);
   const [clients, setClients] = useState([]);
@@ -376,7 +378,7 @@ const QuotesPage = () => {
                           Facture
                         </button>
                       )}
-                      {canEdit(q) && (
+                      {canDelete(q) && (
                       <button data-testid={`delete-quote-${q.id}`} onClick={() => handleDelete(q.id)}
                         title="Supprimer" style={{ background: '#fef2f2', color: '#dc2626', border: 'none', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
                         Suppr.

@@ -146,3 +146,68 @@ class TestTeamManagement:
                        headers=org["owner"])
         assert r.status_code == 200
         assert client.get("/api/invoices", headers=org["emp"]).status_code == 200
+
+
+def _set_employee_perms(org_id, perms):
+    server_module.db.organizations.update_one(
+        {"id": org_id}, {"$set": {"role_permissions.employee": perms}})
+
+
+BASE_EMP = ["quotes:read", "quotes:write", "clients:read", "clients:write", "products:read"]
+
+
+class TestEditDeleteAll:
+    """Cases « Modifier / Supprimer ceux des autres » : le réglage correspond au comportement."""
+
+    def test_edit_all_quotes(self, client, org):
+        other = client.post("/api/quotes", json=QUOTE, headers=org["owner"]).json()
+        _set_employee_perms(org["id"], BASE_EMP + ["quotes:edit_all"])
+        assert client.put(f"/api/quotes/{other['id']}", json={"notes": "ok"},
+                          headers=org["emp"]).status_code == 200
+        assert client.put(f"/api/quotes/{other['id']}/status", json={"status": "accepted"},
+                          headers=org["emp"]).status_code == 200
+        # Modifier n'emporte pas Supprimer.
+        assert client.delete(f"/api/quotes/{other['id']}", headers=org["emp"]).status_code == 404
+
+    def test_delete_all_quotes(self, client, org):
+        other = client.post("/api/quotes", json=QUOTE, headers=org["owner"]).json()
+        _set_employee_perms(org["id"], BASE_EMP + ["quotes:delete_all"])
+        assert client.put(f"/api/quotes/{other['id']}", json={"notes": "x"},
+                          headers=org["emp"]).status_code == 404
+        assert client.delete(f"/api/quotes/{other['id']}", headers=org["emp"]).status_code == 200
+
+    def test_edit_and_delete_all_clients(self, client, org):
+        other = client.post("/api/clients", json={"name": "B"}, headers=org["owner"]).json()
+        _set_employee_perms(org["id"], BASE_EMP + ["clients:edit_all"])
+        assert client.put(f"/api/clients/{other['id']}", json={"name": "B2"},
+                          headers=org["emp"]).status_code == 200
+        assert client.delete(f"/api/clients/{other['id']}", headers=org["emp"]).status_code == 404
+        _set_employee_perms(org["id"], BASE_EMP + ["clients:delete_all"])
+        assert client.delete(f"/api/clients/{other['id']}", headers=org["emp"]).status_code == 200
+
+    def test_accountant_without_codes_limited_to_own(self, client, org):
+        db = server_module.db
+        db.users.update_one({"id": org["emp_id"]}, {"$set": {"role": "accountant"}})
+        db.organizations.update_one({"id": org["id"]},
+                                    {"$set": {"role_permissions.accountant": BASE_EMP}})
+        other = client.post("/api/quotes", json=QUOTE, headers=org["owner"]).json()
+        assert client.put(f"/api/quotes/{other['id']}", json={"notes": "x"},
+                          headers=org["emp"]).status_code == 404
+
+
+class TestBackfillDocScopePerms:
+    def test_accountant_receives_codes_once(self, org):
+        db = server_module.db
+        db.organizations.update_one({"id": org["id"]}, {"$set": {
+            "role_permissions.accountant": ["quotes:write"],
+            "role_permissions.employee": BASE_EMP}})
+        server_module.migrate_doc_scope_perms_v1()
+        rp = db.organizations.find_one({"id": org["id"]})["role_permissions"]
+        for c in ("quotes:edit_all", "quotes:delete_all", "clients:edit_all", "clients:delete_all"):
+            assert c in rp["accountant"]
+            assert c not in rp["employee"]
+        # One-shot : un retrait volontaire de l'owner n'est pas ré-imposé.
+        db.organizations.update_one({"id": org["id"]},
+                                    {"$set": {"role_permissions.accountant": ["quotes:write"]}})
+        server_module.migrate_doc_scope_perms_v1()
+        assert db.organizations.find_one({"id": org["id"]})["role_permissions"]["accountant"] == ["quotes:write"]
