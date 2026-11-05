@@ -12259,6 +12259,170 @@ def _build_gifi_report(scope, year, basis):
     return {"year": year, "basis": basis, "lines": lines, "total": total}
 
 
+# ─── Facturation planifiée des soumissions ───
+# Une soumission peut porter `auto_invoice_date` (AAAA-MM-JJ, heure du Québec). Ce jour-là, elle est
+# convertie en facture (même logique que le bouton « Facture ») puis la facture est envoyée par
+# courriel au client (même logique que le bouton « Email »).
+# États de `auto_invoice_status` : scheduled → processing → sent | send_failed | failed | skipped.
+#   send_failed = la facture EST créée, seul l'envoi a échoué (erreur dans `auto_send_error`).
+_AUTO_INVOICE_SERVER_FIELDS = ("auto_invoice_status", "auto_invoice_error", "auto_invoice_scheduled_by",
+                               "auto_invoice_invoice_id", "auto_invoice_processed_at")
+_AUTO_INVOICE_SKIP_STATUSES = {"refused": "Soumission refusée", "converted": "Soumission déjà convertie"}
+
+
+def _parse_auto_invoice_date(value) -> str:
+    """'' (aucune planification) ou date canonique AAAA-MM-JJ ; 400 sinon."""
+    if value is None:
+        return ""
+    value = str(value).strip()[:10]
+    if not value:
+        return ""
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise HTTPException(400, "Date de facturation automatique invalide (format AAAA-MM-JJ)")
+
+
+def _apply_auto_invoice_fields(data: dict, current_user: CurrentUser, existing: Optional[dict] = None) -> None:
+    """Valide `auto_invoice_date` reçu du client et pose les champs de planification dans `data`.
+    Les champs d'état sont réservés au serveur : jamais acceptés du client."""
+    for k in _AUTO_INVOICE_SERVER_FIELDS:
+        data.pop(k, None)
+    if "auto_invoice_date" not in data:
+        return
+    new_date = _parse_auto_invoice_date(data.get("auto_invoice_date"))
+    old_date = (existing or {}).get("auto_invoice_date") or ""
+    old_status = (existing or {}).get("auto_invoice_status")
+    data["auto_invoice_date"] = new_date
+    if not new_date:
+        data["auto_invoice_status"] = None
+        data["auto_invoice_error"] = None
+        return
+    if new_date == old_date and old_status in ("scheduled", "processing", "sent", "send_failed"):
+        return  # inchangée (ou déjà traitée) : réenregistrer la soumission ne change rien
+    # Facturer crée une facture : même exigence que le bouton « Facture ».
+    if "invoices:write" not in current_user.permissions:
+        raise HTTPException(403, "Permission requise : invoices:write")
+    if (existing or {}).get("status") == "converted":
+        raise HTTPException(400, "Cette soumission est déjà convertie en facture")
+    if new_date != old_date and new_date < _today_local_isodate():
+        raise HTTPException(400, "La date de facturation automatique ne peut pas être passée")
+    data["auto_invoice_status"] = "scheduled"
+    data["auto_invoice_error"] = None
+    data["auto_invoice_scheduled_by"] = current_user.id
+
+
+def _current_user_from_id(user_id: str) -> Optional[CurrentUser]:
+    """Reconstruit le CurrentUser d'un membre (hors requête HTTP) — None s'il est inactif ou
+    n'appartient plus à une organisation. Les permissions sont celles d'AUJOURD'HUI."""
+    user = db.users.find_one({"id": user_id}, {"_id": 0}) if user_id else None
+    if not user or not user.get("is_active", True) or not user.get("organization_id"):
+        return None
+    org = db.organizations.find_one({"id": user["organization_id"]}, {"_id": 0})
+    if not org:
+        return None
+    role = user.get("role", "owner")
+    return CurrentUser(id=user["id"], email=user["email"], organization_id=org["id"], role=role,
+                       permissions=_resolve_permissions(org, role),
+                       is_exempt=user["email"] in EXEMPT_USERS)
+
+
+def _process_one_scheduled_quote(quote: dict) -> str:
+    """Traite une soumission due. Renvoie l'état final. Ne lève jamais."""
+    qid = quote["id"]
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _finish(status, error=None, extra=None):
+        _sync_update_one("quotes", {"id": qid}, {"$set": {
+            "auto_invoice_status": status, "auto_invoice_error": error,
+            "auto_invoice_processed_at": now_iso, **(extra or {})}})
+        return status
+
+    # Réservation atomique : deux exécutions simultanées (cron + boucle) ne facturent jamais deux fois.
+    claim = _sync_update_one("quotes", {"id": qid, "auto_invoice_status": "scheduled"},
+                             {"$set": {"auto_invoice_status": "processing"}})
+    if claim.modified_count != 1:
+        return "already_claimed"
+    try:
+        if quote.get("status") in _AUTO_INVOICE_SKIP_STATUSES:
+            return _finish("skipped", _AUTO_INVOICE_SKIP_STATUSES[quote["status"]])
+        user = _current_user_from_id(quote.get("auto_invoice_scheduled_by") or quote.get("created_by_user_id"))
+        if not user or user.organization_id != quote.get("organization_id"):
+            return _finish("failed", "Le membre qui a planifié la facturation n'est plus actif dans l'organisation")
+        if "quotes:write" not in user.permissions or "invoices:write" not in user.permissions:
+            return _finish("failed", "Le membre qui a planifié la facturation n'a plus le droit de créer des factures")
+        if not db.quotes.find_one({"id": qid, **_write_scope(user, "quotes", "edit")}, {"_id": 1}):
+            return _finish("failed", "Le membre qui a planifié la facturation ne peut plus modifier cette soumission")
+        settings = db.company_settings.find_one(_org_scope(user), {"_id": 0, "default_due_days": 1}) or {}
+        try:
+            due_days = int(settings.get("default_due_days") or 30)
+        except (TypeError, ValueError):
+            due_days = 30
+        due_date = (date.fromisoformat(_today_local_isodate()) + timedelta(days=max(0, due_days))).isoformat()
+        invoice = _create_invoice_from_quote(quote, user, due_date)
+        _sync_update_one("invoices", {"id": invoice["id"]}, {"$set": {"auto_from_quote_id": qid}})
+    except Exception as e:
+        logger.warning("[auto-invoice] conversion echouee quote=%s type=%s", qid, type(e).__name__)
+        return _finish("failed", "Erreur interne lors de la conversion en facture")
+
+    extra = {"auto_invoice_invoice_id": invoice["id"]}
+    try:
+        _send_invoice_core(invoice, user, {})
+        return _finish("sent", None, extra)
+    except HTTPException as e:
+        err = str(e.detail)
+    except Exception as e:
+        err = f"Erreur envoi email ({type(e).__name__})"
+    if err == "Email service not configured":
+        err = "Service de courriel non configuré"
+    elif err.startswith("Adresse email du destinataire requise"):
+        err = "Le client n'a pas d'adresse courriel"
+    err = err[:300]
+    _sync_update_one("invoices", {"id": invoice["id"]}, {"$set": {"auto_send_error": err}})
+    return _finish("send_failed", err, extra)
+
+
+def process_scheduled_quote_invoices(today: Optional[str] = None) -> dict:
+    """Convertit et envoie toutes les soumissions dont la date de facturation est arrivée."""
+    today = today or _today_local_isodate()
+    due = list(db.quotes.find({"auto_invoice_status": "scheduled",
+                               "auto_invoice_date": {"$lte": today, "$ne": ""}}, {"_id": 0}))
+    results = {}
+    for q in due:
+        st = _process_one_scheduled_quote(q)
+        results[st] = results.get(st, 0) + 1
+    return {"date": today, "processed": len(due), "results": results}
+
+
+_AUTO_INVOICE_LOOP_INTERVAL_SEC = 3600
+_auto_invoice_loop_task = None
+
+
+async def _auto_invoice_loop():
+    """Passe toutes les heures tant que l'instance est éveillée. Sur le palier gratuit de Render
+    l'instance dort : un cron externe sur /api/quotes/process-scheduled garantit le passage quotidien."""
+    import asyncio
+    import anyio
+    while True:
+        try:
+            await anyio.to_thread.run_sync(process_scheduled_quote_invoices)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("[auto-invoice] boucle type=%s", type(e).__name__)
+        await asyncio.sleep(_AUTO_INVOICE_LOOP_INTERVAL_SEC)
+
+
+@app.post("/api/quotes/process-scheduled")
+def process_scheduled_quotes_endpoint(request: Request):
+    """Pingé par un cron externe (1×/jour). Idempotent : ne traite que les soumissions dues et
+    pas encore traitées. Si CRON_SECRET est défini, l'en-tête X-Cron-Secret doit correspondre."""
+    secret = os.environ.get("CRON_SECRET")
+    if secret and not hmac.compare_digest(request.headers.get("X-Cron-Secret", ""), secret):
+        raise HTTPException(401, "Unauthorized")
+    return process_scheduled_quote_invoices()
+
+
 # ─── Quotes CRUD ───
 @app.get("/api/quotes")
 def get_quotes(current_user: CurrentUser = Depends(require_permission("quotes:read"))):
@@ -12298,6 +12462,10 @@ def create_quote(quote_data: dict, current_user: CurrentUser = Depends(require_p
         "status": "pending", "notes": quote_data.get("notes", ""),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    sched = {k: quote_data[k] for k in ("auto_invoice_date",) if k in quote_data}
+    _apply_auto_invoice_fields(sched, current_user)
+    if sched.get("auto_invoice_date"):
+        doc.update(sched)
     doc["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), doc.get("client_id"))
     _sync_insert_one("quotes", doc)
     _webhook_emit("quotes", doc["id"], "quote.created",
@@ -12325,19 +12493,15 @@ def update_quote(quote_id: str, quote_data: dict, current_user: CurrentUser = De
     existing = db.quotes.find_one({"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"_id": 0})
     if not existing:
         raise HTTPException(404, "Quote not found")
+    _apply_auto_invoice_fields(quote_data, current_user, existing)
     client_id_for_snapshot = quote_data.get("client_id", existing.get("client_id"))
     quote_data["tax_registrations"] = _build_tax_registrations(_org_scope(current_user), client_id_for_snapshot)
     _sync_update_one("quotes", {"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"$set": quote_data})
     return clean_doc(db.quotes.find_one({"id": quote_id}, {"_id": 0}))
 
-@app.post("/api/quotes/{quote_id}/convert")
-def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
-    # Convertir crée une FACTURE : exiger aussi le droit d'écrire les factures (l'employé ne l'a pas).
-    if "invoices:write" not in current_user.permissions:
-        raise HTTPException(403, "Permission requise : invoices:write")
-    quote = db.quotes.find_one({"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"_id": 0})
-    if not quote:
-        raise HTTPException(404, "Quote not found")
+def _create_invoice_from_quote(quote: dict, current_user: CurrentUser, due_date: str) -> dict:
+    """Crée la facture (brouillon) issue d'une soumission et marque celle-ci « converted ».
+    Logique UNIQUE partagée par le bouton « Facture » et la facturation planifiée."""
     count = db.invoices.count_documents(_org_scope(current_user))
     invoice_doc = {
         "id": str(uuid.uuid4()),
@@ -12346,7 +12510,7 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
         "user_id": current_user.id,  # legacy
         "client_id": quote["client_id"], "invoice_number": f"INV-{count + 1:04d}",
         "issue_date": datetime.now(timezone.utc).isoformat(),
-        "due_date": body.get("due_date", ""), "items": quote.get("items", []),
+        "due_date": due_date or "", "items": quote.get("items", []),
         "subtotal": quote.get("subtotal", 0), "gst_amount": quote.get("gst_amount", 0),
         "pst_amount": quote.get("pst_amount", 0), "hst_amount": quote.get("hst_amount", 0),
         "total_tax": quote.get("total_tax", 0), "total": quote.get("total", 0),
@@ -12365,7 +12529,23 @@ def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUse
     if quote.get("client_snapshot"):
         invoice_doc["client_snapshot"] = quote["client_snapshot"]
     _sync_insert_one("invoices", invoice_doc)
-    _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "converted"}})
+    _sync_update_one("quotes", {"id": quote["id"], **_org_scope(current_user)}, {"$set": {"status": "converted"}})
+    return invoice_doc
+
+
+@app.post("/api/quotes/{quote_id}/convert")
+def convert_quote_to_invoice(quote_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("quotes:write"))):
+    # Convertir crée une FACTURE : exiger aussi le droit d'écrire les factures (l'employé ne l'a pas).
+    if "invoices:write" not in current_user.permissions:
+        raise HTTPException(403, "Permission requise : invoices:write")
+    quote = db.quotes.find_one({"id": quote_id, **_write_scope(current_user, "quotes", "edit")}, {"_id": 0})
+    if not quote:
+        raise HTTPException(404, "Quote not found")
+    invoice_doc = _create_invoice_from_quote(quote, current_user, body.get("due_date", ""))
+    # Une conversion manuelle remplace une facturation planifiée encore en attente.
+    if quote.get("auto_invoice_status") == "scheduled":
+        _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)},
+                         {"$set": {"auto_invoice_status": None}})
     return clean_doc(invoice_doc)
 
 @app.put("/api/quotes/{quote_id}/status")
@@ -14829,14 +15009,12 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
 
-@app.post("/api/invoices/{invoice_id}/send")
-def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
+def _send_invoice_core(invoice: dict, current_user: CurrentUser, body: dict) -> dict:
+    """Envoie la facture par courriel (PDF joint) et la passe « sent ». Partagé par le bouton
+    « Email » et la facturation planifiée. Lève HTTPException en cas d'échec."""
     if not RESEND_API_KEY:
         raise HTTPException(500, "Email service not configured")
-
-    invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
-    if not invoice:
-        raise HTTPException(404, "Invoice not found")
+    invoice_id = invoice["id"]
     settings = db.company_settings.find_one(_org_scope(current_user), {"_id": 0}) or {}
     client_info = _doc_client_info(invoice, _org_scope(current_user))
     products = list(db.products.find(_org_scope(current_user), {"_id": 0}))
@@ -14864,10 +15042,24 @@ def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = 
     sent_to = ", ".join(to_list)
     try:
         r = resend.Emails.send(params)
-        _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
+        _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {
+            "$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(),
+                     "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None},
+            # Un envoi réussi efface l'échec d'un envoi automatique antérieur.
+            "$unset": {"auto_send_error": ""}})
         return {"message": f"Facture envoyee a {sent_to}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
+
+
+@app.post("/api/invoices/{invoice_id}/send")
+def send_invoice_email(invoice_id: str, body: dict, current_user: CurrentUser = Depends(require_permission("invoices:write"))):
+    if not RESEND_API_KEY:
+        raise HTTPException(500, "Email service not configured")
+    invoice = db.invoices.find_one({"id": invoice_id, **_org_scope(current_user)}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(404, "Invoice not found")
+    return _send_invoice_core(invoice, current_user, body)
 
 
 # ─── Stripe Subscription ───
@@ -16253,6 +16445,14 @@ def seed_data():
         import asyncio
         if _webhook_loop_task is None or _webhook_loop_task.done():
             _webhook_loop_task = asyncio.create_task(_webhook_loop())
+    except Exception:
+        pass
+    # Facturation planifiée des soumissions : passage au démarrage puis toutes les heures.
+    global _auto_invoice_loop_task
+    try:
+        import asyncio
+        if _auto_invoice_loop_task is None or _auto_invoice_loop_task.done():
+            _auto_invoice_loop_task = asyncio.create_task(_auto_invoice_loop())
     except Exception:
         pass
     try:

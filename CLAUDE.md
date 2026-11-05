@@ -108,6 +108,15 @@ Depuis la migration du 2026-06-16, Emergent n'est plus utilisé. Le repo et le d
 
 ## Features livrées
 
+- **2026-11-05 — Facturation planifiée des soumissions (demande de Guillaume)**
+  - Champ optionnel **« Facturer automatiquement le »** (`auto_invoice_date`, AAAA-MM-JJ, heure du Québec) dans le formulaire de soumission ; badge sur la carte (« Facturation auto le … », puis envoyée / échec). Visible seulement avec `invoices:write`.
+  - Ce jour-là : conversion via `_create_invoice_from_quote` (logique UNIQUE partagée avec le bouton « Facture ») puis envoi via `_send_invoice_core` (partagé avec le bouton « Email »). Échéance = date + `default_due_days` (30).
+  - États `auto_invoice_status` : `scheduled → processing → sent | send_failed | failed | skipped`. Réservation atomique (`scheduled → processing`) : jamais deux factures. `send_failed` = facture créée en brouillon, erreur dans `auto_send_error` (bandeau rouge dans Factures, effacé au prochain envoi réussi). Refusée/convertie → `skipped`. Champs d'état réservés au serveur.
+  - **Permissions** : planifier exige `invoices:write` (403) ; à l'exécution, les droits du membre qui a planifié (`auto_invoice_scheduled_by`) sont relus — perdu le droit, inactif ou plus d'accès à la soumission → `failed`. Une date passée est refusée (400). Une conversion manuelle annule la planification.
+  - **Exécution** : boucle in-process au démarrage + toutes les heures (seulement quand Render est éveillé) **et** `POST /api/quotes/process-scheduled` pour un cron externe (idempotent ; si `CRON_SECRET` est posé sur Render, en-tête `X-Cron-Secret` exigé).
+  - ⚠️ **Hors code** : créer un cron quotidien (cron-job.org, ~8 h) en POST sur `https://facturepro-backend-dkvn.onrender.com/api/quotes/process-scheduled`, sinon l'envoi attend le prochain réveil du serveur.
+  - Tests : `test_quote_auto_invoice.py` (15). « Expirée » n'existe pas comme statut : `valid_until` dépassé ne bloque PAS la facturation planifiée (choix assumé).
+
 - **2026-10-14 — Rôle « Employé » dans l'équipe**
   - Nouveau rôle `employee` (invitation, changement de rôle, matrice éditable) à côté de Comptable et Lecteur. Défauts : `quotes:read/write`, `clients:read/write`, `products:read` (pour bâtir les lignes). Aucun accès aux factures, dépenses, rapports, grand livre, employés ni paramètres.
   - **Propriété appliquée côté serveur** via `_own_docs_scope` : un employé ne modifie, change le statut, envoie ou supprime QUE les soumissions et clients qu'il a créés (`created_by_user_id`) ; un document d'autrui → 404. Lecture (liste, PDF) de toute l'org. `created_by_user_id` n'est plus réassignable via PUT.

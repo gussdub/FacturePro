@@ -387,6 +387,11 @@ const InvoicesPage = () => {
                         </span>
                       )}
                     </div>
+                    {inv.auto_send_error && (
+                      <p data-testid={`invoice-auto-send-error-${inv.id}`} style={{ margin: '2px 0 6px', color: '#991B1B', background: '#FEE2E2', border: '1px solid #FCA5A5', borderRadius: '8px', padding: '6px 10px', fontSize: '12px', fontWeight: '600' }}>
+                        Envoi automatique échoué : {inv.auto_send_error}. Vérifie le courriel du client puis envoie la facture avec « Email ».
+                      </p>
+                    )}
                     <p style={{ margin: '2px 0', color: '#6b7280', fontSize: '14px' }}>Client: <strong>{getClientName(inv.client_id)}</strong></p>
                     <p style={{ margin: '2px 0', color: '#9ca3af', fontSize: '13px' }}>
                       Échéance: {inv.due_date ? String(inv.due_date).slice(0, 10) : '—'}
