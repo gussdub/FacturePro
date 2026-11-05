@@ -17,6 +17,12 @@ const STATUS_CONFIG = {
 // Normalise pour une recherche insensible à la casse ET aux accents (é→e, ô→o…).
 const norm = (s) => (s ?? '').toString().toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 
+// Date du jour en heure locale (AAAA-MM-JJ) — pas toISOString(), qui donne demain le soir.
+const todayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
 const QuotesPage = () => {
   const { user, hasPermission } = useAuth();
   // Ses propres soumissions, ou celles des autres si le rôle a le droit (appliqué aussi côté
@@ -43,7 +49,7 @@ const QuotesPage = () => {
 
   const defaultForm = () => ({
     client_id: '', quote_number: '', valid_until: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],
-    items: [], province: 'QC', notes: '',
+    items: [], province: 'QC', notes: '', auto_invoice_date: '',
     currency: 'CAD', exchange_rate_to_cad: 1.0
   });
   const [formData, setFormData] = useState(defaultForm());
@@ -159,6 +165,7 @@ const QuotesPage = () => {
       })) : [],
       province: quote.province || 'QC',
       notes: quote.notes || '',
+      auto_invoice_date: quote.auto_invoice_status ? (quote.auto_invoice_date || '') : '',
       currency: quote.currency || 'CAD',
       exchange_rate_to_cad: quote.exchange_rate_to_cad || 1.0
     });
@@ -173,6 +180,7 @@ const QuotesPage = () => {
       ...formData,
       items: formData.items.map(it => ({ ...it, total: it.quantity * it.unit_price }))
     };
+    if (!canConvert) delete payload.auto_invoice_date;
     if (editingQuote && formData.quote_number) {
       payload.quote_number = formData.quote_number;
     }
@@ -188,7 +196,10 @@ const QuotesPage = () => {
       setEditingQuote(null);
       setFormData(defaultForm());
       fetchData();
-    } catch { setError(editingQuote ? 'Erreur lors de la modification' : 'Erreur lors de la création'); }
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : (editingQuote ? 'Erreur lors de la modification' : 'Erreur lors de la création'));
+    }
   };
 
   const handleStatusChange = async (id, status) => {
@@ -249,6 +260,26 @@ const QuotesPage = () => {
       setSuccess('Soumission convertie en facture !');
       fetchData();
     } catch { setError('Erreur conversion'); }
+  };
+
+  // Badge de facturation planifiée sur la carte de la soumission.
+  const autoInvoiceBadge = (q) => {
+    const d = q.auto_invoice_date;
+    const map = {
+      scheduled:   { bg: '#ecfdf5', color: '#065f46', border: '#6ee7b7', text: `🗓 Facturation auto le ${d}` },
+      processing:  { bg: '#ecfdf5', color: '#065f46', border: '#6ee7b7', text: '⏳ Facturation en cours…' },
+      sent:        { bg: '#f3e8ff', color: '#6b21a8', border: '#d8b4fe', text: `✓ Facturée et envoyée automatiquement (${d})` },
+      send_failed: { bg: '#fef2f2', color: '#991b1b', border: '#fca5a5', text: `⚠ Facture créée le ${d}, mais non envoyée : ${q.auto_invoice_error || 'erreur'}` },
+      failed:      { bg: '#fef2f2', color: '#991b1b', border: '#fca5a5', text: `⚠ Facturation auto du ${d} échouée : ${q.auto_invoice_error || 'erreur'}` },
+      skipped:     { bg: '#f3f4f6', color: '#374151', border: '#d1d5db', text: `Facturation auto du ${d} annulée : ${q.auto_invoice_error || ''}` },
+    };
+    const b = map[q.auto_invoice_status];
+    if (!b || !d) return null;
+    return (
+      <div data-testid={`quote-auto-invoice-${q.id}`} style={{ display: 'inline-block', margin: '2px 0 6px', background: b.bg, color: b.color, border: `1px solid ${b.border}`, padding: '3px 10px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
+        {b.text}
+      </div>
+    );
   };
 
   const inputStyle = { width: '100%', padding: '10px 12px', border: '1px solid #d1d5db', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box', outline: 'none', transition: 'border 0.2s' };
@@ -334,6 +365,7 @@ const QuotesPage = () => {
                         {st.icon} {st.label}
                       </span>
                     </div>
+                    {autoInvoiceBadge(q)}
                     <p style={{ margin: '2px 0', color: '#6b7280', fontSize: '14px' }}>Client: <strong>{getClientName(q.client_id)}</strong></p>
                     <p style={{ margin: '2px 0', color: '#9ca3af', fontSize: '13px' }}>
                       Valide jusqu'au: {q.valid_until ? new Date(q.valid_until).toLocaleDateString('fr-CA') : '—'}
@@ -434,6 +466,26 @@ const QuotesPage = () => {
                   </select>
                 </div>
               </div>
+
+              {canConvert && (
+                <div style={{ marginBottom: '20px', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '10px', padding: '14px 16px' }}>
+                  <label style={labelStyle} htmlFor="quote-auto-invoice-date">Facturer automatiquement le (optionnel)</label>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input id="quote-auto-invoice-date" data-testid="quote-auto-invoice-date" type="date"
+                      value={formData.auto_invoice_date || ''}
+                      min={editingQuote?.auto_invoice_date && editingQuote.auto_invoice_date === formData.auto_invoice_date ? undefined : todayLocal()}
+                      onChange={e => setFormData(prev => ({ ...prev, auto_invoice_date: e.target.value }))}
+                      style={{ ...inputStyle, maxWidth: '220px' }} />
+                    {formData.auto_invoice_date && (
+                      <button type="button" onClick={() => setFormData(prev => ({ ...prev, auto_invoice_date: '' }))}
+                        style={{ ...btnSecondary, padding: '8px 12px', fontSize: '13px' }}>Retirer</button>
+                    )}
+                  </div>
+                  <p style={{ margin: '8px 0 0', color: '#0f766e', fontSize: '12px' }}>
+                    À cette date, la soumission sera convertie en facture et la facture sera envoyée par courriel au client. Une soumission refusée ou déjà convertie est ignorée.
+                  </p>
+                </div>
+              )}
 
               {/* Currency selector */}
               <div style={{ marginBottom: '20px' }}>
