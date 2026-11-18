@@ -14559,6 +14559,31 @@ def export_expenses_csv(current_user: CurrentUser = Depends(require_permission("
 
 
 # ─── PDF Generation ───
+# Libellés FR du statut imprimé sur le PDF (mêmes libellés que STATUS_CONFIG des pages
+# Factures / Soumissions). Le code interne (« draft », « sent »…) ne doit JAMAIS
+# apparaître tel quel sur un document remis au client.
+_DOC_STATUS_LABELS_FR = {
+    "invoice": {"draft": "Brouillon", "sent": "Envoyée", "partial": "Partiellement payée",
+                "paid": "Payée", "overdue": "En retard"},
+    "quote": {"draft": "Brouillon", "pending": "En attente", "sent": "Envoyée",
+              "accepted": "Acceptée", "refused": "Refusée", "converted": "Convertie"},
+}
+
+
+def _doc_status_label_fr(doc_type, status):
+    """Libellé FR du statut, ou "" (ligne omise) pour un statut inconnu."""
+    return _DOC_STATUS_LABELS_FR.get(doc_type, {}).get(status or "", "")
+
+
+# Statuts « pas encore envoyés » : l'envoi par courriel les fait passer à « sent ».
+# Les autres (payée, partielle, en retard, acceptée…) sont conservés au renvoi.
+_UNSENT_STATUSES = {"invoice": {"draft"}, "quote": {"draft", "pending"}}
+
+
+def _status_after_email(doc_type, status):
+    return "sent" if (status or "draft") in _UNSENT_STATUSES[doc_type] else status
+
+
 def generate_document_pdf(doc_type, document, company_settings, client_info, products_list):
     """Generate a professional PDF for a quote or invoice."""
     buffer = io.BytesIO()
@@ -14673,10 +14698,10 @@ def generate_document_pdf(doc_type, document, company_settings, client_info, pro
         if due:
             right_parts.append(Paragraph(f"Echeance: {due}", right_style))
 
-    status_label = document.get('status', '')
+    status_label = _doc_status_label_fr(doc_type, document.get('status'))
     if status_label:
         right_parts.append(Spacer(1, 6))
-        right_parts.append(Paragraph(f"Statut: {status_label.upper()}", ParagraphStyle('Status', parent=styles['Normal'], fontSize=10, textColor=teal, alignment=TA_RIGHT, fontName='Helvetica-Bold')))
+        right_parts.append(Paragraph(f"Statut : {status_label.upper()}", ParagraphStyle('Status', parent=styles['Normal'], fontSize=10, textColor=teal, alignment=TA_RIGHT, fontName='Helvetica-Bold')))
 
     header_data = [[left_parts, right_parts]]
     header_table = Table(header_data, colWidths=[3.5*inch, 3.5*inch])
@@ -14983,7 +15008,10 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
 
     to_list, cc_list = _resolve_email_recipients(body, (client_info or {}).get("email"))
 
-    pdf_buffer = generate_document_pdf("quote", quote, settings, client_info, products)
+    # Le PDF joint porte le statut qu'aura la soumission APRÈS l'envoi (sinon le
+    # client recevait « EN ATTENTE »/« DRAFT » alors que l'app affiche « Envoyée »).
+    new_status = _status_after_email("quote", quote.get("status"))
+    pdf_buffer = generate_document_pdf("quote", {**quote, "status": new_status}, settings, client_info, products)
     pdf_bytes = pdf_buffer.read()
     pdf_b64 = base64.b64encode(pdf_bytes).decode()
 
@@ -15004,7 +15032,7 @@ def send_quote_email(quote_id: str, body: dict, current_user: CurrentUser = Depe
     sent_to = ", ".join(to_list)
     try:
         r = resend.Emails.send(params)
-        _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
+        _sync_update_one("quotes", {"id": quote_id, **_org_scope(current_user)}, {"$set": {"status": new_status, "sent_at": datetime.now(timezone.utc).isoformat(), "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None}})
         return {"message": f"Soumission envoyee a {sent_to}", "email_id": r.get("id") if isinstance(r, dict) else str(r)}
     except Exception as e:
         raise HTTPException(500, f"Erreur envoi email: {str(e)}")
@@ -15021,7 +15049,11 @@ def _send_invoice_core(invoice: dict, current_user: CurrentUser, body: dict) -> 
 
     to_list, cc_list = _resolve_email_recipients(body, (client_info or {}).get("email"))
 
-    pdf_buffer = generate_document_pdf("invoice", invoice, settings, client_info, products)
+    # Le PDF joint porte le statut qu'aura la facture APRÈS l'envoi : un brouillon
+    # partait avec « DRAFT » alors que l'app (et le PDF retéléchargé) disait « sent ».
+    # Un renvoi ne fait pas régresser une facture payée/partielle/en retard.
+    new_status = _status_after_email("invoice", invoice.get("status"))
+    pdf_buffer = generate_document_pdf("invoice", {**invoice, "status": new_status}, settings, client_info, products)
     pdf_bytes = pdf_buffer.read()
     pdf_b64 = base64.b64encode(pdf_bytes).decode()
 
@@ -15043,7 +15075,7 @@ def _send_invoice_core(invoice: dict, current_user: CurrentUser, body: dict) -> 
     try:
         r = resend.Emails.send(params)
         _sync_update_one("invoices", {"id": invoice_id, **_org_scope(current_user)}, {
-            "$set": {"status": "sent", "sent_at": datetime.now(timezone.utc).isoformat(),
+            "$set": {"status": new_status, "sent_at": datetime.now(timezone.utc).isoformat(),
                      "sent_to": sent_to, "sent_cc": ", ".join(cc_list) or None},
             # Un envoi réussi efface l'échec d'un envoi automatique antérieur.
             "$unset": {"auto_send_error": ""}})
