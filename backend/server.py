@@ -15613,15 +15613,26 @@ def _aggregate_sales_tax(scope, start, end):
     # l'émission de la facture, pas au paiement. L'exclure sous-comptait la TPS/TVQ
     # collectée dès qu'une facture était partiellement payée. Aligné sur
     # _aggregate_pnl et l'auto-posting (statuts non-draft).
-    invoices = list(db.invoices.find({
-        **scope,
-        "status": {"$in": ["sent", "partial", "paid", "overdue"]},
-        "issue_date": {"$gte": start, "$lte": end},
-    }, {"_id": 0}))
-    expenses = list(db.expenses.find({
-        **scope,
-        "expense_date": {"$gte": start, "$lte": end},
-    }, {"_id": 0}))
+    # [COMPTA] Bornes comparées en Python (_in_period) et NON par un $gte/$lte de
+    # CHAÎNES Mongo : issue_date/expense_date sont souvent stockés en ISO datetime
+    # complet (défaut serveur). Un $lte '2026-03-31' excluait une facture émise le
+    # DERNIER jour de la période ('2026-03-31T15:00…' > '2026-03-31' en tri
+    # lexical), alors que le grand livre (entry_date = date normalisée) la compte :
+    # TPS/TVQ du rapport < soldes 2100/2110 pour la même période. Même correctif
+    # que _aggregate_pnl.
+    _st_start = _parse_iso_date(start)
+    _st_end = _parse_iso_date(end)
+    invoices = [
+        inv for inv in db.invoices.find({
+            **scope,
+            "status": {"$in": ["sent", "partial", "paid", "overdue"]},
+        }, {"_id": 0})
+        if _in_period(inv.get("issue_date"), _st_start, _st_end)
+    ]
+    expenses = [
+        exp for exp in db.expenses.find(scope, {"_id": 0})
+        if _in_period(exp.get("expense_date"), _st_start, _st_end)
+    ]
 
     def to_cad(amount, rate, currency):
         if amount is None:
